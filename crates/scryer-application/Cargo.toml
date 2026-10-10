@@ -98,5 +98,5 @@ bytes = "1"
 http = "1"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
-h3 = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.2.1" }
-h3-quinn = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.2.1" }
+h3 = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.3.0" }
+h3-quinn = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.3.0" }

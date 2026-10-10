@@ -51,11 +51,11 @@ resolver = "2"
 edition = "2024"
 
 [workspace.dependencies]
-scryer-tunnel = { package = "proxy-tunnels", git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.2.1", features = ["http3"] }
+scryer-tunnel = { package = "proxy-tunnels", git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.3.0", features = ["http3"] }
 tokio = { version = "1.53", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip", "preserve_order"] }
-base64 = "0.22"
+base64 = "0.23"
 dotenvy = "0.15"
 thiserror = "2.0"
 async-trait = "0.1"
@@ -76,8 +76,8 @@ toml = "1"
 quick-xml = "0.42.0"
 # Native Wasmtime hosts for command-model archive plugins and legacy reactor
 # compatibility.
-wasmtime = { version = "=48.0.4", default-features = false, features = ["runtime", "cranelift", "std", "component-model-async", "cache"] }
-wasmtime-wasi = { version = "=48.0.4", default-features = false, features = ["p1", "p2"] }
+wasmtime = { version = "=48.0.5", default-features = false, features = ["runtime", "cranelift", "std", "component-model-async", "cache"] }
+wasmtime-wasi = { version = "=48.0.5", default-features = false, features = ["p1", "p2"] }
 semver = "1"
 metrics = "0.24"
 security-framework = "3"
@@ -85,7 +85,7 @@ security-framework-sys = "2"
 keyring-core = "1"
 windows-native-keyring-store = "1"
 wiremock = "0.6"
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 governor = "0.10.4"
 fixedbitset = "0.5"
 # SIMD-accelerated CRC used as the streaming move-corruption check during
