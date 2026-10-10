@@ -6,11 +6,11 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use scryer_application::{
-    AppError, AppResult, DownloadSourceKind, EstimatedCost, ExpectedValueHint, HashDomain,
-    INDEXER_CAPS_REFRESH_ERROR_PREFIX, IndexerClient, IndexerConfigRepository,
-    IndexerErrorClassification, IndexerErrorOperation, IndexerErrorRepository,
-    IndexerPluginProvider, IndexerQueryOutcome, IndexerResponseAttributes, IndexerRoutingPlan,
-    IndexerRssCatchUp, IndexerSearchCandidateWrite, IndexerSearchCompletion,
+    AppError, AppResult, BackgroundIndexerSearchStrategyState, DownloadSourceKind, EstimatedCost,
+    ExpectedValueHint, HashDomain, INDEXER_CAPS_REFRESH_ERROR_PREFIX, IndexerClient,
+    IndexerConfigRepository, IndexerErrorClassification, IndexerErrorOperation,
+    IndexerErrorRepository, IndexerPluginProvider, IndexerQueryOutcome, IndexerResponseAttributes,
+    IndexerRoutingPlan, IndexerRssCatchUp, IndexerSearchCandidateWrite, IndexerSearchCompletion,
     IndexerSearchEligibility, IndexerSearchIncompleteReason, IndexerSearchLearningContext,
     IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
     IndexerSearchNumberingContext, IndexerSearchOutcome, IndexerSearchPageSink,
@@ -20,12 +20,13 @@ use scryer_application::{
     NullIndexerErrorRepository, NullIndexerSearchLearningRepository, NullProxyConfigRepository,
     NullUpstreamScheduler, ProxyConfigRepository, RateLimitCooldownAction, RateLimitSignal,
     RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
-    ReusableIndexerSearchCandidate, RssDueIndexers, RssFreshnessContext, SchedulerAdmission,
-    SchedulerBatchRequest, SchedulerCandidate, SchedulerCandidateId, SchedulerFeedback,
-    SchedulerFeedbackOutcome, SchedulerIntent, SchedulerLease, SchedulerOperation,
-    SchedulerPluginKind, SchedulerSnapshot, SchedulerSnapshotFilter, SearchLearningContext,
-    SearchMode, UpstreamScheduler, blake3_identity_hex, escalation_backoff::indexer_backoff_ladder,
-    indexer_search_eligibility, indexer_search_identity, rss_poll_is_due,
+    ReusableIndexerSearchCandidate, RssDueIndexers, RssFreshnessContext, SEARCH_STRATEGY_CONTAINED,
+    SEARCH_STRATEGY_CONVERGED, SEARCH_STRATEGY_OPEN, SchedulerAdmission, SchedulerBatchRequest,
+    SchedulerCandidate, SchedulerCandidateId, SchedulerFeedback, SchedulerFeedbackOutcome,
+    SchedulerIntent, SchedulerLease, SchedulerOperation, SchedulerPluginKind, SchedulerSnapshot,
+    SchedulerSnapshotFilter, SearchLearningContext, SearchMode, UpstreamScheduler,
+    blake3_identity_hex, escalation_backoff::indexer_backoff_ladder, indexer_search_eligibility,
+    indexer_search_identity, rss_poll_is_due,
 };
 use scryer_domain::{
     IndexerCapsSearchNode, IndexerCapsSnapshot, IndexerConfig, IndexerProviderCapabilities,
@@ -401,6 +402,8 @@ fn prepare_search_strategies(
         }
 
         let request = IndexerSearchStrategyRequest {
+            page_cursor: None,
+            page_budget: None,
             strategy_id: strategy_id.clone(),
             labels: vec![strategy.label.clone()],
             query: strategy.request_query,
@@ -431,15 +434,38 @@ fn prepare_search_strategies(
 struct ReusableStrategySelection {
     live: Vec<PreparedSearchStrategy>,
     complete_count: usize,
+    /// Strategies held back: a deferred error, or a contained strategy whose
+    /// backoff has not yet run out.
     deferred_count: usize,
     replayed_result_count: usize,
+    /// The earliest instant a held contained strategy becomes due, when any
+    /// strategy was held for that reason.
+    contained_retry_at: Option<DateTime<Utc>>,
+    /// Whether any strategy was held for a reason other than containment.
+    deferred_open: bool,
+    /// Live strategies resuming a paged read, keyed by query signature.
+    page_chains: HashMap<String, PageChain>,
 }
+
+/// Where a paged background strategy resumes, and the chain of runs whose
+/// pages it continues.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PageChain {
+    cursor: String,
+    chain_id: String,
+}
+
+/// Provider pages a background pass reads per paged strategy. The rest of a
+/// long result set is read on later passes, from the cursor the last page
+/// returned.
+const BACKGROUND_PAGES_PER_PASS: u32 = 5;
 
 async fn select_reusable_strategies(
     strategies: Vec<PreparedSearchStrategy>,
     reusable: &mut HashMap<String, ReusableStrategyState>,
     indexer_id: &str,
     page_sink: &IndexerSearchPageSink,
+    background_page_budget: Option<u32>,
 ) -> AppResult<ReusableStrategySelection> {
     let now = Utc::now();
     let mut selection = ReusableStrategySelection {
@@ -447,13 +473,19 @@ async fn select_reusable_strategies(
         complete_count: 0,
         deferred_count: 0,
         replayed_result_count: 0,
+        contained_retry_at: None,
+        deferred_open: false,
+        page_chains: HashMap::new(),
     };
 
-    for strategy in strategies {
+    for mut strategy in strategies {
+        strategy.request.page_budget = background_page_budget;
         let Some(mut state) = reusable.remove(&strategy.strategy_id) else {
             selection.live.push(strategy);
             continue;
         };
+        let contained_retry_at = state.contained_retry_at();
+        let page_chain = background_page_budget.and_then(|_| state.page_chain(now));
         selection.replayed_result_count = selection
             .replayed_result_count
             .saturating_add(state.candidates.len());
@@ -467,12 +499,40 @@ async fn select_reusable_strategies(
                 .map_err(|_| AppError::canceled("indexer scoring pipeline closed"))?;
         }
 
+        if state.completion_state == "complete" {
+            selection.complete_count += 1;
+            continue;
+        }
+        // A contained strategy waits out its backoff. The provider cannot
+        // finish it as asked, so asking again before then only repeats the
+        // same capped answer.
+        if let Some(retry_at) = contained_retry_at.filter(|retry_at| *retry_at > now) {
+            selection.deferred_count += 1;
+            selection.contained_retry_at = Some(
+                selection
+                    .contained_retry_at
+                    .map_or(retry_at, |known| known.min(retry_at)),
+            );
+            continue;
+        }
+        // A deferred error, or a partial answer that named when to ask again,
+        // waits for that instant too.
         match state.completion_state.as_str() {
-            "complete" => selection.complete_count += 1,
-            "deferred" if state.retry_at.is_some_and(|retry_at| retry_at > now) => {
+            "deferred" | "partial" | "received_partial"
+                if state.retry_at.is_some_and(|retry_at| retry_at > now) =>
+            {
                 selection.deferred_count += 1;
+                selection.deferred_open = true;
             }
-            _ => selection.live.push(strategy),
+            _ => {
+                if let Some(page_chain) = page_chain {
+                    strategy.request.page_cursor = Some(page_chain.cursor.clone());
+                    selection
+                        .page_chains
+                        .insert(strategy.strategy_id.clone(), page_chain);
+                }
+                selection.live.push(strategy);
+            }
         }
     }
 
@@ -583,6 +643,176 @@ struct ReusableStrategyState {
     completion_state: String,
     retry_at: Option<DateTime<Utc>>,
     candidates: Vec<IndexerSearchResult>,
+    /// The strategy's latest background state, which alone decides a
+    /// containment backoff: operator and interactive runs never move it.
+    background: Option<BackgroundIndexerSearchStrategyState>,
+}
+
+impl ReusableStrategyState {
+    fn contained_retry_at(&self) -> Option<DateTime<Utc>> {
+        self.background
+            .as_ref()
+            .filter(|state| state.strategy_state == SEARCH_STRATEGY_CONTAINED)
+            .and_then(|state| state.retry_at)
+    }
+
+    /// The paged read this strategy's latest background run left unfinished.
+    /// A chain idle longer than the candidate reuse window starts over: the
+    /// pages it already read can no longer be replayed.
+    fn page_chain(&self, now: DateTime<Utc>) -> Option<PageChain> {
+        let state = self.background.as_ref()?;
+        if state.created_at < now - Duration::hours(SEARCH_CANDIDATE_REUSE_HOURS) {
+            return None;
+        }
+        Some(PageChain {
+            cursor: state.page_cursor.clone()?,
+            chain_id: state.cursor_chain_id.clone()?,
+        })
+    }
+}
+
+/// First wait after a strategy is found contained.
+const CONTAINED_RETRY_INITIAL_HOURS: i64 = 1;
+/// Longest wait between attempts at a contained strategy.
+const CONTAINED_RETRY_CAP_HOURS: i64 = 24;
+/// How far back a strategy's background state is read. Wider than the cap so
+/// a strategy that waited the full cap still doubles from it.
+const BACKGROUND_STRATEGY_STATE_LOOKBACK_HOURS: i64 = CONTAINED_RETRY_CAP_HOURS * 3;
+
+/// Whether a strategy response is contained: the provider stopped at a limit
+/// of its own (a result ceiling, a saturated partition) or ended partial
+/// without naming any reason or retry time. A further pass asks the same
+/// question and gets the same capped answer, so it waits out a backoff
+/// instead. Failures and rate limits are not contained: they recover on
+/// their own schedule.
+fn completion_is_contained(completion: &IndexerSearchCompletion) -> bool {
+    match completion {
+        IndexerSearchCompletion::Complete => false,
+        IndexerSearchCompletion::Partial {
+            reason:
+                Some(
+                    IndexerSearchIncompleteReason::PageCeilingReached
+                    | IndexerSearchIncompleteReason::SaturatedPartition,
+                ),
+            ..
+        } => true,
+        IndexerSearchCompletion::Partial {
+            reason: None,
+            retry_after,
+        } => retry_after.is_none(),
+        IndexerSearchCompletion::Partial { .. } => false,
+    }
+}
+
+/// The wait before a contained strategy is asked again: one hour after the
+/// first containment, then doubling from the wait it last served, capped at a
+/// day.
+fn next_contained_delay(previous: Option<Duration>) -> Duration {
+    let initial = Duration::hours(CONTAINED_RETRY_INITIAL_HOURS);
+    let cap = Duration::hours(CONTAINED_RETRY_CAP_HOURS);
+    match previous {
+        Some(previous) if previous > Duration::zero() => (previous * 2).clamp(initial, cap),
+        _ => initial,
+    }
+}
+
+/// Tracks, for one indexer's search, whether every incompleteness was
+/// containment and when the earliest contained strategy becomes due.
+#[derive(Default)]
+struct ContainedStrategyTracker {
+    /// Only background searches move containment state.
+    background: bool,
+    /// The wait each live strategy last served while contained, keyed by
+    /// query signature.
+    previous_delays: HashMap<String, Duration>,
+    earliest_retry_at: Option<DateTime<Utc>>,
+    open_incompleteness: bool,
+}
+
+impl ContainedStrategyTracker {
+    fn new(background: bool, reusable: &HashMap<String, ReusableStrategyState>) -> Self {
+        let previous_delays = reusable
+            .iter()
+            .filter_map(|(signature, state)| {
+                let background = state
+                    .background
+                    .as_ref()
+                    .filter(|state| state.strategy_state == SEARCH_STRATEGY_CONTAINED)?;
+                let delay = background.retry_at? - background.created_at;
+                Some((signature.clone(), delay))
+            })
+            .collect();
+        Self {
+            background,
+            previous_delays,
+            earliest_retry_at: None,
+            open_incompleteness: false,
+        }
+    }
+
+    fn note_open(&mut self) {
+        self.open_incompleteness = true;
+    }
+
+    fn note_retry_at(&mut self, retry_at: DateTime<Utc>) {
+        self.earliest_retry_at = Some(
+            self.earliest_retry_at
+                .map_or(retry_at, |known| known.min(retry_at)),
+        );
+    }
+
+    fn note_selection(&mut self, selection: &ReusableStrategySelection) {
+        if selection.deferred_open {
+            self.note_open();
+        }
+        if let Some(retry_at) = selection.contained_retry_at {
+            self.note_retry_at(retry_at);
+        }
+    }
+
+    /// Classifies one fired strategy's answer. Returns the instant a
+    /// contained strategy becomes due, which its run row records.
+    fn observe(
+        &mut self,
+        query_signature: &str,
+        completion: &IndexerSearchCompletion,
+        resumable: bool,
+    ) -> Option<DateTime<Utc>> {
+        if completion.is_complete() {
+            return None;
+        }
+        // A paged read that stopped with pages left is still moving: the
+        // next pass resumes it rather than waiting out a backoff.
+        if resumable || !self.background || !completion_is_contained(completion) {
+            self.note_open();
+            return None;
+        }
+        let mut delay = next_contained_delay(self.previous_delays.get(query_signature).copied());
+        if let IndexerSearchCompletion::Partial {
+            retry_after: Some(retry_after),
+            ..
+        } = completion
+            && let Ok(named) = Duration::from_std(*retry_after)
+        {
+            delay = delay.max(named);
+        }
+        let retry_at = Utc::now() + delay;
+        self.note_retry_at(retry_at);
+        Some(retry_at)
+    }
+
+    /// The indexer-level incompleteness when every incomplete strategy was
+    /// contained: the provider's ceiling, due at the earliest strategy.
+    fn contained_completion(&self) -> Option<(IndexerSearchIncompleteReason, std::time::Duration)> {
+        if self.open_incompleteness {
+            return None;
+        }
+        let retry_at = self.earliest_retry_at?;
+        Some((
+            IndexerSearchIncompleteReason::PageCeilingReached,
+            (retry_at - Utc::now()).to_std().unwrap_or_default(),
+        ))
+    }
 }
 
 fn reusable_strategy_provenance(branch: &str) -> ReleaseCandidateProvenance {
@@ -603,6 +833,9 @@ struct SearchDiagnosticsContext {
     search_session_id: String,
     scope_key: String,
     indexer_fingerprint: String,
+    /// Background convergence searches write strategy state; operator and
+    /// interactive searches leave it alone.
+    background: bool,
 }
 
 impl SearchDiagnosticsContext {
@@ -614,6 +847,7 @@ impl SearchDiagnosticsContext {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        background: bool,
     ) -> Option<Self> {
         let learning_context = learning_context?;
         if learning_context.title_id.trim().is_empty()
@@ -643,6 +877,7 @@ impl SearchDiagnosticsContext {
             search_session_id: learning_context.search_session_id.clone(),
             scope_key,
             indexer_fingerprint,
+            background,
         })
     }
 
@@ -652,9 +887,20 @@ impl SearchDiagnosticsContext {
         branch: &str,
         raw_result_count: usize,
         response: &IndexerSearchResponse,
+        contained_retry_at: Option<DateTime<Utc>>,
+        page_chain: Option<&PageChain>,
     ) -> AppResult<String> {
         let now = Utc::now();
         let run_id = uuid::Uuid::new_v4().to_string();
+        let page_cursor = response.next_cursor.clone().filter(|_| self.background);
+        let cursor_chain_id = self
+            .background
+            .then(|| {
+                page_chain
+                    .map(|chain| chain.chain_id.clone())
+                    .or_else(|| page_cursor.is_some().then(|| run_id.clone()))
+            })
+            .flatten();
         let (completion_state, incomplete_reason, retry_after) = match response.completion {
             IndexerSearchCompletion::Complete => ("received_complete", None, None),
             IndexerSearchCompletion::Partial {
@@ -697,9 +943,11 @@ impl SearchDiagnosticsContext {
             range_max_size: None,
             result_count: raw_result_count.min(u32::MAX as usize) as u32,
             completion_state: completion_state.to_string(),
-            retry_at: retry_after
-                .and_then(|delay| Duration::from_std(delay).ok())
-                .map(|delay| now + delay),
+            retry_at: contained_retry_at.or_else(|| {
+                retry_after
+                    .and_then(|delay| Duration::from_std(delay).ok())
+                    .map(|delay| now + delay)
+            }),
             error_summary: incomplete_reason
                 .map(|reason| format!("incomplete indexer search: {reason:?}"))
                 .or_else(|| {
@@ -708,6 +956,18 @@ impl SearchDiagnosticsContext {
                 }),
             indexer_fingerprint: self.indexer_fingerprint.clone(),
             created_at: now,
+            strategy_state: self.background.then(|| {
+                if response.completion.is_complete() {
+                    SEARCH_STRATEGY_CONVERGED
+                } else if contained_retry_at.is_some() {
+                    SEARCH_STRATEGY_CONTAINED
+                } else {
+                    SEARCH_STRATEGY_OPEN
+                }
+                .to_string()
+            }),
+            page_cursor,
+            cursor_chain_id,
         };
         self.repository
             .record_search_diagnostics(&run, &candidates)
@@ -722,9 +982,18 @@ impl SearchDiagnosticsContext {
         branch: &str,
         raw_result_count: usize,
         response: &IndexerSearchResponse,
+        contained_retry_at: Option<DateTime<Utc>>,
+        page_chain: Option<&PageChain>,
     ) {
         if let Err(error) = self
-            .persist_response(query_signature, branch, raw_result_count, response)
+            .persist_response(
+                query_signature,
+                branch,
+                raw_result_count,
+                response,
+                contained_retry_at,
+                page_chain,
+            )
             .await
         {
             warn!(
@@ -741,8 +1010,11 @@ impl SearchDiagnosticsContext {
         branch: &str,
         error: &AppError,
         retry_after: Option<std::time::Duration>,
+        page_chain: Option<&PageChain>,
     ) {
         let now = Utc::now();
+        // A failed page is read again from the same cursor next pass.
+        let page_chain = page_chain.filter(|_| self.background);
         let run = IndexerSearchRunWrite {
             id: uuid::Uuid::new_v4().to_string(),
             indexer_id: self.indexer_id.clone(),
@@ -766,6 +1038,9 @@ impl SearchDiagnosticsContext {
             error_summary: Some(sanitize_indexer_error_message(&error.to_string())),
             indexer_fingerprint: self.indexer_fingerprint.clone(),
             created_at: now,
+            strategy_state: self.background.then(|| SEARCH_STRATEGY_OPEN.to_string()),
+            page_cursor: page_chain.map(|chain| chain.cursor.clone()),
+            cursor_chain_id: page_chain.map(|chain| chain.chain_id.clone()),
         };
         self.persist(&run, &[]).await;
     }
@@ -825,10 +1100,107 @@ impl SearchDiagnosticsContext {
                     completion_state: state.completion_state,
                     retry_at: state.retry_at,
                     candidates,
+                    background: None,
                 },
             );
         }
+        if self.background {
+            self.attach_background_states(&mut reusable, now, config)
+                .await;
+        }
         reusable
+    }
+
+    async fn attach_background_states(
+        &self,
+        reusable: &mut HashMap<String, ReusableStrategyState>,
+        now: DateTime<Utc>,
+        config: &IndexerConfig,
+    ) {
+        let states = match self
+            .repository
+            .list_background_strategy_states(
+                &self.indexer_id,
+                &self.scope_key,
+                &self.indexer_fingerprint,
+                now - Duration::hours(BACKGROUND_STRATEGY_STATE_LOOKBACK_HOURS),
+            )
+            .await
+        {
+            Ok(states) => states,
+            Err(error) => {
+                warn!(
+                    indexer_id = self.indexer_id.as_str(),
+                    error = %error,
+                    "failed to load background indexer strategy state"
+                );
+                return;
+            }
+        };
+        for state in states {
+            let chain_candidates = self.page_chain_candidates(&state, now, config).await;
+            let query_signature = state.query_signature.clone();
+            let reusable_state =
+                reusable
+                    .entry(query_signature)
+                    .or_insert_with(|| ReusableStrategyState {
+                        completion_state: String::new(),
+                        retry_at: None,
+                        candidates: Vec::new(),
+                        background: None,
+                    });
+            if !chain_candidates.is_empty() {
+                let mut seen = reusable_state
+                    .candidates
+                    .iter()
+                    .map(candidate_session_identity_hash)
+                    .collect::<HashSet<_>>();
+                reusable_state.candidates.extend(
+                    chain_candidates.into_iter().filter(|candidate| {
+                        seen.insert(candidate_session_identity_hash(candidate))
+                    }),
+                );
+            }
+            reusable_state.background = Some(state);
+        }
+    }
+
+    /// The retained candidates of every page a background strategy's latest
+    /// chain read, so a pass that resumes or finishes the chain ranks them
+    /// all, not only the last run's page.
+    async fn page_chain_candidates(
+        &self,
+        state: &BackgroundIndexerSearchStrategyState,
+        now: DateTime<Utc>,
+        config: &IndexerConfig,
+    ) -> Vec<IndexerSearchResult> {
+        if state.chain_run_ids.len() < 2
+            || state.created_at < now - Duration::hours(SEARCH_CANDIDATE_REUSE_HOURS)
+        {
+            return Vec::new();
+        }
+        let provenance = reusable_strategy_provenance(&state.branch);
+        let mut candidates = Vec::new();
+        for run_id in &state.chain_run_ids {
+            match self.persisted_candidates(run_id, config).await {
+                Ok(mut page) => {
+                    for candidate in &mut page {
+                        candidate.provenance = Some(provenance.clone());
+                    }
+                    candidates.append(&mut page);
+                }
+                Err(error) => {
+                    warn!(
+                        indexer_id = self.indexer_id.as_str(),
+                        query_signature = state.query_signature.as_str(),
+                        error = %error,
+                        "failed to rehydrate a paged strategy's earlier pages"
+                    );
+                    return Vec::new();
+                }
+            }
+        }
+        candidates
     }
 
     async fn persist(
@@ -3188,6 +3560,7 @@ impl MultiIndexerSearchClient {
         error: &AppError,
     ) {
         let response = IndexerSearchResponse {
+            next_cursor: None,
             results: vec![],
 
             completion: IndexerSearchCompletion::Partial {
@@ -4573,6 +4946,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             // the per-indexer skip reasons above already carry the detail.
             debug!(mode = ?mode, "no enabled indexer configs found");
             return Ok(IndexerSearchResponse {
+                next_cursor: None,
                 results: vec![],
 
                 indexer_outcomes: Vec::new(),
@@ -4917,6 +5291,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         if scheduler_candidates.is_empty() {
             debug!(mode = ?mode, "no scheduler-eligible indexer configs found");
             return Ok(IndexerSearchResponse {
+                next_cursor: None,
                 results: vec![],
 
                 indexer_outcomes: unsupported_outcomes,
@@ -5324,7 +5699,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 let request_cancel_token = task_cancel_token.child_token();
                                 let request_deadline =
                                     effective_request_deadline(search_timeout, deadline_at);
-                                let rss_strategy = IndexerSearchStrategyRequest {
+                                let rss_strategy = IndexerSearchStrategyRequest { page_cursor: None, page_budget: None,
                                     strategy_id: String::new(),
                                     labels: Vec::new(),
                                     query,
@@ -5492,7 +5867,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         let mut rss_summary = RssFeedSummary::new(rss_catch_up);
                         rss_summary.observe(&results);
                         rss_summary.note_completion(&feed_completion);
-                        let response = IndexerSearchResponse {
+                        let response = IndexerSearchResponse { next_cursor: None,
                             results,
 
                             indexer_outcomes: Vec::new(),
@@ -5657,6 +6032,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 season,
                 episode,
                 absolute_episode,
+                candidate_reuse_permitted(mode, learning_context.as_ref()),
             );
             // Corpus reuse is opt-in per pass: only the background convergence
             // lanes mark their learning context reusable. An operator-triggered
@@ -5718,6 +6094,19 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let mut rss_summary =
                     is_rss_request.then(|| RssFeedSummary::new(rss_catch_up.clone()));
                 let mut reusable_strategies = reusable_strategies;
+                let mut contained = ContainedStrategyTracker::new(
+                    search_diagnostics
+                        .as_ref()
+                        .is_some_and(|diagnostics| diagnostics.background),
+                    &reusable_strategies,
+                );
+                // Only a background pass with diagnostics to resume from reads
+                // a paged strategy a few pages at a time.
+                let background_page_budget = search_diagnostics
+                    .as_ref()
+                    .filter(|diagnostics| diagnostics.background)
+                    .map(|_| BACKGROUND_PAGES_PER_PASS);
+                let mut page_chains: HashMap<String, PageChain> = HashMap::new();
                 let mut any_strategy_fired = false;
                 let mut all_strategies_complete = true;
                 let mut only_unattested_incompleteness = true;
@@ -5758,6 +6147,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     &mut reusable_strategies,
                     &indexer_id,
                     page_sink.as_ref().expect("stream sink is present"),
+                    background_page_budget,
                 )
                 .await
                 {
@@ -5780,9 +6170,11 @@ impl IndexerClient for MultiIndexerSearchClient {
                     all_strategies_complete = false;
                     only_unattested_incompleteness = false;
                 }
+                contained.note_selection(&primary_selection);
                 primary_usable_result_count = primary_usable_result_count
                     .saturating_add(primary_selection.replayed_result_count);
                 let primary_live = primary_selection.live;
+                page_chains.extend(primary_selection.page_chains);
                 let mut primary_outcomes = if primary_live.is_empty() {
                     StrategyTierOutcomes::Legacy(tokio::task::JoinSet::new())
                 } else if live_search_admitted {
@@ -5796,6 +6188,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     primary_had_error = true;
                     all_strategies_complete = false;
                     only_unattested_incompleteness = false;
+                    contained.note_open();
                     StrategyTierOutcomes::Legacy(tokio::task::JoinSet::new())
                 };
 
@@ -5823,6 +6216,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     if !outcome.request_fired {
                         all_strategies_complete = false;
                         only_unattested_incompleteness = false;
+                        contained.note_open();
                         if let Some(wait) = outcome.over_query_budget {
                             query_budget_wait =
                                 Some(query_budget_wait.map_or(wait, |known| known.min(wait)));
@@ -5858,6 +6252,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     }
                                 );
                             }
+                            let contained_retry_at =
+                                contained.observe(
+&outcome.strategy_id,
+&response.completion,
+response.next_cursor.is_some(),
+);
                             let raw_result_count = response.results.len();
                             if let Some(summary) = rss_summary.as_mut() {
                                 summary.observe(&response.results);
@@ -5941,6 +6341,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                             &diagnostic_labels,
                                             raw_result_count,
                                             &response,
+                                            contained_retry_at,
+                                            page_chains.get(&outcome.strategy_id),
                                         )
                                         .await
                                 {
@@ -5986,6 +6388,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                             &diagnostic_labels,
                                             raw_result_count,
                                             &response,
+                                            contained_retry_at,
+                                            page_chains.get(&outcome.strategy_id),
                                         )
                                         .await;
                                 }
@@ -6008,6 +6412,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             primary_had_error = true;
                             all_strategies_complete = false;
                             only_unattested_incompleteness = false;
+                            contained.note_open();
                             // The endpoint does not implement the facet-scoped
                             // function it was asked for. That is a wrong request
                             // form, not a broken indexer, so it is remembered
@@ -6030,6 +6435,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         &diagnostic_labels,
                                         &err,
                                         outcome.retry_after,
+                                        page_chains.get(&outcome.strategy_id),
                                     )
                                     .await;
                             }
@@ -6114,6 +6520,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         &mut reusable_strategies,
                         &indexer_id,
                         page_sink.as_ref().expect("stream sink is present"),
+                        background_page_budget,
                     )
                     .await
                     {
@@ -6132,7 +6539,9 @@ impl IndexerClient for MultiIndexerSearchClient {
                         all_strategies_complete = false;
                         only_unattested_incompleteness = false;
                     }
+                    contained.note_selection(&fallback_selection);
                     let fallback_live = fallback_selection.live;
+                    page_chains.extend(fallback_selection.page_chains);
                     let mut fallback_outcomes = if fallback_live.is_empty() {
                         StrategyTierOutcomes::Legacy(tokio::task::JoinSet::new())
                     } else if live_search_admitted {
@@ -6145,6 +6554,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     } else {
                         all_strategies_complete = false;
                         only_unattested_incompleteness = false;
+                        contained.note_open();
                         StrategyTierOutcomes::Legacy(tokio::task::JoinSet::new())
                     };
 
@@ -6172,6 +6582,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         if !outcome.request_fired {
                             all_strategies_complete = false;
                             only_unattested_incompleteness = false;
+                            contained.note_open();
                             if let Some(wait) = outcome.over_query_budget {
                                 query_budget_wait =
                                     Some(query_budget_wait.map_or(wait, |known| known.min(wait)));
@@ -6208,6 +6619,11 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         }
                                     );
                                 }
+                                let contained_retry_at = contained.observe(
+&outcome.strategy_id,
+&response.completion,
+response.next_cursor.is_some(),
+);
                                 let raw_result_count = response.results.len();
                                 if let Some(summary) = rss_summary.as_mut() {
                                     summary.observe(&response.results);
@@ -6274,6 +6690,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                                 &diagnostic_labels,
                                                 raw_result_count,
                                                 &response,
+                                                contained_retry_at,
+                                                page_chains.get(&outcome.strategy_id),
                                             )
                                             .await
                                     {
@@ -6319,6 +6737,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                                 &diagnostic_labels,
                                                 raw_result_count,
                                                 &response,
+                                                contained_retry_at,
+                                                page_chains.get(&outcome.strategy_id),
                                             )
                                             .await;
                                     }
@@ -6340,6 +6760,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 }
                                 all_strategies_complete = false;
                                 only_unattested_incompleteness = false;
+                                contained.note_open();
                                 if let Some(diagnostics) = search_diagnostics.as_ref() {
                                     diagnostics
                                         .record_error(
@@ -6347,6 +6768,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                             &diagnostic_labels,
                                             &err,
                                             outcome.retry_after,
+                                            page_chains.get(&outcome.strategy_id),
                                         )
                                         .await;
                                 }
@@ -6487,12 +6909,23 @@ impl IndexerClient for MultiIndexerSearchClient {
                     indexer_id,
                     indexer_name,
                     scheduler_lease_for_task.clone(),
-                    Ok((IndexerSearchResponse {
+                    Ok((IndexerSearchResponse { next_cursor: None,
                         results: collected_results,
 
                         indexer_outcomes: task_indexer_outcomes,
                         completion: if all_strategies_complete {
                             IndexerSearchCompletion::Complete
+                        } else if let Some((reason, retry_after)) = contained
+                            .contained_completion()
+                            .filter(|_| query_budget_wait.is_none())
+                        {
+                            // Every incomplete strategy is contained: the
+                            // indexer is not covered, and is not worth asking
+                            // again before its earliest strategy is due.
+                            IndexerSearchCompletion::Partial {
+                                reason: Some(reason),
+                                retry_after: Some(retry_after),
+                            }
                         } else {
                             IndexerSearchCompletion::Partial {
                                 reason: if query_budget_wait.is_some() {
@@ -6728,6 +7161,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         };
 
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             results: all_results,
 
             completion,
@@ -6804,6 +7238,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             });
         }
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             results,
             completion: IndexerSearchCompletion::Complete,
             api_current: None,
@@ -6826,6 +7261,63 @@ impl IndexerClient for MultiIndexerSearchClient {
         self.search_learning
             .finalize_search_session(search_session_id, admissible_fingerprints)
             .await
+    }
+
+    async fn link_search_session_coverage_scope(
+        &self,
+        search_session_id: &str,
+        coverage_scope_key: &str,
+    ) -> AppResult<()> {
+        self.search_learning
+            .link_search_session_coverage_scope(search_session_id, coverage_scope_key)
+            .await
+    }
+
+    async fn contained_search_holds(
+        &self,
+        coverage_scope_key: &str,
+        indexer_ids: &[String],
+        now: DateTime<Utc>,
+    ) -> AppResult<HashMap<String, DateTime<Utc>>> {
+        if indexer_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let wanted = indexer_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let configs = self.indexer_configs.list(None).await?;
+        let created_after = now - Duration::hours(CONTAINED_RETRY_CAP_HOURS);
+        let mut holds = HashMap::new();
+        for config in configs
+            .iter()
+            .filter(|config| wanted.contains(config.id.as_str()))
+        {
+            // A changed indexer configuration or plugin semantics is a new
+            // search identity: its earlier containment does not hold it.
+            let fingerprint = digest_json(
+                HashDomain::IndexerSearchIdentity,
+                &indexer_search_identity(
+                    config,
+                    self.plugin_provider
+                        .search_semantics_version_for_provider(&config.provider_type),
+                ),
+            );
+            if let Some(until) = self
+                .search_learning
+                .contained_search_hold(
+                    coverage_scope_key,
+                    &config.id,
+                    &fingerprint,
+                    created_after,
+                    now,
+                )
+                .await?
+            {
+                holds.insert(config.id.clone(), until);
+            }
+        }
+        Ok(holds)
     }
 }
 
@@ -7807,6 +8299,7 @@ mod tests {
     fn only_fired_complete_strategy_executions_are_complete() {
         let response = |completion| {
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 results: Vec::new(),
 
                 completion,
@@ -8275,6 +8768,7 @@ mod tests {
         ) -> AppResult<IndexerSearchPlanSummary> {
             let strategy_id = request.strategies[0].strategy_id.clone();
             let response = IndexerSearchResponse {
+                next_cursor: None,
                 completion: IndexerSearchCompletion::Complete,
                 indexer_outcomes: Vec::new(),
                 results: vec![search_result("Synthetic.Plan.Result")],
@@ -8365,6 +8859,7 @@ mod tests {
         ) -> AppResult<IndexerSearchResponse> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: IndexerSearchCompletion::Complete,
                 indexer_outcomes: Vec::new(),
                 results: vec![],
@@ -8883,6 +9378,8 @@ mod tests {
         absolute_episode: Option<u32>,
         rss_catch_up: Option<IndexerRssCatchUp>,
         limit: Option<u32>,
+        page_cursor: Option<String>,
+        page_budget: Option<u32>,
     }
 
     type ResponseFn = dyn Fn(&RecordedCall) -> AppResult<IndexerSearchResponse> + Send + Sync;
@@ -8934,6 +9431,8 @@ mod tests {
                 absolute_episode,
                 rss_catch_up: None,
                 limit: None,
+                page_cursor: None,
+                page_budget: None,
             };
             self.answer(call)
         }
@@ -8956,6 +9455,8 @@ mod tests {
                 absolute_episode: request.absolute_episode,
                 rss_catch_up: request.rss_catch_up,
                 limit: None,
+                page_cursor: request.page_cursor,
+                page_budget: request.page_budget,
             };
             self.answer(call)
         }
@@ -8976,6 +9477,8 @@ mod tests {
                 absolute_episode: None,
                 rss_catch_up: None,
                 limit: request.limit,
+                page_cursor: None,
+                page_budget: None,
             })
         }
     }
@@ -9034,6 +9537,7 @@ mod tests {
                 .expect("start order mutex")
                 .push(self.indexer_id.clone());
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: IndexerSearchCompletion::Complete,
                 indexer_outcomes: Vec::new(),
                 results: vec![],
@@ -9186,6 +9690,7 @@ mod tests {
             }
             self.probe.mark_finished();
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: IndexerSearchCompletion::Complete,
                 indexer_outcomes: Vec::new(),
                 results: vec![],
@@ -9485,6 +9990,8 @@ mod tests {
             strategy_id: strategy_id.to_string(),
             labels: vec![format!("strategy:{strategy_id}")],
             request: IndexerSearchStrategyRequest {
+                page_cursor: None,
+                page_budget: None,
                 strategy_id: strategy_id.to_string(),
                 labels: vec![format!("strategy:{strategy_id}")],
                 query: format!("synthetic-{strategy_id}"),
@@ -9664,7 +10171,22 @@ mod tests {
             prepared_strategy("complete"),
             prepared_strategy("deferred"),
             prepared_strategy("partial"),
+            prepared_strategy("partial-due"),
+            prepared_strategy("contained"),
+            prepared_strategy("contained-due"),
         ];
+        let background = |state: &str, retry_at: DateTime<Utc>| {
+            Some(BackgroundIndexerSearchStrategyState {
+                query_signature: String::new(),
+                strategy_state: state.to_string(),
+                retry_at: Some(retry_at),
+                created_at: Utc::now() - Duration::hours(1),
+                page_cursor: None,
+                cursor_chain_id: None,
+                chain_run_ids: Vec::new(),
+                branch: String::new(),
+            })
+        };
         let mut reusable = HashMap::from([
             (
                 "complete".to_string(),
@@ -9672,6 +10194,7 @@ mod tests {
                     completion_state: "complete".into(),
                     retry_at: None,
                     candidates: vec![search_result("Synthetic.Complete")],
+                    background: None,
                 },
             ),
             (
@@ -9680,6 +10203,7 @@ mod tests {
                     completion_state: "deferred".into(),
                     retry_at: Some(Utc::now() + Duration::minutes(1)),
                     candidates: vec![search_result("Synthetic.Deferred")],
+                    background: None,
                 },
             ),
             (
@@ -9688,22 +10212,67 @@ mod tests {
                     completion_state: "partial".into(),
                     retry_at: Some(Utc::now() + Duration::minutes(1)),
                     candidates: vec![search_result("Synthetic.Partial")],
+                    background: None,
+                },
+            ),
+            (
+                "partial-due".to_string(),
+                ReusableStrategyState {
+                    completion_state: "partial".into(),
+                    retry_at: None,
+                    candidates: vec![search_result("Synthetic.PartialDue")],
+                    background: None,
+                },
+            ),
+            (
+                // Contained by a background pass, then asked by an operator:
+                // the operator's partial row does not reset the backoff.
+                "contained".to_string(),
+                ReusableStrategyState {
+                    completion_state: "partial".into(),
+                    retry_at: None,
+                    candidates: vec![search_result("Synthetic.Contained")],
+                    background: background(
+                        SEARCH_STRATEGY_CONTAINED,
+                        Utc::now() + Duration::minutes(30),
+                    ),
+                },
+            ),
+            (
+                "contained-due".to_string(),
+                ReusableStrategyState {
+                    completion_state: String::new(),
+                    retry_at: None,
+                    candidates: Vec::new(),
+                    background: background(
+                        SEARCH_STRATEGY_CONTAINED,
+                        Utc::now() - Duration::minutes(1),
+                    ),
                 },
             ),
         ]);
-        let (page_tx, mut page_rx) = tokio::sync::mpsc::channel(4);
-        let page_sink = IndexerSearchPageSink::new(page_tx, 4);
+        let (page_tx, mut page_rx) = tokio::sync::mpsc::channel(8);
+        let page_sink = IndexerSearchPageSink::new(page_tx, 8);
 
         let selection =
-            select_reusable_strategies(strategies, &mut reusable, "indexer-1", &page_sink)
+            select_reusable_strategies(strategies, &mut reusable, "indexer-1", &page_sink, None)
                 .await
                 .expect("strategy reuse should succeed");
 
         assert_eq!(selection.complete_count, 1);
-        assert_eq!(selection.deferred_count, 1);
-        assert_eq!(selection.replayed_result_count, 3);
-        assert_eq!(selection.live.len(), 1);
-        assert_eq!(selection.live[0].strategy_id, "partial");
+        assert_eq!(selection.deferred_count, 3);
+        assert_eq!(selection.replayed_result_count, 5);
+        let live = selection
+            .live
+            .iter()
+            .map(|strategy| strategy.strategy_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(live, vec!["partial-due", "contained-due"]);
+        assert!(selection.deferred_open);
+        let contained_retry_at = selection
+            .contained_retry_at
+            .expect("the held contained strategy names when it is due");
+        assert!(contained_retry_at > Utc::now() + Duration::minutes(29));
 
         let mut replayed_pages = 0;
         while let Ok(page) = page_rx.try_recv() {
@@ -9711,7 +10280,234 @@ mod tests {
             assert_eq!(page.results.len(), 1);
             assert_eq!(page.results[0].indexer_id.as_deref(), Some("indexer-1"));
         }
-        assert_eq!(replayed_pages, 3);
+        assert_eq!(replayed_pages, 5);
+    }
+
+    #[test]
+    fn contained_backoff_starts_at_an_hour_doubles_and_caps_at_a_day() {
+        assert_eq!(next_contained_delay(None), Duration::hours(1));
+        assert_eq!(
+            next_contained_delay(Some(Duration::zero())),
+            Duration::hours(1)
+        );
+        assert_eq!(
+            next_contained_delay(Some(Duration::hours(1))),
+            Duration::hours(2)
+        );
+        assert_eq!(
+            next_contained_delay(Some(Duration::hours(8))),
+            Duration::hours(16)
+        );
+        assert_eq!(
+            next_contained_delay(Some(Duration::hours(16))),
+            Duration::hours(24)
+        );
+        assert_eq!(
+            next_contained_delay(Some(Duration::hours(24))),
+            Duration::hours(24)
+        );
+    }
+
+    #[test]
+    fn only_provider_limits_and_unexplained_partials_are_contained() {
+        let partial = |reason, retry_after| IndexerSearchCompletion::Partial {
+            reason,
+            retry_after,
+        };
+        let soon = Some(std::time::Duration::from_secs(60));
+        assert!(!completion_is_contained(&IndexerSearchCompletion::Complete));
+        assert!(completion_is_contained(&partial(
+            Some(IndexerSearchIncompleteReason::PageCeilingReached),
+            None
+        )));
+        assert!(completion_is_contained(&partial(
+            Some(IndexerSearchIncompleteReason::SaturatedPartition),
+            None
+        )));
+        assert!(completion_is_contained(&partial(None, None)));
+        assert!(!completion_is_contained(&partial(None, soon)));
+        for recoverable in [
+            IndexerSearchIncompleteReason::UpstreamFailure,
+            IndexerSearchIncompleteReason::RateLimited,
+            IndexerSearchIncompleteReason::MalformedContent,
+            IndexerSearchIncompleteReason::FanoutBranchFailed,
+            IndexerSearchIncompleteReason::Unattested,
+            IndexerSearchIncompleteReason::QueryBudgetExhausted,
+        ] {
+            assert!(!completion_is_contained(&partial(Some(recoverable), None)));
+        }
+    }
+
+    #[test]
+    fn contained_tracker_backs_off_per_strategy_and_reports_the_ceiling() {
+        let ceiling = IndexerSearchCompletion::Partial {
+            reason: Some(IndexerSearchIncompleteReason::PageCeilingReached),
+            retry_after: None,
+        };
+        let created_at = Utc::now() - Duration::hours(3);
+        let reusable = HashMap::from([(
+            "ids".to_string(),
+            ReusableStrategyState {
+                completion_state: "partial".into(),
+                retry_at: None,
+                candidates: Vec::new(),
+                background: Some(BackgroundIndexerSearchStrategyState {
+                    query_signature: "ids".into(),
+                    strategy_state: SEARCH_STRATEGY_CONTAINED.into(),
+                    retry_at: Some(created_at + Duration::hours(2)),
+                    created_at,
+                    page_cursor: None,
+                    cursor_chain_id: None,
+                    chain_run_ids: Vec::new(),
+                    branch: "ids".into(),
+                }),
+            },
+        )]);
+
+        // An operator search never contains anything.
+        let mut operator = ContainedStrategyTracker::new(false, &reusable);
+        assert_eq!(operator.observe("ids", &ceiling, false), None);
+        assert_eq!(operator.contained_completion(), None);
+
+        let mut background = ContainedStrategyTracker::new(true, &reusable);
+        let before = Utc::now();
+        let doubled = background
+            .observe("ids", &ceiling, false)
+            .expect("a ceiling is contained");
+        assert!(doubled >= before + Duration::hours(4));
+        assert!(doubled <= Utc::now() + Duration::hours(4));
+        let fresh = background
+            .observe("text", &ceiling, false)
+            .expect("a ceiling is contained");
+        assert!(fresh <= Utc::now() + Duration::hours(1));
+        let (reason, retry_after) = background
+            .contained_completion()
+            .expect("every incompleteness was contained");
+        assert_eq!(reason, IndexerSearchIncompleteReason::PageCeilingReached);
+        assert!(retry_after <= std::time::Duration::from_secs(3_600));
+
+        background.observe(
+            "other",
+            &IndexerSearchCompletion::Partial {
+                reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
+                retry_after: None,
+            },
+            false,
+        );
+        assert_eq!(background.contained_completion(), None);
+    }
+
+    #[test]
+    fn a_paged_strategy_with_pages_left_is_open_not_contained() {
+        let mut background = ContainedStrategyTracker::new(true, &HashMap::new());
+        let stopped = IndexerSearchCompletion::Partial {
+            reason: None,
+            retry_after: None,
+        };
+        assert_eq!(background.observe("ids", &stopped, true), None);
+        assert_eq!(background.contained_completion(), None);
+
+        // The same answer without a cursor to resume from is the provider's
+        // ceiling.
+        let mut background = ContainedStrategyTracker::new(true, &HashMap::new());
+        assert!(background.observe("ids", &stopped, false).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_background_pass_resumes_an_unfinished_paged_strategy() {
+        let open = |cursor: &str, created_at: DateTime<Utc>| ReusableStrategyState {
+            completion_state: "partial".into(),
+            retry_at: None,
+            candidates: vec![search_result("Synthetic.Page")],
+            background: Some(BackgroundIndexerSearchStrategyState {
+                query_signature: String::new(),
+                strategy_state: SEARCH_STRATEGY_OPEN.into(),
+                retry_at: None,
+                created_at,
+                page_cursor: Some(cursor.into()),
+                cursor_chain_id: Some("chain-1".into()),
+                chain_run_ids: vec!["run-2".into(), "run-1".into()],
+                branch: "ids".into(),
+            }),
+        };
+        let reusable = || {
+            HashMap::from([
+                ("resumed".to_string(), open("offset:500", Utc::now())),
+                (
+                    // Idle past the reuse window: its earlier pages are gone,
+                    // so it reads from the first page again.
+                    "stale".to_string(),
+                    open("offset:900", Utc::now() - Duration::hours(30)),
+                ),
+            ])
+        };
+        let strategies = || {
+            vec![
+                prepared_strategy("resumed"),
+                prepared_strategy("stale"),
+                prepared_strategy("new"),
+            ]
+        };
+        let (page_tx, _page_rx) = tokio::sync::mpsc::channel(8);
+        let page_sink = IndexerSearchPageSink::new(page_tx, 8);
+
+        let selection = select_reusable_strategies(
+            strategies(),
+            &mut reusable(),
+            "indexer-1",
+            &page_sink,
+            Some(BACKGROUND_PAGES_PER_PASS),
+        )
+        .await
+        .expect("strategy reuse should succeed");
+        let live = selection
+            .live
+            .iter()
+            .map(|strategy| {
+                (
+                    strategy.strategy_id.as_str(),
+                    strategy.request.page_cursor.as_deref(),
+                    strategy.request.page_budget,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            live,
+            vec![
+                (
+                    "resumed",
+                    Some("offset:500"),
+                    Some(BACKGROUND_PAGES_PER_PASS)
+                ),
+                ("stale", None, Some(BACKGROUND_PAGES_PER_PASS)),
+                ("new", None, Some(BACKGROUND_PAGES_PER_PASS)),
+            ]
+        );
+        assert_eq!(
+            selection.page_chains,
+            HashMap::from([(
+                "resumed".to_string(),
+                PageChain {
+                    cursor: "offset:500".into(),
+                    chain_id: "chain-1".into(),
+                },
+            )])
+        );
+
+        // Operator and interactive searches neither resume nor bound a read.
+        let selection = select_reusable_strategies(
+            strategies(),
+            &mut reusable(),
+            "indexer-1",
+            &page_sink,
+            None,
+        )
+        .await
+        .expect("strategy reuse should succeed");
+        assert!(selection.live.iter().all(|strategy| {
+            strategy.request.page_cursor.is_none() && strategy.request.page_budget.is_none()
+        }));
+        assert!(selection.page_chains.is_empty());
     }
 
     #[test]
@@ -9727,6 +10523,7 @@ mod tests {
 
     fn response_with_titles(titles: &[&str]) -> AppResult<IndexerSearchResponse> {
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: IndexerSearchCompletion::Complete,
             indexer_outcomes: Vec::new(),
             results: titles.iter().map(|title| search_result(title)).collect(),
@@ -10228,6 +11025,7 @@ mod tests {
             calls: StdArc::new(StdMutex::new(Vec::new())),
             responder: StdArc::new(|_| {
                 Ok(IndexerSearchResponse {
+                    next_cursor: None,
                     completion: IndexerSearchCompletion::Complete,
                     indexer_outcomes: Vec::new(),
                     results: vec![search_result("Recovered.Show.S01E01")],
@@ -11649,6 +12447,7 @@ mod tests {
                     response_with_titles(&["Storm.Signal.S01E02.2026"])
                 } else {
                     Ok(IndexerSearchResponse {
+                        next_cursor: None,
                         completion: IndexerSearchCompletion::Complete,
                         indexer_outcomes: Vec::new(),
                         results: vec![],
@@ -11734,6 +12533,7 @@ mod tests {
                     response_with_titles(&["Storm.Signal.S01E02.2026"])
                 } else {
                     Ok(IndexerSearchResponse {
+                        next_cursor: None,
                         completion: IndexerSearchCompletion::Complete,
                         indexer_outcomes: Vec::new(),
                         results: vec![],
@@ -12347,6 +13147,7 @@ mod tests {
                 marker_at - Duration::minutes(1),
             ));
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: IndexerSearchCompletion::Complete,
                 indexer_outcomes: Vec::new(),
                 results,
@@ -12392,6 +13193,7 @@ mod tests {
             }
             results.push(dated_rss_result("oldest-guid", oldest_at));
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: IndexerSearchCompletion::Complete,
                 indexer_outcomes: Vec::new(),
                 results,
@@ -12420,6 +13222,7 @@ mod tests {
         results: Vec<IndexerSearchResult>,
     ) -> AppResult<IndexerSearchResponse> {
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: IndexerSearchCompletion::Partial {
                 reason: Some(IndexerSearchIncompleteReason::PageCeilingReached),
                 retry_after: None,
@@ -13628,6 +14431,7 @@ mod tests {
                     .send(IndexerSearchStrategyEvent {
                         strategy_id: strategy_id.clone(),
                         response: Ok(IndexerSearchResponse {
+                            next_cursor: None,
                             completion: IndexerSearchCompletion::Complete,
                             indexer_outcomes: Vec::new(),
                             results: Vec::new(),
@@ -14344,6 +15148,8 @@ mod tests {
                         absolute_episode: None,
                         rss_catch_up: None,
                         limit: Some(25),
+                        page_cursor: None,
+                        page_budget: None,
                     }],
                     "{label}"
                 );
@@ -15044,6 +15850,58 @@ mod tests {
             Ok(())
         }
 
+        async fn list_background_strategy_states(
+            &self,
+            indexer_id: &str,
+            scope_key: &str,
+            indexer_fingerprint: &str,
+            created_after: DateTime<Utc>,
+        ) -> AppResult<Vec<BackgroundIndexerSearchStrategyState>> {
+            let mut runs = self
+                .diagnostics
+                .lock()
+                .expect("search diagnostics mutex")
+                .iter()
+                .map(|(run, _)| run.clone())
+                .filter(|run| {
+                    run.indexer_id == indexer_id
+                        && run.scope_key == scope_key
+                        && run.indexer_fingerprint == indexer_fingerprint
+                        && run.strategy_state.is_some()
+                        && run.created_at >= created_after
+                })
+                .collect::<Vec<_>>();
+            runs.reverse();
+            let mut states: Vec<BackgroundIndexerSearchStrategyState> = Vec::new();
+            for run in runs {
+                if let Some(state) = states
+                    .iter_mut()
+                    .find(|state| state.query_signature == run.query_signature)
+                {
+                    if run.cursor_chain_id.is_some() && state.cursor_chain_id == run.cursor_chain_id
+                    {
+                        state.chain_run_ids.push(run.id.clone());
+                    }
+                    continue;
+                }
+                states.push(BackgroundIndexerSearchStrategyState {
+                    query_signature: run.query_signature.clone(),
+                    strategy_state: run.strategy_state.clone().unwrap_or_default(),
+                    retry_at: run.retry_at,
+                    created_at: run.created_at,
+                    page_cursor: run.page_cursor.clone(),
+                    chain_run_ids: run
+                        .cursor_chain_id
+                        .is_some()
+                        .then(|| vec![run.id.clone()])
+                        .unwrap_or_default(),
+                    cursor_chain_id: run.cursor_chain_id.clone(),
+                    branch: run.branch.clone(),
+                });
+            }
+            Ok(states)
+        }
+
         async fn list_search_run_candidates(
             &self,
             run_id: &str,
@@ -15701,6 +16559,7 @@ mod tests {
             StdArc::new(InMemorySearchLearningRepository::default());
         let (client, _calls) = scripted_search_client(movie_caps(), |_call| {
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: IndexerSearchCompletion::Partial {
                     reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
                     retry_after: None,
@@ -15755,6 +16614,137 @@ mod tests {
             .await
             .expect("learning records");
         assert!(records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_background_pass_reads_a_paged_strategy_a_few_pages_at_a_time() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let diagnostics = repo_impl.diagnostics.clone();
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, calls) = scripted_search_client(movie_caps(), |call| {
+            let (title, next_cursor) = match call.page_cursor.as_deref() {
+                None => ("Lattice.Zero.1999.Part1.1080p.WEB-DL", Some("offset:500")),
+                Some("offset:500") => ("Lattice.Zero.1999.Part2.1080p.WEB-DL", Some("offset:1000")),
+                Some("offset:1000") => ("Lattice.Zero.1999.Part3.1080p.WEB-DL", None),
+                Some(other) => panic!("unexpected cursor {other}"),
+            };
+            let mut response = response_with_titles(&[title])?;
+            response.next_cursor = next_cursor.map(str::to_string);
+            if next_cursor.is_some() {
+                response.completion = IndexerSearchCompletion::Partial {
+                    reason: None,
+                    retry_after: None,
+                };
+            }
+            Ok(response)
+        });
+        let client = client.with_search_learning_repository(repo);
+        let pass = |session: &'static str, background: bool| {
+            let client = &client;
+            async move {
+                <MultiIndexerSearchClient as IndexerClient>::search(
+                    client,
+                    "Lattice Zero".into(),
+                    HashMap::from([("imdb_id".to_string(), "tt0133093".to_string())]),
+                    Some("movie".into()),
+                    Some("movie".into()),
+                    None,
+                    None,
+                    None,
+                    SearchMode::Auto,
+                    IndexerErrorOperation::AutomaticSearch,
+                    None,
+                    None,
+                    None,
+                    None,
+                    vec![],
+                    Some(IndexerSearchLearningContext {
+                        title_id: "title-1".into(),
+                        facet: "movie".into(),
+                        subject_kind: ReleaseSearchSubjectKind::Title,
+                        search_session_id: session.into(),
+                        background_value: None,
+                        candidate_reuse_allowed: background,
+                    }),
+                    CancellationToken::new(),
+                )
+                .await
+                .expect("search should succeed")
+            }
+        };
+        let pages_asked = |from: usize| {
+            calls.lock().expect("calls")[from..]
+                .iter()
+                .map(|call| (call.page_cursor.clone(), call.page_budget))
+                .collect::<HashSet<_>>()
+        };
+        let titles = |response: &IndexerSearchResponse| {
+            response
+                .results
+                .iter()
+                .map(|result| result.title.clone())
+                .collect::<HashSet<_>>()
+        };
+        let budget = Some(BACKGROUND_PAGES_PER_PASS);
+
+        let first = pass("background-1", true).await;
+        assert_eq!(pages_asked(0), HashSet::from([(None, budget)]));
+        assert!(!first.completion.is_complete());
+        let first_runs = diagnostics.lock().expect("diagnostics").clone();
+        assert!(first_runs.iter().all(|(run, _)| {
+            run.strategy_state.as_deref() == Some(SEARCH_STRATEGY_OPEN)
+                && run.page_cursor.as_deref() == Some("offset:500")
+                && run.cursor_chain_id.as_deref() == Some(run.id.as_str())
+                && run.retry_at.is_none()
+        }));
+
+        // An operator search reads from the first page, unbounded, and moves
+        // no background cursor.
+        let asked = calls.lock().expect("calls").len();
+        pass("operator-1", false).await;
+        assert_eq!(pages_asked(asked), HashSet::from([(None, None)]));
+
+        let asked = calls.lock().expect("calls").len();
+        pass("background-2", true).await;
+        assert_eq!(
+            pages_asked(asked),
+            HashSet::from([(Some("offset:500".to_string()), budget)])
+        );
+
+        let asked = calls.lock().expect("calls").len();
+        let last = pass("background-3", true).await;
+        assert_eq!(
+            pages_asked(asked),
+            HashSet::from([(Some("offset:1000".to_string()), budget)])
+        );
+        assert!(last.completion.is_complete());
+        assert_eq!(
+            titles(&last),
+            HashSet::from([
+                "Lattice.Zero.1999.Part1.1080p.WEB-DL".to_string(),
+                "Lattice.Zero.1999.Part2.1080p.WEB-DL".to_string(),
+                "Lattice.Zero.1999.Part3.1080p.WEB-DL".to_string(),
+            ]),
+            "the pass that finishes the read ranks every page read so far"
+        );
+        let runs = diagnostics.lock().expect("diagnostics").clone();
+        let finished = runs
+            .iter()
+            .filter(|(run, _)| run.search_session_id == "background-3")
+            .collect::<Vec<_>>();
+        assert!(!finished.is_empty());
+        for (run, _) in finished {
+            assert_eq!(
+                run.strategy_state.as_deref(),
+                Some(SEARCH_STRATEGY_CONVERGED)
+            );
+            assert_eq!(run.page_cursor, None);
+            let chain_start = first_runs
+                .iter()
+                .find(|(first, _)| first.query_signature == run.query_signature)
+                .map(|(first, _)| first.id.clone());
+            assert_eq!(run.cursor_chain_id, chain_start);
+        }
     }
 
     #[tokio::test]

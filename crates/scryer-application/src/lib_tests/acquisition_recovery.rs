@@ -4017,6 +4017,7 @@ async fn acquisition_cycle_submits_one_hundred_episode_fallbacks_after_empty_pac
             });
             if episode.is_none() {
                 return Ok(IndexerSearchResponse {
+                    next_cursor: None,
                     completion: crate::IndexerSearchCompletion::Complete,
 
                     indexer_outcomes: Vec::new(),
@@ -4052,6 +4053,7 @@ async fn acquisition_cycle_submits_one_hundred_episode_fallbacks_after_empty_pac
             let release_slug = release_title.replace([' ', '/'], ".");
 
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: crate::IndexerSearchCompletion::Complete,
 
                 indexer_outcomes: Vec::new(),
@@ -7419,6 +7421,7 @@ impl IndexerClient for RssRoutingRecordingIndexerClient {
             .await
             .push(indexer_routing.expect("RSS routing"));
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             results: Vec::new(),
             completion: crate::IndexerSearchCompletion::Complete,
             indexer_outcomes: Vec::new(),
@@ -7649,6 +7652,7 @@ impl IndexerClient for PendingStatusAssertingIndexerClient {
         self.searches.lock().await.push(query.clone());
 
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),
@@ -7726,6 +7730,7 @@ impl IndexerClient for DeferredRssIndexerClient {
     ) -> AppResult<IndexerSearchResponse> {
         self.searches.lock().await.push(query);
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
             indexer_outcomes: Vec::new(),
             results: Vec::new(),
@@ -11970,6 +11975,7 @@ impl IndexerClient for AmbiguousIdentityIndexerClient {
         _cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),
@@ -13546,6 +13552,84 @@ async fn an_interactive_walk_re_queries_a_scope_the_cycle_considers_converged() 
     assert!(
         indexer_client.searches.lock().await.len() > converged_after,
         "an operator's request re-queries a converged scope"
+    );
+}
+
+/// An indexer that answers at the provider's own result ceiling is contained:
+/// it is never covered, the next cycle does not ask it again before its
+/// backoff runs out, and holding it neither defers the scope nor re-arms the
+/// poller. An operator's walk still asks it, and once due the cycle asks again.
+#[tokio::test]
+async fn a_contained_indexer_is_held_until_due_without_coverage_or_deferral() {
+    let indexer_client = Arc::new(
+        TrackingIndexerClient::default()
+            .returning_no_results()
+            .reporting_routed_indexers_contained(),
+    );
+    let (app, title, indexer_client, _) =
+        seed_recent_failed_season_pack_fixture_with_indexer(indexer_client).await;
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+
+    app.run_background_acquisition_cycle_once().await;
+    let contained_after = indexer_client.searches.lock().await.len();
+    assert!(contained_after > 0, "the first cycle asks the indexer");
+    assert!(
+        coverage.recorded().await.is_empty(),
+        "a contained indexer is never recorded as coverage"
+    );
+    assert!(
+        !indexer_client
+            .containment
+            .lock()
+            .await
+            .linked_scopes
+            .is_empty(),
+        "background sessions are tied to their convergence scope"
+    );
+
+    let held = app.run_background_acquisition_cycle_once().await;
+    assert_eq!(
+        indexer_client.searches.lock().await.len(),
+        contained_after,
+        "a contained indexer is not asked again before it is due"
+    );
+    assert_eq!(
+        held.deferred_scopes, 0,
+        "a contained hold is not a deferral"
+    );
+    assert!(
+        held.deferred_retry_delay(std::time::Duration::from_secs(300))
+            .is_none(),
+        "a contained hold must not re-arm the poller"
+    );
+
+    crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        None,
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("interactive title walk");
+    let after_operator = indexer_client.searches.lock().await.len();
+    assert!(
+        after_operator > contained_after,
+        "an operator's walk still asks a contained indexer"
+    );
+
+    indexer_client.expire_contained_holds().await;
+    app.run_background_acquisition_cycle_once().await;
+    assert!(
+        indexer_client.searches.lock().await.len() > after_operator,
+        "once due, the cycle asks the contained indexer again"
+    );
+    assert!(
+        coverage.recorded().await.is_empty(),
+        "a re-asked contained indexer is still not coverage"
     );
 }
 

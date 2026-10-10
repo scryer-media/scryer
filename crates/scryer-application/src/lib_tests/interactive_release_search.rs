@@ -83,6 +83,7 @@ impl ScriptedIndexerClient {
                 .collect()
         };
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             results,
             completion: crate::IndexerSearchCompletion::Complete,
             api_current: None,
