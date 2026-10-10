@@ -1,6 +1,54 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { listMembershipTitleHref } from "./lists.ts";
+import { sortListSubscriptions } from "./lists.ts";
+
+test("followed lists sort by name, and by last sync as failed, waiting, synced, then switched off", () => {
+  const list = (name: string, state: "OK" | "NEW" | "FAIL", lastAt: string | null, enabled = true) => ({
+    name,
+    enabled,
+    sync: { state, lastAt, nextAt: null, errorMessage: null, errorAt: null, pausedUntil: null },
+  });
+  const lists = [
+    list("delta", "OK", "2026-01-02T00:00:00Z"),
+    list("Alpha", "OK", "2026-01-03T00:00:00Z"),
+    list("charlie", "FAIL", "2026-01-01T00:00:00Z"),
+    list("Bravo 10", "OK", "2026-01-04T00:00:00Z", false),
+    list("Bravo 2", "NEW", null),
+  ];
+  const names = (sorted: { name: string }[]) => sorted.map((entry) => entry.name);
+
+  assert.deepEqual(names(sortListSubscriptions(lists, null)), names(lists));
+  assert.deepEqual(names(sortListSubscriptions(lists, { key: "name", descending: false })), [
+    "Alpha",
+    "Bravo 2",
+    "Bravo 10",
+    "charlie",
+    "delta",
+  ]);
+  assert.deepEqual(names(sortListSubscriptions(lists, { key: "name", descending: true })), [
+    "delta",
+    "charlie",
+    "Bravo 10",
+    "Bravo 2",
+    "Alpha",
+  ]);
+  // A switched-off list sorts as off even though its last sync succeeded.
+  assert.deepEqual(names(sortListSubscriptions(lists, { key: "sync", descending: false })), [
+    "charlie",
+    "Bravo 2",
+    "Alpha",
+    "delta",
+    "Bravo 10",
+  ]);
+  assert.deepEqual(names(sortListSubscriptions(lists, { key: "sync", descending: true })), [
+    "Bravo 10",
+    "delta",
+    "Alpha",
+    "Bravo 2",
+    "charlie",
+  ]);
+});
 
 test("membership title links use library IDs for every facet and omit unlinked titles", () => {
   assert.equal(listMembershipTitleHref("MOVIE", "movie-1"), "/movies?id=movie-1");

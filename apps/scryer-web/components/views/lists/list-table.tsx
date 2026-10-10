@@ -1,4 +1,5 @@
-import { RefreshCw } from "lucide-react";
+import * as React from "react";
+import { ArrowDown, ArrowUp, ArrowUpDown, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,10 +17,14 @@ import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { ListProviderManifest, ListSubscription } from "@/lib/types/lists";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
+  type ListSort,
+  type ListSortKey,
   listKindLabelKey,
   listModeLabelKey,
   listSyncStateLabelKey,
   listSyncStateTone,
+  shownListSyncState,
+  sortListSubscriptions,
 } from "@/lib/utils/lists";
 
 import { ListCoverageBar } from "./list-coverage-bar";
@@ -47,24 +52,44 @@ export function ListTable({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const providerByType = new Map(providers.map((provider) => [provider.providerType, provider]));
+  // Until a column is picked the lists keep the order they were loaded in.
+  const [sort, setSort] = React.useState<ListSort | null>(null);
+  const sorted = React.useMemo(() => sortListSubscriptions(subscriptions, sort), [subscriptions, sort]);
+  const sortableHead = (key: ListSortKey, label: string) => {
+    const active = sort?.key === key;
+    const Icon = !active ? ArrowUpDown : sort.descending ? ArrowDown : ArrowUp;
+    return (
+      <TableHead aria-sort={active ? (sort.descending ? "descending" : "ascending") : "none"}>
+        <button
+          id={`lists-table-sort-${key}`}
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-sm text-left font-medium transition-colors hover:text-[var(--scry-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
+          onClick={() => setSort({ key, descending: active ? !sort.descending : false })}
+        >
+          <span>{label}</span>
+          <Icon aria-hidden="true" className={active ? "h-3.5 w-3.5" : "h-3.5 w-3.5 text-[var(--scry-faint2)]"} />
+        </button>
+      </TableHead>
+    );
+  };
 
   return (
     <Table id="lists-table" wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]">
       <TableHeader>
         <TableRow>
-          <TableHead>{t("lists.table.list")}</TableHead>
+          {sortableHead("name", t("lists.table.list"))}
           <TableHead className="hidden md:table-cell">{t("lists.table.coverage")}</TableHead>
           <TableHead className="hidden sm:table-cell">{t("lists.table.mode")}</TableHead>
           {canManageLists ? <TableHead className="w-[1%] text-center">{t("label.enabled")}</TableHead> : null}
-          <TableHead>{t("lists.table.lastSync")}</TableHead>
+          {sortableHead("sync", t("lists.table.lastSync"))}
           {canManageLists ? <TableHead className="w-[1%] text-right">{t("label.actions")}</TableHead> : null}
         </TableRow>
       </TableHeader>
       <TableBody>
-        {subscriptions.map((subscription) => {
+        {sorted.map((subscription) => {
           const provider = providerByType.get(subscription.source.provider) ?? null;
           const busy = busyIds.has(subscription.id);
-          const state = subscription.enabled ? subscription.sync.state : "OFF";
+          const state = shownListSyncState(subscription);
           return (
             <TableRow
               key={subscription.id}

@@ -1,8 +1,7 @@
 import * as React from "react";
-import { Check, Link2, Plus } from "lucide-react";
+import { Link2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   ListAuthBadge,
@@ -13,10 +12,11 @@ import type {
   ListProviderSettings,
   ListSubscription,
 } from "@/lib/types/lists";
-import { isListSourceFollowed, listIntervalParts, listKindLabelKey, publicProviders } from "@/lib/utils/lists";
+import { isListSourceFollowed, publicProviders } from "@/lib/utils/lists";
 import { cn } from "@/lib/utils";
 
 import { AddByUrlCard } from "./add-by-url-card";
+import { CatalogListTable } from "./catalog-list-table";
 import { ProviderSettingsCard } from "./provider-settings-card";
 import { ProviderTile } from "./provider-tile";
 
@@ -146,52 +146,22 @@ export function ProviderBrowser({
                   </Badge>
                 ) : null}
               </div>
-              <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                {group.items.map((item) => {
-                  const interval = listIntervalParts(item.defaultIntervalSeconds);
+              <CatalogListTable
+                rows={group.items.map((item) => ({
+                  key: item.id,
+                  name: item.name,
+                  description: item.description,
+                  kinds: item.kinds,
+                  intervalSeconds: item.defaultIntervalSeconds,
                   // Only a list that takes no value is one fixed source; the rest
                   // can be followed again with a different value.
-                  const followed =
+                  followed:
                     item.params.length === 0 &&
-                    isListSourceFollowed(subscriptions, { provider: shown.providerType, sourceType: item.sourceType, params: [] });
-                  return (
-                    <li
-                      key={item.id}
-                      className="flex min-w-0 flex-col gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-3"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13.5px] font-semibold text-[var(--scry-ink)]">{item.name}</p>
-                        {item.description ? (
-                          <p className="line-clamp-2 text-[12px] text-[var(--scry-muted)]">{item.description}</p>
-                        ) : null}
-                        <div className="mt-1.5 flex flex-wrap gap-1">
-                          {item.kinds.map((kind) => (
-                            <Badge key={kind} tone="neutral" className="px-1.5 py-0 text-[10.5px]">
-                              {t(listKindLabelKey(kind))}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11.5px] text-[var(--scry-muted)]">
-                          {t("lists.catalog.every", { interval: t(interval.key, { count: interval.count }) })}
-                        </span>
-                        <Button
-                          id={`lists-catalog-follow-${shown.providerType}-${item.id}`}
-                          type="button"
-                          size="xs"
-                          variant={followed ? "outline" : "primary"}
-                          disabled={followed}
-                          onClick={() => onFollow(shown, item)}
-                        >
-                          {followed ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                          {t(followed ? "lists.catalog.followed" : "lists.catalog.follow")}
-                        </Button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+                    isListSourceFollowed(subscriptions, { provider: shown.providerType, sourceType: item.sourceType, params: [] }),
+                  followId: `lists-catalog-follow-${shown.providerType}-${item.id}`,
+                  onFollow: () => onFollow(shown, item),
+                }))}
+              />
             </section>
           );
         })}

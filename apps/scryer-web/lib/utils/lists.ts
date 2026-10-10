@@ -108,6 +108,44 @@ export function listSyncStateTone(state: ListSyncState): ListTone {
   }
 }
 
+/** The sync state a list's row shows: a switched-off list is off whatever its last sync was. */
+export function shownListSyncState(subscription: Pick<ListSubscription, "enabled" | "sync">): ListSyncState {
+  return subscription.enabled ? subscription.sync.state : "OFF";
+}
+
+export type ListSortKey = "name" | "sync";
+export type ListSort = { key: ListSortKey; descending: boolean };
+
+/** Sorting by last sync groups lists by how it went: failed, waiting, synced, then switched off. */
+const LIST_SYNC_STATE_ORDER: Record<ListSyncState, number> = { FAIL: 0, NEW: 1, OK: 2, OFF: 3 };
+
+function listSyncTime(subscription: Pick<ListSubscription, "sync">): number {
+  const time = subscription.sync.lastAt ? Date.parse(subscription.sync.lastAt) : Number.NaN;
+  return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+}
+
+/**
+ * The followed lists in the order the table shows them; with no sort chosen
+ * they keep the order they came in. Within one sync state the most recently
+ * synced list comes first, and lists that tie fall back to their names.
+ */
+export function sortListSubscriptions<T extends Pick<ListSubscription, "name" | "enabled" | "sync">>(
+  subscriptions: readonly T[],
+  sort: ListSort | null,
+): T[] {
+  if (!sort) return [...subscriptions];
+  const factor = sort.descending ? -1 : 1;
+  const byName = (a: T, b: T) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+  return [...subscriptions].sort((a, b) => {
+    if (sort.key === "name") return byName(a, b) * factor;
+    const state = LIST_SYNC_STATE_ORDER[shownListSyncState(a)] - LIST_SYNC_STATE_ORDER[shownListSyncState(b)];
+    if (state !== 0) return state * factor;
+    const time = listSyncTime(b) - listSyncTime(a);
+    if (time !== 0 && !Number.isNaN(time)) return time * factor;
+    return byName(a, b);
+  });
+}
+
 export function listMembershipStateLabelKey(state: ListMembershipState): string {
   return `lists.membershipState.${camel(state)}`;
 }
