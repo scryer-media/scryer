@@ -1,6 +1,7 @@
 //! Owner-only provider accounts and short-lived, single-use linking sessions.
 use super::account_transport::*;
 use super::privacy::ensure_account_owner;
+use super::refusal::{self, refused};
 use crate::{AppError, AppResult, AppUseCase};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
@@ -215,7 +216,10 @@ fn refresh_pending(backoff: Option<RefreshBackoff>, now: DateTime<Utc>) -> AppEr
     )
 }
 fn reconnect_this_account() -> AppError {
-    AppError::Validation("reconnect this list account".into())
+    refused(
+        refusal::ACCOUNT_RECONNECT_REQUIRED,
+        "reconnect this list account",
+    )
 }
 fn needs_refresh(account: &UserListAccount, now: DateTime<Utc>) -> bool {
     account
@@ -562,10 +566,17 @@ fn random_token() -> AppResult<String> {
 }
 fn origin(value: &str) -> AppResult<String> {
     if value.len() > 2048 {
-        return Err(AppError::Validation("invalid account link origin".into()));
+        return Err(refused(
+            refusal::ACCOUNT_LINK_ORIGIN_INVALID,
+            "invalid account link origin",
+        ));
     }
-    let url = url::Url::parse(value)
-        .map_err(|_| AppError::Validation("an account link needs a valid origin".into()))?;
+    let url = url::Url::parse(value).map_err(|_| {
+        refused(
+            refusal::ACCOUNT_LINK_ORIGIN_INVALID,
+            "an account link needs a valid origin",
+        )
+    })?;
     if !matches!(url.scheme(), "https" | "http")
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -574,8 +585,9 @@ fn origin(value: &str) -> AppResult<String> {
         || url.fragment().is_some()
         || url.path() != "/"
     {
-        return Err(AppError::Validation(
-            "an account link needs a valid origin".into(),
+        return Err(refused(
+            refusal::ACCOUNT_LINK_ORIGIN_INVALID,
+            "an account link needs a valid origin",
         ));
     }
     Ok(url.origin().ascii_serialization())
@@ -729,8 +741,9 @@ impl AppUseCase {
         if !matches!(list.auth, ListProviderAuth::MemberAccount { .. })
             || !list.capabilities.account
         {
-            return Err(AppError::Validation(
-                "this provider does not support account linking".into(),
+            return Err(refused(
+                refusal::ACCOUNT_LINKING_UNSUPPORTED,
+                "this provider does not support account linking",
             ));
         }
         let provider = list.provider_type.clone();
@@ -775,8 +788,9 @@ impl AppUseCase {
                     .count()
                     >= 8
             {
-                return Err(AppError::Validation(
-                    "too many pending account links".into(),
+                return Err(refused(
+                    refusal::ACCOUNT_LINKS_TOO_MANY,
+                    "too many pending account links",
                 ));
             }
             sessions.insert(
@@ -852,7 +866,10 @@ impl AppUseCase {
     ) -> AppResult<ListAccountView> {
         self.require_personal_lists_allowed(actor).await?;
         if code.trim().is_empty() || code.len() > 8192 {
-            return Err(AppError::Validation("invalid account link result".into()));
+            return Err(refused(
+                refusal::ACCOUNT_LINK_RESULT_INVALID,
+                "invalid account link result",
+            ));
         }
         let session = self.services.lists.account_runtime.take(
             id,
@@ -862,7 +879,10 @@ impl AppUseCase {
             Utc::now(),
         )?;
         if session.provider == "simkl" && issuer != Some("https://simkl.com") {
-            return Err(AppError::Validation("invalid account link issuer".into()));
+            return Err(refused(
+                refusal::ACCOUNT_LINK_ISSUER_INVALID,
+                "invalid account link issuer",
+            ));
         }
         let credential = self
             .services
@@ -931,8 +951,9 @@ impl AppUseCase {
             None => {
                 let Some(token) = session.poll_token.as_deref() else {
                     claim.end();
-                    return Err(AppError::Validation(
-                        "this account link does not use polling".into(),
+                    return Err(refused(
+                        refusal::ACCOUNT_LINK_NOT_POLLED,
+                        "this account link does not use polling",
                     ));
                 };
                 let polled = self
@@ -1039,8 +1060,9 @@ impl AppUseCase {
             .ok_or_else(missing)?;
         self.require_personal_lists_allowed(&current).await?;
         if sources.external_user_id.trim().is_empty() {
-            return Err(AppError::Validation(
-                "provider returned no account identity".into(),
+            return Err(refused(
+                refusal::ACCOUNT_IDENTITY_MISSING,
+                "provider returned no account identity",
             ));
         }
         token.app_config = app.as_ref().map(|app| {
@@ -1146,7 +1168,12 @@ impl AppUseCase {
             .lists
             .plugins
             .client_for_provider(provider, &config)
-            .ok_or_else(|| AppError::Validation("list provider is unavailable".into()))?;
+            .ok_or_else(|| {
+                refused(
+                    refusal::PROVIDER_UNAVAILABLE,
+                    "list provider is unavailable",
+                )
+            })?;
         let input = account.map(credential).unwrap_or_else(|| ListCredential {
             access_token: token.access_token.clone(),
             token_type: token.token_type.clone(),
@@ -1173,8 +1200,9 @@ impl AppUseCase {
             Err(error @ (AppError::Repository(_) | AppError::TemporaryUnavailable { .. })) => {
                 Err(error)
             }
-            _ => Err(AppError::Validation(
-                "list account identity could not be verified; reconnect the account".into(),
+            _ => Err(refused(
+                refusal::ACCOUNT_IDENTITY_UNVERIFIED,
+                "list account identity could not be verified; reconnect the account",
             )),
         }
     }

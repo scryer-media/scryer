@@ -21,7 +21,8 @@ use scryer_plugin_sdk::{ListProviderDescriptor, PluginDescriptor, ProviderDescri
 
 use super::gateway::ListChartCatalogEntry;
 use super::provider_settings::{ListProviderSettingField, declared_server_fields};
-use crate::{AppError, AppResult};
+use super::refusal::{self, refused};
+use crate::AppResult;
 
 /// Source types of gateway charts start with this, then `{chart_key}:{scope}`.
 pub const LIST_SOURCE_TYPE_SMG_CHART_PREFIX: &str = "smg_chart:";
@@ -338,17 +339,20 @@ fn check_required_params(
             continue;
         }
         if param.required && value.is_none_or(str::is_empty) {
-            return Err(AppError::Validation(format!("{} is required", param.label)));
+            return Err(refused(
+                refusal::PARAM_REQUIRED,
+                format!("{} is required", param.label),
+            ));
         }
         if param.param_type == ListSourceParamType::Enum
             && let Some(value) = value.filter(|value| !value.is_empty())
             && !param.options.is_empty()
             && !param.options.iter().any(|option| option == value)
         {
-            return Err(AppError::Validation(format!(
-                "{} must be one of the listed options",
-                param.label
-            )));
+            return Err(refused(
+                refusal::PARAM_INVALID,
+                format!("{} must be one of the listed options", param.label),
+            ));
         }
     }
     Ok(())
@@ -383,7 +387,7 @@ pub fn classify_public_source(
                     && chart.chart_key == chart_key
                     && chart.scope == scope
             })
-            .ok_or_else(|| AppError::Validation("that chart is not available".to_string()))?;
+            .ok_or_else(|| refused(refusal::CHART_UNAVAILABLE, "that chart is not available"))?;
         return Ok(ClassifiedSource {
             source: ListSource {
                 provider,
@@ -403,13 +407,22 @@ pub fn classify_public_source(
     let manifest = manifests
         .iter()
         .find(|manifest| manifest.provider_type == provider)
-        .ok_or_else(|| AppError::Validation("that list provider is not installed".to_string()))?;
-    let item = find_item(manifest, source_type)
-        .ok_or_else(|| AppError::Validation("that provider has no such list".to_string()))?;
+        .ok_or_else(|| {
+            refused(
+                refusal::PROVIDER_NOT_INSTALLED,
+                "that list provider is not installed",
+            )
+        })?;
+    let item = find_item(manifest, source_type).ok_or_else(|| {
+        refused(
+            refusal::SOURCE_NOT_OFFERED,
+            "that provider has no such list",
+        )
+    })?;
     if item.personal || member_only_providers.iter().any(|entry| entry == &provider) {
-        return Err(AppError::Validation(
-            "that list needs a member's own account and cannot be followed for everyone"
-                .to_string(),
+        return Err(refused(
+            refusal::MEMBER_ACCOUNT_ONLY,
+            "that list needs a member's own account and cannot be followed for everyone",
         ));
     }
     check_required_params(item, &params)?;

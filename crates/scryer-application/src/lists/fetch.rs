@@ -160,7 +160,9 @@ impl ListFailure {
     /// Classify a host-side failure (the exchange itself did not complete).
     pub fn from_app_error(error: &AppError, provider: &str) -> Self {
         let class = match error {
-            AppError::Validation(_) => ListFailureClass::AccountRequired,
+            AppError::Validation(_) | AppError::ValidationRefused { .. } => {
+                ListFailureClass::AccountRequired
+            }
             AppError::NotFound(_) => ListFailureClass::NotFound,
             _ => ListFailureClass::Unavailable,
         };

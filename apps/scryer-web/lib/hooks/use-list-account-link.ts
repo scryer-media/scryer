@@ -2,7 +2,8 @@ import * as React from "react";
 import { useClient } from "urql";
 
 import { useTranslate } from "@/lib/context/translate-context";
-import { hasGraphQlErrorCode, userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { hasGraphQlErrorCode } from "@/lib/graphql/error-message";
+import { listErrorMessage } from "@/lib/utils/list-error-message";
 import { completeListAccountLinkMutation, pollListAccountLinkMutation, startListAccountLinkMutation } from "@/lib/graphql/list-accounts";
 import type { ListAccountLinkSession } from "@/lib/types/lists";
 import {
@@ -53,13 +54,13 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
           onLinked,
           cancel,
           (reason) => {
-            setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
+            setError(listErrorMessage(reason, t, t("lists.accounts.linkFailed")));
             cancel();
           },
         );
       } catch (reason) {
         if (request !== generation.current) return;
-        setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
+        setError(listErrorMessage(reason, t, t("lists.accounts.linkFailed")));
         cancel();
       }
     };
@@ -123,7 +124,7 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
                 onLinked,
                 cancel,
                 (reason) => {
-                  setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
+                  setError(listErrorMessage(reason, t, t("lists.accounts.linkFailed")));
                   cancel();
                 },
               );
@@ -143,7 +144,7 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
             if (request !== generation.current) return;
             const retryDelay = listAccountPollRetryDelay(reason);
             if (retryDelay === null) {
-              setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
+              setError(listErrorMessage(reason, t, t("lists.accounts.linkFailed")));
               cancel();
               // An earlier poll may have linked the account before this one
               // failed; refresh once so it shows either way.
@@ -169,7 +170,7 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
       if (request !== generation.current) return;
       setError(hasGraphQlErrorCode(reason, "LIST_ACCOUNT_ORIGIN_NOT_ALLOWED")
         ? t("lists.accounts.originNotAllowed")
-        : userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
+        : listErrorMessage(reason, t, t("lists.accounts.linkFailed")));
       cancel();
     }
   }, [cancel, client, onLinked, t]);

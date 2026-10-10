@@ -556,6 +556,15 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::Validation(message) => {
             coded_gql_error(format!("validation: {message}"), "VALIDATION_ERROR")
         }
+        // Still a validation error to every client that reads `code`. The
+        // reason rides beside it for clients that translate the failure
+        // instead of showing the sentence.
+        AppError::ValidationRefused { message, reason } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "VALIDATION_ERROR");
+                extensions.set("reason", reason);
+            })
+        }
         AppError::LocationOperationBusy(message) => {
             coded_gql_error(message, "LOCATION_OPERATION_BUSY")
         }
@@ -768,7 +777,8 @@ fn login_progression_error(err: &AppError) -> bool {
 fn app_error_kind(err: &AppError) -> &'static str {
     match err {
         AppError::Unauthorized(_) => "Unauthorized",
-        AppError::Validation(_) => "Validation",
+        // Named or not, it is the same kind of failure to logs and metrics.
+        AppError::Validation(_) | AppError::ValidationRefused { .. } => "Validation",
         AppError::LocationOperationBusy(_) => "LocationOperationBusy",
         AppError::LocationPlanRefused { .. } => "LocationPlanRefused",
         AppError::LocationRootRefused { .. } => "LocationRootRefused",
@@ -1138,6 +1148,26 @@ mod tests {
             graphql_error_extension_string(&error, "reason"),
             Some("WILDCARD_HOST")
         );
+    }
+
+    #[test]
+    fn a_named_validation_failure_stays_a_validation_error_and_carries_its_reason() {
+        let named = AppError::validation_refused("SAMPLE_ALREADY_PRESENT", "that is already here");
+        assert_eq!(named.to_string(), "validation: that is already here");
+        assert_eq!(app_error_kind(&named), "Validation");
+
+        let error = to_gql_error(named);
+        assert_eq!(error.message, "validation: that is already here");
+        assert_eq!(graphql_error_code(&error), Some("VALIDATION_ERROR"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("SAMPLE_ALREADY_PRESENT")
+        );
+
+        let plain = to_gql_error(AppError::Validation("that is already here".into()));
+        assert_eq!(plain.message, error.message);
+        assert_eq!(graphql_error_code(&plain), Some("VALIDATION_ERROR"));
+        assert_eq!(graphql_error_extension_string(&plain, "reason"), None);
     }
 
     #[test]

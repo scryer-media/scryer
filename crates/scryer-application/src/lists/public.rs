@@ -31,6 +31,7 @@ use super::gateway::{
     GatewayListChartSource, GatewayListItemResolver, LIST_CHART_LANGUAGE, ListChartCatalogEntry,
 };
 use super::ports::ListSubscriptionQuery;
+use super::refusal::{self, refused};
 use super::resolve::resolve_items;
 use super::runtime::{AppListActions, AppListLibraryLookup};
 use super::sync::{deleted_additions, without_rows};
@@ -262,8 +263,9 @@ pub fn validate_public_settings(
     max_per_sync: Option<u32>,
 ) -> AppResult<Vec<MediaFacet>> {
     if matches!(mode, ListMode::Request | ListMode::Discover) {
-        return Err(AppError::Validation(
-            "a public list can search, add, or hold for review".to_string(),
+        return Err(refused(
+            refusal::MODE_NOT_ALLOWED,
+            "a public list can search, add, or hold for review",
         ));
     }
     let kinds = match kinds {
@@ -271,10 +273,10 @@ pub fn validate_public_settings(
             let mut kept = Vec::new();
             for kind in kinds {
                 if !declared_kinds.is_empty() && !declared_kinds.contains(kind) {
-                    return Err(AppError::Validation(format!(
-                        "this list does not contain {} titles",
-                        kind.as_str()
-                    )));
+                    return Err(refused(
+                        refusal::KIND_NOT_IN_LIST,
+                        format!("this list does not contain {} titles", kind.as_str()),
+                    ));
                 }
                 if !kept.contains(kind) {
                     kept.push(kind.clone());
@@ -285,32 +287,40 @@ pub fn validate_public_settings(
         _ => declared_kinds.to_vec(),
     };
     if kinds.is_empty() {
-        return Err(AppError::Validation(
-            "choose at least one kind of title".to_string(),
+        return Err(refused(
+            refusal::KINDS_REQUIRED,
+            "choose at least one kind of title",
         ));
     }
     let mut seen = Vec::new();
     for route in routes {
         if !kinds.contains(&route.kind) {
-            return Err(AppError::Validation(format!(
-                "a route targets {} titles, which this list does not keep",
-                route.kind.as_str()
-            )));
+            return Err(refused(
+                refusal::ROUTE_KIND_NOT_KEPT,
+                format!(
+                    "a route targets {} titles, which this list does not keep",
+                    route.kind.as_str()
+                ),
+            ));
         }
         if seen.contains(&route.kind) {
-            return Err(AppError::Validation(format!(
-                "only one route per kind; {} has two",
-                route.kind.as_str()
-            )));
+            return Err(refused(
+                refusal::ROUTE_KIND_DUPLICATED,
+                format!("only one route per kind; {} has two", route.kind.as_str()),
+            ));
         }
         if route.library_id.trim().is_empty() {
-            return Err(AppError::Validation("a route needs a library".to_string()));
+            return Err(refused(
+                refusal::ROUTE_LIBRARY_REQUIRED,
+                "a route needs a library",
+            ));
         }
         seen.push(route.kind.clone());
     }
     if max_per_sync == Some(0) {
-        return Err(AppError::Validation(
-            "the per-sync cap must be at least 1".to_string(),
+        return Err(refused(
+            refusal::SYNC_CAP_INVALID,
+            "the per-sync cap must be at least 1",
         ));
     }
     Ok(kinds)
@@ -533,8 +543,9 @@ impl AppUseCase {
                 }
                 _ => {
                     let Some(url) = trimmed(url) else {
-                        return Err(AppError::Validation(
-                            "name a provider and a list, or paste a link".to_string(),
+                        return Err(refused(
+                            refusal::SOURCE_REQUIRED,
+                            "name a provider and a list, or paste a link",
                         ));
                     };
                     let Some(recognized) = recognize_url(&manifests, &url) else {
@@ -567,13 +578,21 @@ impl AppUseCase {
                 .libraries
                 .get_by_id(&route.library_id)
                 .await?
-                .ok_or_else(|| AppError::Validation("a routed library does not exist".into()))?;
+                .ok_or_else(|| {
+                    refused(
+                        refusal::ROUTE_LIBRARY_NOT_FOUND,
+                        "a routed library does not exist",
+                    )
+                })?;
             if library.facet != route.kind {
-                return Err(AppError::Validation(format!(
-                    "{} titles cannot go to the {} library",
-                    route.kind.as_str(),
-                    library.name
-                )));
+                return Err(refused(
+                    refusal::ROUTE_LIBRARY_KIND_MISMATCH,
+                    format!(
+                        "{} titles cannot go to the {} library",
+                        route.kind.as_str(),
+                        library.name
+                    ),
+                ));
             }
             self.require_library_permission(actor, &library.id, LibraryPermission::ManageTitles)
                 .await?;
@@ -721,8 +740,9 @@ impl AppUseCase {
         existing: HashMap<String, ListMembership>,
     ) -> AppResult<ListPreview> {
         if subscription.max_per_sync == Some(0) {
-            return Err(AppError::Validation(
-                "the per-sync cap must be at least 1".into(),
+            return Err(refused(
+                refusal::SYNC_CAP_INVALID,
+                "the per-sync cap must be at least 1",
             ));
         }
         let lists = &self.services.lists;
@@ -901,7 +921,10 @@ impl AppUseCase {
             )
             .await?
             .ok_or_else(|| {
-                AppError::Validation("that link is not a list Scryer can follow".into())
+                refused(
+                    refusal::LINK_NOT_RECOGNIZED,
+                    "that link is not a list Scryer can follow",
+                )
             })?;
         let kinds = validate_public_settings(
             &classified.kinds,
@@ -921,7 +944,10 @@ impl AppUseCase {
             .iter()
             .any(|subscription| same_source(subscription, &classified))
         {
-            return Err(AppError::Validation("this list is already followed".into()));
+            return Err(refused(
+                refusal::ALREADY_FOLLOWED,
+                "this list is already followed",
+            ));
         }
 
         let mut subscription = draft_subscription(actor, &classified, kinds, input.routes);
@@ -1123,7 +1149,7 @@ impl AppUseCase {
         self.require_lists_enabled().await?;
         let subscription = self.public_subscription(id).await?;
         if !subscription.enabled {
-            return Err(AppError::Validation("this list is turned off".into()));
+            return Err(refused(refusal::DISABLED, "this list is turned off"));
         }
         self.queue_list_syncs(actor, vec![subscription]).await
     }
@@ -1191,12 +1217,17 @@ impl AppUseCase {
             })
             .collect::<Vec<_>>();
         if external_ids.is_empty() {
-            return Err(AppError::Validation(
-                "an exclusion needs at least one id".into(),
+            return Err(refused(
+                refusal::EXCLUSION_IDS_REQUIRED,
+                "an exclusion needs at least one id",
             ));
         }
-        let display_title = trimmed(Some(&input.display_title))
-            .ok_or_else(|| AppError::Validation("an exclusion needs a title".into()))?;
+        let display_title = trimmed(Some(&input.display_title)).ok_or_else(|| {
+            refused(
+                refusal::EXCLUSION_TITLE_REQUIRED,
+                "an exclusion needs a title",
+            )
+        })?;
         let subscription_name = match &input.scope {
             ListExclusionScope::AllLists => None,
             ListExclusionScope::List { subscription_id } => {

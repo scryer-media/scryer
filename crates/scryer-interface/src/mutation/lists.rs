@@ -1,4 +1,5 @@
 use async_graphql::{Context, ID, Object, Result as GqlResult};
+use scryer_application::lists::refusal::{self, refused};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::mappers::{
@@ -149,8 +150,9 @@ impl ListMutations {
             app.subscribe_personal_list(
                 &actor,
                 account_id.as_deref().ok_or_else(|| {
-                    to_gql_error(scryer_application::AppError::Validation(
-                        "choose a linked account".into(),
+                    to_gql_error(refused(
+                        refusal::ACCOUNT_REQUIRED,
+                        "choose a linked account",
                     ))
                 })?,
                 input,

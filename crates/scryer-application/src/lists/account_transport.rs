@@ -1,4 +1,5 @@
 //! Host-owned account authentication transport. Tokens never cross public APIs.
+use super::refusal::{self, refused};
 use crate::{AppError, AppResult};
 use async_trait::async_trait;
 use scryer_domain::ListAccountCredential;
@@ -189,5 +190,8 @@ impl ListAccountAuthGateway for NullListAccountAuthGateway {
     }
 }
 fn unavailable() -> AppError {
-    AppError::Validation("list account authentication is unavailable".into())
+    refused(
+        refusal::ACCOUNT_AUTH_UNAVAILABLE,
+        "list account authentication is unavailable",
+    )
 }

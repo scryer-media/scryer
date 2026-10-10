@@ -868,10 +868,14 @@ async fn a_source_can_be_followed_publicly_only_once() {
     let refused = ListSubscriptionRepository::create(&store, same_source.clone())
         .await
         .expect_err("a second public follow of the same source is refused");
-    assert!(matches!(
-        refused,
-        scryer_application::AppError::Validation(_)
-    ));
+    assert_eq!(
+        refused.validation_reason(),
+        Some(scryer_application::lists::refusal::ALREADY_FOLLOWED)
+    );
+    assert_eq!(
+        refused.to_string(),
+        "validation: this list is already followed"
+    );
     assert!(
         ListSubscriptionRepository::get_by_id(&store, "sub-2")
             .await

@@ -10,7 +10,7 @@ import { FilteredPluginList } from "@/components/views/settings/filtered-plugin-
 import { useTranslate } from "@/lib/context/translate-context";
 import { myListAccountsQuery } from "@/lib/graphql/list-accounts";
 import { listProvidersQuery } from "@/lib/graphql/queries";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { listErrorMessage } from "@/lib/utils/list-error-message";
 import { useListAccountLink } from "@/lib/hooks/use-list-account-link";
 import { useSessionUser } from "@/lib/hooks/use-auth";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
@@ -56,7 +56,7 @@ export function ProfileListAccounts() {
       if (result.error) throw result.error;
       setProviders((result.data?.listProviders ?? []) as ListProviderManifest[]);
     }).catch((reason) => {
-      if (!cancelled) setError(userFacingGraphQlErrorMessage(reason, t("status.failedToLoad")));
+      if (!cancelled) setError(listErrorMessage(reason, t, t("status.failedToLoad")));
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });

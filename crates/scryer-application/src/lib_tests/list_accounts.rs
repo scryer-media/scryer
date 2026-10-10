@@ -2165,7 +2165,8 @@ async fn private_account_simkl_issuer_is_required_before_single_use_exchange() {
                     issuer
                 )
                 .await,
-            Err(AppError::Validation(_))
+            Err(error) if error.validation_reason()
+                == Some(crate::lists::refusal::ACCOUNT_LINK_ISSUER_INVALID)
         ));
         assert_eq!(auth.exchanges.load(Ordering::SeqCst), 0);
         // A rejected issuer consumes the receipt; correcting it cannot replay it.

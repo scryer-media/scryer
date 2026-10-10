@@ -236,7 +236,9 @@ pub async fn act_on_candidate(
 fn failed_action_state(error: &AppError) -> ListMembershipState {
     match error {
         AppError::Unauthorized(_) => ListMembershipState::BlockedPermission,
-        AppError::Validation(_) | AppError::NotFound(_) => ListMembershipState::Rejected,
+        AppError::Validation(_) | AppError::ValidationRefused { .. } | AppError::NotFound(_) => {
+            ListMembershipState::Rejected
+        }
         _ => ListMembershipState::Pending,
     }
 }
@@ -274,7 +276,7 @@ async fn add_outcome(
 fn action_failure_reason(error: &AppError) -> String {
     match error {
         AppError::Unauthorized(_) => "not_permitted",
-        AppError::Validation(_) => REFUSED_REASON,
+        AppError::Validation(_) | AppError::ValidationRefused { .. } => REFUSED_REASON,
         AppError::NotFound(_) => NOT_FOUND_REASON,
         _ => "action_failed",
     }

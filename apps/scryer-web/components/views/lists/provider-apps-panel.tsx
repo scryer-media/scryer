@@ -8,7 +8,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { listProviderAppsQuery, updateListProviderAppMutation } from "@/lib/graphql/list-accounts";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { listErrorMessage } from "@/lib/utils/list-error-message";
 import type { ListProviderApp } from "@/lib/types/lists";
 
 import { ProviderTile } from "./provider-tile";
@@ -23,7 +23,7 @@ export function ProviderAppsPanel({ onChanged }: { onChanged?: () => void }) {
     let cancelled = false;
     void client.query(listProviderAppsQuery, {}, { requestPolicy: "network-only" }).toPromise().then((result) => {
       if (cancelled) return;
-      setError(result.error ? userFacingGraphQlErrorMessage(result.error, t("status.failedToLoad")) : null);
+      setError(result.error ? listErrorMessage(result.error, t, t("status.failedToLoad")) : null);
       if (!result.error) setApps(result.data?.listProviderApps ?? []);
     });
     return () => { cancelled = true; };
@@ -65,7 +65,7 @@ function ProviderAppForm({ app, onSaved }: { app: ListProviderApp; onSaved: (app
       onSaved(result.data.updateListProviderApp);
       setClientSecret("");
       setGlobalStatus(t("lists.providerSettings.saved"), { level: "SUCCESS" });
-    } catch (reason) { setGlobalStatus(userFacingGraphQlErrorMessage(reason, t("status.failedToUpdate")), { level: "ERROR" }); }
+    } catch (reason) { setGlobalStatus(listErrorMessage(reason, t, t("status.failedToUpdate")), { level: "ERROR" }); }
     finally { setSaving(false); }
   };
   return (

@@ -76,7 +76,11 @@ fn a_merge_refuses_undeclared_and_host_bound_keys() {
             &changes(&[(key, Some("synthetic"))]),
         )
         .expect_err("refused");
-        assert!(matches!(error, AppError::Validation(_)), "{key}: {error:?}");
+        assert_eq!(
+            error.validation_reason(),
+            Some(refusal::PROVIDER_SETTING_UNKNOWN),
+            "{key}: {error:?}"
+        );
     }
 }
 

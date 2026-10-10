@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use scryer_application::lists::refusal::{self, refused};
 use scryer_application::lists::{ListSubscriptionQuery, ListSubscriptionRepository};
 use scryer_application::{AppError, AppResult};
 use scryer_domain::{
@@ -107,7 +108,10 @@ impl ListSubscriptionRepository for ListStore {
                 if let Some(source) = public_source
                     && public_source_followed_tx(tx, &source).await?
                 {
-                    return Err(AppError::Validation("this list is already followed".into()));
+                    return Err(refused(
+                        refusal::ALREADY_FOLLOWED,
+                        "this list is already followed",
+                    ));
                 }
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),

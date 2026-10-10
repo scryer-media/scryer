@@ -3018,7 +3018,8 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         }
         // The refusal code is a GraphQL-side contract; over REST this stays the
         // validation failure it is.
-        AppError::LocationPlanRefused { message, .. }
+        AppError::ValidationRefused { message, .. }
+        | AppError::LocationPlanRefused { message, .. }
         | AppError::LocationRootRefused { message, .. }
         | AppError::PublicUrlRejected { message, .. } => {
             (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message))).into_response()

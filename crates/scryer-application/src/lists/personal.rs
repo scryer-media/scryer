@@ -6,6 +6,7 @@ use super::public::{
     ListMembershipPage, ListPreview, ListSourceDraft, PublicListInput, PublicListPatch,
     membership_page, validate_public_settings,
 };
+use super::refusal::{self, refused};
 use crate::{AppError, AppResult, AppUseCase};
 use chrono::Utc;
 use scryer_domain::{
@@ -85,11 +86,15 @@ impl AppUseCase {
     ) -> AppResult<ClassifiedSource> {
         let account = self.owned_list_account(actor, account_id).await?;
         if account.status != UserListAccountStatus::Active {
-            return Err(AppError::Validation("reconnect this list account".into()));
+            return Err(refused(
+                refusal::ACCOUNT_RECONNECT_REQUIRED,
+                "reconnect this list account",
+            ));
         }
         if provider.is_some_and(|provider| provider != account.provider) {
-            return Err(AppError::Validation(
-                "the account belongs to another provider".into(),
+            return Err(refused(
+                refusal::ACCOUNT_PROVIDER_MISMATCH,
+                "the account belongs to another provider",
             ));
         }
         let descriptor = self
@@ -113,21 +118,27 @@ impl AppUseCase {
             .flat_map(|group| &group.items)
             .find(|item| item.personal && Some(item.source_type.as_str()) == source_type)
             .ok_or_else(|| {
-                AppError::Validation("choose a personal list offered by this provider".into())
+                refused(
+                    refusal::SOURCE_NOT_OFFERED,
+                    "choose a personal list offered by this provider",
+                )
             })?;
         for (key, value) in params {
             let field = item
                 .params
                 .iter()
                 .find(|field| &field.key == key)
-                .ok_or_else(|| AppError::Validation("unknown personal list parameter".into()))?;
+                .ok_or_else(|| {
+                    refused(refusal::PARAM_UNKNOWN, "unknown personal list parameter")
+                })?;
             if super::catalog::is_media_param(field) && value == super::catalog::INCLUDE_MEDIA_PARAM
             {
                 continue;
             }
             if value.len() > 2048 || (!field.options.is_empty() && !field.options.contains(value)) {
-                return Err(AppError::Validation(
-                    "invalid personal list parameter".into(),
+                return Err(refused(
+                    refusal::PARAM_INVALID,
+                    "invalid personal list parameter",
                 ));
             }
         }
@@ -137,8 +148,9 @@ impl AppUseCase {
                     .get(&field.key)
                     .is_none_or(|value| value.trim().is_empty())
         }) {
-            return Err(AppError::Validation(
-                "a required personal list parameter is missing".into(),
+            return Err(refused(
+                refusal::PARAM_REQUIRED,
+                "a required personal list parameter is missing",
             ));
         }
         Ok(ClassifiedSource {
@@ -169,16 +181,18 @@ impl AppUseCase {
             input.mode,
             ListMode::Add | ListMode::Search | ListMode::Request
         ) {
-            return Err(AppError::Validation(
-                "a personal list can add, search, or request".into(),
+            return Err(refused(
+                refusal::MODE_NOT_ALLOWED,
+                "a personal list can add, search, or request",
             ));
         }
         if kinds
             .iter()
             .any(|kind| !input.routes.iter().any(|route| &route.kind == kind))
         {
-            return Err(AppError::Validation(
-                "choose a library for every title kind".into(),
+            return Err(refused(
+                refusal::ROUTE_MISSING_FOR_KIND,
+                "choose a library for every title kind",
             ));
         }
         for route in &input.routes {
@@ -188,10 +202,16 @@ impl AppUseCase {
                 .libraries
                 .get_by_id(&route.library_id)
                 .await?
-                .ok_or_else(|| AppError::Validation("a routed library does not exist".into()))?;
+                .ok_or_else(|| {
+                    refused(
+                        refusal::ROUTE_LIBRARY_NOT_FOUND,
+                        "a routed library does not exist",
+                    )
+                })?;
             if library.facet != route.kind {
-                return Err(AppError::Validation(
-                    "the routed library has another title kind".into(),
+                return Err(refused(
+                    refusal::ROUTE_LIBRARY_KIND_MISMATCH,
+                    "the routed library has another title kind",
                 ));
             }
             if !self
@@ -255,7 +275,10 @@ impl AppUseCase {
             .await;
         let account = self.owned_list_account(actor, account_id).await?;
         if account.status != UserListAccountStatus::Active {
-            return Err(AppError::Validation("reconnect this list account".into()));
+            return Err(refused(
+                refusal::ACCOUNT_RECONNECT_REQUIRED,
+                "reconnect this list account",
+            ));
         }
         let existing = self
             .services
@@ -266,8 +289,9 @@ impl AppUseCase {
         if existing.iter().any(|row| {
             row.credential_id.as_deref() == Some(account_id) && row.source == classified.source
         }) {
-            return Err(AppError::Validation(
-                "this personal list is already followed".into(),
+            return Err(refused(
+                refusal::ALREADY_FOLLOWED,
+                "this personal list is already followed",
             ));
         }
         let now = Utc::now();
@@ -311,7 +335,7 @@ impl AppUseCase {
         let id = draft
             .credential_id
             .as_deref()
-            .ok_or_else(|| AppError::Validation("choose a linked account".into()))?;
+            .ok_or_else(|| refused(refusal::ACCOUNT_REQUIRED, "choose a linked account"))?;
         let classified = self
             .classify_personal_source(
                 actor,

@@ -1,6 +1,7 @@
 //! Optional direct provider registrations, held in encrypted system settings.
 use super::account_transport::ListProviderAppConfig;
-use crate::{AppError, AppResult, AppUseCase};
+use super::refusal::{self, refused};
+use crate::{AppResult, AppUseCase};
 use scryer_domain::{AppPermission, User};
 const KEY: &str = "lists.provider_apps";
 const PROVIDERS: [&str; 3] = ["trakt", "anilist", "mal"];
@@ -60,8 +61,9 @@ impl AppUseCase {
             .await?;
         self.require_lists_enabled().await?;
         if !PROVIDERS.contains(&provider) {
-            return Err(AppError::Validation(
-                "this provider does not support an instance app".into(),
+            return Err(refused(
+                refusal::PROVIDER_APP_UNSUPPORTED,
+                "this provider does not support an instance app",
             ));
         }
         let app = if enabled {
@@ -79,7 +81,10 @@ impl AppUseCase {
                 access_token: None,
             };
             let redirect = url::Url::parse(&app.redirect_uri).map_err(|_| {
-                AppError::Validation("a provider app needs a valid redirect URI".into())
+                refused(
+                    refusal::PROVIDER_APP_REDIRECT_INVALID,
+                    "a provider app needs a valid redirect URI",
+                )
             })?;
             if app.client_id.is_empty()
                 || app.client_id.len() > 512
@@ -95,9 +100,9 @@ impl AppUseCase {
                 || redirect.query().is_some()
                 || !redirect.path().ends_with("/lists/oauth/callback")
             {
-                return Err(AppError::Validation(
-                    "a provider app needs a client ID, a secret where the provider requires one, and a valid account callback URI"
-                        .into(),
+                return Err(refused(
+                    refusal::PROVIDER_APP_INCOMPLETE,
+                    "a provider app needs a client ID, a secret where the provider requires one, and a valid account callback URI",
                 ));
             }
             Some(app)

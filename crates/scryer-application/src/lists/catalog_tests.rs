@@ -336,7 +336,8 @@ fn imdb_charts_can_be_followed_but_imdb_lists_cannot() {
         &BTreeMap::from([("list_id".to_string(), "ls000000123".to_string())]),
     );
     assert!(
-        matches!(&list, Err(AppError::Validation(message)) if message == "that provider has no such list"),
+        matches!(&list, Err(error) if error.validation_reason() == Some(refusal::SOURCE_NOT_OFFERED)
+            && error.to_string() == "validation: that provider has no such list"),
         "an IMDb list is refused: {list:?}"
     );
 }

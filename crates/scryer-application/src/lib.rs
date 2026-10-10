@@ -833,6 +833,22 @@ pub enum AppError {
     #[error("validation: {0}")]
     Validation(String),
 
+    /// A validation failure whose condition has a stable name. A validation
+    /// error in every other respect (same wording, same `VALIDATION_ERROR`
+    /// code, same status), but `reason` travels beside the sentence as
+    /// `extensions.reason`, so a client can explain the failure in its own
+    /// language instead of reading prose.
+    ///
+    /// One variant serves every feature. A feature adopts it by naming its
+    /// reasons in SCREAMING_SNAKE (lists keep theirs in `lists::refusal`), not
+    /// by adding a variant. A reason names the condition, never the wording,
+    /// and is part of the API once released.
+    #[error("validation: {message}")]
+    ValidationRefused {
+        message: String,
+        reason: &'static str,
+    },
+
     /// A title mutation is deferred until its location operation releases ownership.
     #[error("{0}")]
     LocationOperationBusy(String),
@@ -1005,6 +1021,23 @@ pub enum AppError {
 impl AppError {
     pub fn canceled(message: impl Into<String>) -> Self {
         Self::Canceled(message.into())
+    }
+
+    /// A validation failure that names its condition. See
+    /// [`AppError::ValidationRefused`].
+    pub fn validation_refused(reason: &'static str, message: impl Into<String>) -> Self {
+        Self::ValidationRefused {
+            message: message.into(),
+            reason,
+        }
+    }
+
+    /// The stable reason a validation failure names, if it names one.
+    pub fn validation_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::ValidationRefused { reason, .. } => Some(reason),
+            _ => None,
+        }
     }
 
     /// The FR-077 refusal, worded once so every path that retires a direct root

@@ -8,6 +8,7 @@ use scryer_application::lists::catalog::{
     ListProviderGroup, ListProviderManifest, ListProviderNote, ListProviderTile, ListSourceParam,
     ListUrlPattern, facet_of,
 };
+use scryer_application::lists::refusal::{self, refused};
 use scryer_application::lists::{
     ListExclusionView, ListMembershipPage, ListPreview, ListPreviewItem, ListProviderSettingField,
     ListProviderSettings, ListSourceDraft, MemberListPolicy, NewListExclusionInput,
@@ -58,7 +59,7 @@ fn id_or_none(value: Option<ID>) -> Option<String> {
 
 fn cap_from_input(value: i32) -> Result<u32, AppError> {
     u32::try_from(value)
-        .map_err(|_| AppError::Validation("maxPerSync must not be negative".to_string()))
+        .map_err(|_| refused(refusal::SYNC_CAP_INVALID, "maxPerSync must not be negative"))
 }
 
 /// A media request's origin. A personal list is named by kind only, so every
@@ -256,8 +257,9 @@ fn from_route(route: ListRoute) -> ListRoutePayload {
 fn route_from_input(input: ListRouteInput) -> Result<ListRoute, AppError> {
     let library_id = input.library_id.to_string().trim().to_string();
     if library_id.is_empty() {
-        return Err(AppError::Validation(
-            "a list route needs a library".to_string(),
+        return Err(refused(
+            refusal::ROUTE_LIBRARY_REQUIRED,
+            "a list route needs a library",
         ));
     }
     Ok(ListRoute {

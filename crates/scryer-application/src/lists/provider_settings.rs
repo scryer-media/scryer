@@ -16,6 +16,7 @@ use scryer_plugin_sdk::{
 };
 
 use super::plugin::ListPluginProvider;
+use super::refusal::{self, refused};
 use crate::{AppError, AppResult, AppUseCase};
 
 /// The sensitive system setting that holds each provider's values, scoped by
@@ -216,9 +217,10 @@ pub(crate) fn merge_provider_settings(
         .collect::<BTreeMap<_, _>>();
     for (key, value) in changes {
         if !fields.iter().any(|field| &field.key == key) {
-            return Err(AppError::Validation(format!(
-                "'{key}' is not a server-wide setting of this list provider"
-            )));
+            return Err(refused(
+                refusal::PROVIDER_SETTING_UNKNOWN,
+                format!("'{key}' is not a server-wide setting of this list provider"),
+            ));
         }
         match value
             .as_deref()
