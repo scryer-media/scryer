@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SearchLanguagePicker } from "@/components/common/search-language-picker";
+import { InfoHelp } from "@/components/common/info-help";
 import { Input } from "@/components/ui/input";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { TitleTagsEditor } from "@/components/common/title-tags-picker";
@@ -92,17 +93,19 @@ type Props = {
 type SettingsRowProps = {
   icon: React.ElementType;
   label: string;
+  help?: string;
   effective: React.ReactNode;
   children: React.ReactNode;
 };
 
-function SettingsRow({ icon: Icon, label, effective, children }: SettingsRowProps) {
+function SettingsRow({ icon: Icon, label, help, effective, children }: SettingsRowProps) {
   return (
     <tr className="border-b border-border/70 last:border-b-0">
       <th scope="row" className="w-[24%] px-4 py-3 text-left align-middle sm:px-5">
         <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
           <Icon aria-hidden="true" className="size-4 shrink-0" />
           {label}
+          {help ? <InfoHelp text={help} ariaLabel={label} /> : null}
         </span>
       </th>
       <td className="w-[38%] px-4 py-3 align-middle text-sm text-foreground sm:px-5">
@@ -424,6 +427,7 @@ export function TitleOptionsSettingsGrid({
           <SettingsRow
             icon={Languages}
             label={t("settings.searchLanguages")}
+            help={t("settings.searchLanguagesHelp")}
             effective={
               inheritsSearchLanguages
                 ? t("title.inheritDefault")
@@ -444,7 +448,6 @@ export function TitleOptionsSettingsGrid({
               >
                 {t("title.inheritDefault")}
               </Button>
-              <p className="text-xs text-muted-foreground">{t("settings.searchLanguagesHelp")}</p>
             </div>
           </SettingsRow>
           <SettingsRow
