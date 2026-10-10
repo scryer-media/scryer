@@ -7,6 +7,7 @@ import { facetById } from "@/lib/facets/registry";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { ListPreview, ListPreviewItem } from "@/lib/types/lists";
 import { listKindLabelKey } from "@/lib/utils/lists";
+import { formatLanguage } from "@/lib/utils/media-info-format";
 
 type ListPreviewSummaryProps = {
   preview: ListPreview;
@@ -54,7 +55,7 @@ function PreviewItem({ item }: { item: ListPreviewItem }) {
           </div>
           <TitleRatingsDisplay externalRatings={item.externalRatings} />
           {item.genresAndThemes?.length ? <p className="flex gap-2 text-sm text-[var(--scry-ink2)]"><Tags aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />{item.genresAndThemes.join(" · ")}</p> : null}
-          {item.originalLanguage ? <p className="flex gap-2 text-sm text-[var(--scry-muted)]"><Languages aria-hidden="true" className="h-4 w-4 shrink-0" />{item.originalLanguage}</p> : null}
+          {item.originalLanguage ? <p className="flex gap-2 text-sm text-[var(--scry-muted)]"><Languages aria-hidden="true" className="h-4 w-4 shrink-0" />{formatLanguage(item.originalLanguage)}</p> : null}
           {item.releaseDate ? <p className="flex gap-2 text-sm text-[var(--scry-muted)]"><CalendarDays aria-hidden="true" className="h-4 w-4 shrink-0" /><time dateTime={item.releaseDate}>{item.releaseDate}</time></p> : null}
         </div>
       </PopoverContent>
