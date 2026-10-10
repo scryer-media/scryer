@@ -257,9 +257,9 @@ function healthCheckStatusTone(status: string): string {
   }
 }
 
-function formatHealthCheckStatus(status: string): string {
+function formatHealthCheckStatus(status: string, t: ReturnType<typeof useTranslate>): string {
   if (!status) {
-    return "Unknown";
+    return t("label.unknown");
   }
   return `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
 }
@@ -785,7 +785,6 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
   const renderCustomRows = () =>
     customJobRows.map(({ instanceKey, job, script, lastRun, status, isDisabled }) => {
       const nameId = (part: string) => selectorId(`jobs-custom-${part}`, script.name);
-      const isMutating = customJobEditor.mutatingScriptId === script.id;
       return (
         <TableRow
           key={instanceKey}
@@ -813,12 +812,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
             id={nameId("schedule")}
             className={`w-[12rem] max-w-[12rem] ${JOBS_MUTED_TEXT_CLASS}`}
           >
-            {describeScriptSchedule(
-              script.schedule,
-              script.scheduleDescription || job.schedule.description,
-              documentUiLanguage(),
-              { use24HourTimeFormat: dateTimeFormat === "ISO24H" ? true : undefined },
-            ) ?? "--"}
+            {describeCustomSchedule(script, job)}
           </TableCell>
           <TableCell
             id={nameId("next-run")}
@@ -858,35 +852,152 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               >
                 {t("jobs.action.run")}
               </Button>
-              <IconButton
-                id={nameId("edit")}
-                label={t("jobs.custom.edit")}
-                disabled={isMutating}
-                onClick={() => customJobEditor.onEdit(script)}
-              >
-                <Edit className="h-4 w-4" />
-              </IconButton>
-              <IconButton
-                id={nameId("toggle")}
-                label={script.enabled ? t("jobs.custom.disable") : t("jobs.custom.enable")}
-                aria-pressed={script.enabled}
-                disabled={isMutating}
-                onClick={() => void customJobEditor.onToggle(script)}
-              >
-                <Power className="h-4 w-4" />
-              </IconButton>
-              <IconButton
-                id={nameId("delete")}
-                label={t("jobs.custom.delete")}
-                tone="delete"
-                disabled={isMutating}
-                onClick={() => customJobEditor.onDelete(script)}
-              >
-                <Trash2 className="h-4 w-4" />
-              </IconButton>
+              {renderCustomJobActions(script, nameId)}
             </div>
           </TableCell>
         </TableRow>
+      );
+    });
+
+  const describeCustomSchedule = (script: PostProcessingScript, job: JobTableRow["job"]) =>
+    describeScriptSchedule(
+      script.schedule,
+      script.scheduleDescription || job.schedule.description,
+      documentUiLanguage(),
+      { use24HourTimeFormat: dateTimeFormat === "ISO24H" ? true : undefined },
+    ) ?? "--";
+
+  function renderCustomJobActions(script: PostProcessingScript, idOf: (part: string) => string) {
+    const isMutating = customJobEditor.mutatingScriptId === script.id;
+    return (
+      <>
+        <IconButton
+          id={idOf("edit")}
+          label={t("jobs.custom.edit")}
+          tone="edit"
+          disabled={isMutating}
+          onClick={() => customJobEditor.onEdit(script)}
+        >
+          <Edit className="h-4 w-4" />
+        </IconButton>
+        <IconButton
+          id={idOf("toggle")}
+          label={script.enabled ? t("jobs.custom.disable") : t("jobs.custom.enable")}
+          tone={script.enabled ? "disabled" : "enabled"}
+          aria-pressed={script.enabled}
+          disabled={isMutating}
+          onClick={() => void customJobEditor.onToggle(script)}
+        >
+          <Power className="h-4 w-4" />
+        </IconButton>
+        <IconButton
+          id={idOf("delete")}
+          label={t("jobs.custom.delete")}
+          tone="delete"
+          disabled={isMutating}
+          onClick={() => customJobEditor.onDelete(script)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </IconButton>
+      </>
+    );
+  }
+
+  const renderCustomMobileCards = () =>
+    customJobRows.map(({ instanceKey, job, script, lastRun, status, isDisabled }) => {
+      const cardId = (part?: string) =>
+        selectorId(part ? `jobs-custom-card-${part}` : "jobs-custom-card", script.name);
+      return (
+        <div key={instanceKey} id={cardId()} className={`${JOBS_INSET_CLASS} p-4`}>
+          <div
+            className="cursor-pointer space-y-3"
+            onClick={() => onSelectJob(jobTargetOf(job))}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onSelectJob(jobTargetOf(job));
+              }
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <p className="text-sm font-semibold text-[var(--scry-ink2)]">
+                  {script.name}
+                  {!script.enabled ? (
+                    <span className={`ml-2 text-xs font-normal ${JOBS_MUTED_TEXT_CLASS}`}>
+                      {t("jobs.custom.disabled")}
+                    </span>
+                  ) : null}
+                </p>
+                {script.description ? (
+                  <p className={`text-xs leading-relaxed ${JOBS_MUTED_TEXT_CLASS}`}>
+                    {script.description}
+                  </p>
+                ) : null}
+              </div>
+              <span
+                id={cardId("status")}
+                className={cn(
+                  "shrink-0 rounded-full border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2.5 py-1 text-[11px] font-medium",
+                  runStatusTone(status),
+                )}
+              >
+                {runStatusLabel(status, t)}
+              </span>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
+                  {t("jobs.column.schedule")}
+                </p>
+                <p className="text-sm text-[var(--scry-ink2)]">
+                  {describeCustomSchedule(script, job)}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
+                  {t("jobs.column.nextRun")}
+                </p>
+                <p className="text-sm text-[var(--scry-ink2)]">
+                  {formatDate(script.enabled ? job.schedule.nextRunAt : null, t, dateTimeFormat)}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
+                  {t("jobs.column.lastRun")}
+                </p>
+                <p className="text-sm text-[var(--scry-ink2)]">
+                  {formatDate(
+                    lastRun?.completedAt ?? lastRun?.startedAt ?? null,
+                    t,
+                    dateTimeFormat,
+                  )}
+                </p>
+                {lastRun ? (
+                  <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                    {triggerSourceLabel(lastRun.triggerSource, t)}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--scry-border3)] pt-3">
+            <Button
+              id={cardId("run")}
+              size="sm"
+              variant="primary"
+              disabled={isDisabled || !script.enabled}
+              onClick={() => onTriggerJob(jobTargetOf(job))}
+            >
+              {t("jobs.action.run")}
+            </Button>
+            <div className="flex items-center gap-1">{renderCustomJobActions(script, cardId)}</div>
+          </div>
+        </div>
       );
     });
 
@@ -993,7 +1104,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
       <div className="space-y-4 text-sm">
         <section className={JOBS_PANEL_CLASS}>
           <div className={JOBS_PANEL_HEADER_CLASS}>
-            <h2 className={JOBS_PANEL_TITLE_CLASS}>Job schedule</h2>
+            <h2 className={JOBS_PANEL_TITLE_CLASS}>{t("jobs.builtin.title")}</h2>
           </div>
           <div className="p-4 sm:p-5 md:p-0">
             <div className="space-y-3 md:hidden">
@@ -1073,31 +1184,34 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               {t("jobs.custom.empty")}
             </p>
           ) : (
-            <div className="overflow-x-auto">
-              <Table className="min-w-[70rem] table-fixed">
-                <TableHeader>
-                  <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
-                    <TableHead className={`w-[16rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                      {t("jobs.column.name")}
-                    </TableHead>
-                    <TableHead className={`w-[12rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                      {t("jobs.column.schedule")}
-                    </TableHead>
-                    <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                      {t("jobs.column.nextRun")}
-                    </TableHead>
-                    <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                      {t("jobs.column.lastRun")}
-                    </TableHead>
-                    <TableHead className={`w-[7.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                      {t("jobs.column.status")}
-                    </TableHead>
-                    <TableHead className="w-[13rem]" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>{renderCustomRows()}</TableBody>
-              </Table>
-            </div>
+            <>
+              <div className="space-y-3 p-4 sm:p-5 md:hidden">{renderCustomMobileCards()}</div>
+              <div className="hidden overflow-x-auto md:block">
+                <Table className="min-w-[70rem] table-fixed">
+                  <TableHeader>
+                    <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
+                      <TableHead className={`w-[16rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.name")}
+                      </TableHead>
+                      <TableHead className={`w-[12rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.schedule")}
+                      </TableHead>
+                      <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.nextRun")}
+                      </TableHead>
+                      <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.lastRun")}
+                      </TableHead>
+                      <TableHead className={`w-[7.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.status")}
+                      </TableHead>
+                      <TableHead className="w-[13rem]" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>{renderCustomRows()}</TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </section>
       </div>
@@ -1303,7 +1417,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                                         <span
                                           className={`text-xs ${healthCheckStatusTone(issue.status)}`}
                                         >
-                                          {formatHealthCheckStatus(issue.status)}
+                                          {formatHealthCheckStatus(issue.status, t)}
                                         </span>
                                       </div>
                                       <p className={`mt-1 text-sm ${JOBS_MUTED_TEXT_CLASS}`}>

@@ -7,6 +7,8 @@ export type ScriptChoiceOption = {
   label: string;
   /** The value exposed on the option element when it differs from `value`. */
   dataValue?: string;
+  /** The element id of the option, when a page or test addresses it directly. */
+  id?: string;
 };
 
 /**
@@ -57,6 +59,7 @@ export function ScriptChoiceGroup({
         {options.map((option) => (
           <ToggleGroupItem
             key={option.value}
+            id={option.id}
             value={option.value}
             data-value={option.dataValue ?? option.value}
             size="sm"

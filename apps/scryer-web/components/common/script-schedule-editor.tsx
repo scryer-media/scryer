@@ -5,6 +5,7 @@ import { ScriptChoiceGroup } from "@/components/common/script-choice-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { validateScriptScheduleQuery } from "@/lib/graphql/queries";
@@ -15,7 +16,6 @@ import {
   type ScriptScheduleKindValue,
   type ScriptScheduleValidation,
 } from "@/lib/types/scripts";
-import { cn } from "@/lib/utils";
 import {
   describeCronExpression,
   documentUiLanguage,
@@ -25,9 +25,9 @@ import {
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
   intervalToSeconds,
+  orderWeekdays,
   scheduleForKind,
   splitIntervalSeconds,
-  toggleWeekday,
   toScriptScheduleInput,
   type IntervalUnit,
 } from "@/lib/utils/script-schedule";
@@ -271,33 +271,40 @@ function WeekdayToggles({
   disabled?: boolean;
 }) {
   const t = useTranslate();
+  const labelId = "script-schedule-days-label";
   return (
-    <div>
-      <Label className="mb-2 block">{t("script.schedule.days")}</Label>
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label={t("script.schedule.days")}>
-        {SCHEDULE_WEEKDAYS.map((day) => {
-          const selected = days.includes(day);
-          return (
-            <button
-              key={day}
-              id={`script-schedule-day-${day.toLowerCase()}`}
-              type="button"
-              aria-pressed={selected}
-              aria-disabled={selected && days.length === 1 ? true : undefined}
-              disabled={disabled}
-              onClick={() => onChange(toggleWeekday(days, day))}
-              className={cn(
-                "rounded-[9px] border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-55",
-                selected
-                  ? "border-[rgba(var(--scry-accent-rgb),0.72)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-ink2)]"
-                  : "border-[var(--scry-border2)] bg-[var(--scry-inset)] text-[var(--scry-muted3)] hover:text-[var(--scry-ink2)]",
-              )}
-            >
-              {t(`script.schedule.day.${day.toLowerCase()}`)}
-            </button>
-          );
-        })}
-      </div>
+    <div className="min-w-0 space-y-1.5">
+      <Label id={labelId} className="block">
+        {t("script.schedule.days")}
+      </Label>
+      <ToggleGroup
+        id="script-schedule-days"
+        type="multiple"
+        variant="outline"
+        size="sm"
+        aria-labelledby={labelId}
+        className="flex h-auto flex-wrap gap-1 p-1"
+        value={days}
+        disabled={disabled}
+        onValueChange={(next) => {
+          // A weekly schedule always keeps at least one day.
+          if (next.length === 0) return;
+          onChange(orderWeekdays(next as ScheduleWeekdayValue[]));
+        }}
+      >
+        {SCHEDULE_WEEKDAYS.map((day) => (
+          <ToggleGroupItem
+            key={day}
+            id={`script-schedule-day-${day.toLowerCase()}`}
+            value={day}
+            data-value={day}
+            size="sm"
+            variant="outline"
+          >
+            {t(`script.schedule.day.${day.toLowerCase()}`)}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
     </div>
   );
 }

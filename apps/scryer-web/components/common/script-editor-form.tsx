@@ -122,33 +122,25 @@ export function ScriptEditorForm({
       </div>
 
       {/* Script Type */}
-      <div>
-        <Label className="mb-2 block">{t("settings.pp.scriptType")}</Label>
-        <div id="script-editor-type" className="flex gap-2" role="group">
-          <Button
-            id={inlineTypeId}
-            type="button"
-            size="sm"
-            variant={draft.scriptType === "inline" ? "default" : "secondary"}
-            data-value="inline"
-            aria-pressed={draft.scriptType === "inline"}
-            onClick={() => setDraft((prev) => ({ ...prev, scriptType: "inline" }))}
-          >
-            {isScheduled ? t("script.editor.inline") : t("settings.pp.inline")}
-          </Button>
-          <Button
-            id={fileTypeId}
-            type="button"
-            size="sm"
-            variant={draft.scriptType === "file" ? "default" : "secondary"}
-            data-value="file"
-            aria-pressed={draft.scriptType === "file"}
-            onClick={() => setDraft((prev) => ({ ...prev, scriptType: "file" }))}
-          >
-            {t("settings.pp.filePath")}
-          </Button>
-        </div>
-      </div>
+      <ScriptChoiceGroup
+        id="script-editor-type"
+        label={t("settings.pp.scriptType")}
+        value={draft.scriptType}
+        onValueChange={(scriptType) =>
+          setDraft((prev) => ({
+            ...prev,
+            scriptType: scriptType as PostProcessingScriptDraft["scriptType"],
+          }))
+        }
+        options={[
+          {
+            id: inlineTypeId,
+            value: "inline",
+            label: isScheduled ? t("script.editor.inline") : t("settings.pp.inline"),
+          },
+          { id: fileTypeId, value: "file", label: t("settings.pp.filePath") },
+        ]}
+      />
 
       {/* Language */}
       <ScriptChoiceGroup
@@ -205,7 +197,7 @@ export function ScriptEditorForm({
                 onClick={() => setFolderBrowserOpen(true)}
               >
                 <FolderOpen className="mr-1 h-4 w-4" />
-                Browse
+                {t("setup.browse")}
               </Button>
             </div>
             <FolderBrowserDialog
@@ -218,7 +210,7 @@ export function ScriptEditorForm({
                   ? draft.scriptContent.replace(/\/[^/]+$/, "") || "/"
                   : "/"
               }
-              title="Select script file"
+              title={t("script.editor.selectFile")}
             />
           </>
         )}
