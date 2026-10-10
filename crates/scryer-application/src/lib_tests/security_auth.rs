@@ -2067,7 +2067,7 @@ fn public_url_change(value: Option<&str>, acknowledge: bool) -> UpdateServiceSet
 }
 
 fn is_rejected(error: &AppError, expected: &str) -> bool {
-    matches!(error, AppError::PublicUrlRejected { code, .. } if *code == expected)
+    matches!(error, AppError::PublicUrlRejected { code, .. } if code.as_str() == expected)
 }
 
 #[tokio::test]
@@ -2198,7 +2198,10 @@ async fn passkey_acknowledgement_follows_enrollment_and_relying_party_source() {
         .preview_public_url_change(&admin, Some("https://*.home"), false)
         .await
         .expect("preview");
-    assert_eq!(preview.error.map(|error| error.code), Some("wildcard_host"));
+    assert_eq!(
+        preview.error.map(|error| error.code.as_str()),
+        Some("wildcard_host")
+    );
     let error = app
         .update_service_settings(
             &admin,

@@ -178,7 +178,7 @@ export type DownloadQueueItem = {
   lastUpdatedAt: string | null;
   attentionRequired: boolean;
   attentionReason: string | null;
-  passwordFailureCode?: "archive_password_required" | "archive_password_or_corruption" | null;
+  passwordFailureCode?: "ARCHIVE_PASSWORD_REQUIRED" | "ARCHIVE_PASSWORD_OR_CORRUPTION" | null;
   passwordRetryImportId?: string | null;
   /** Held sources of this download that the viewer may release. */
   heldImportSources?: HeldImportSources | null;

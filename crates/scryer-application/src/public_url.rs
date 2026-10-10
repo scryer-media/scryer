@@ -116,30 +116,56 @@ impl PublicUrlPolicy {
     }
 }
 
-/// Stable codes for rejected public URLs. Clients localize these; the
+/// Stable reasons a public URL is rejected. Clients localize these; the
 /// message is English for logs and API callers.
-pub mod error_codes {
-    pub const INVALID_URL: &str = "invalid_url";
-    pub const WILDCARD_HOST: &str = "wildcard_host";
-    pub const CREDENTIALS: &str = "credentials";
-    pub const QUERY_OR_FRAGMENT: &str = "query_or_fragment";
-    pub const PATH_NOT_ALLOWED: &str = "path_not_allowed";
-    pub const PATH_MISMATCH: &str = "path_mismatch";
-    pub const ENVIRONMENT_LOCKED: &str = "environment_locked";
-    pub const SAVE_AND_RESET: &str = "save_and_reset";
-    pub const PASSKEY_ACKNOWLEDGEMENT_REQUIRED: &str = "passkey_acknowledgement_required";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicUrlErrorCode {
+    /// Not an absolute http or https URL with a host.
+    InvalidUrl,
+    /// The host contains a wildcard.
+    WildcardHost,
+    /// The URL carries a username or password.
+    Credentials,
+    /// The URL carries a query or fragment.
+    QueryOrFragment,
+    /// A path was given while the instance is served at the root.
+    PathNotAllowed,
+    /// The path differs from the base path the instance serves under.
+    PathMismatch,
+    /// The environment variable sets the public URL, so it cannot be changed here.
+    EnvironmentLocked,
+    /// A save and a reset were requested together.
+    SaveAndReset,
+    /// The change breaks registered passkeys and was not acknowledged.
+    PasskeyAcknowledgementRequired,
+}
+
+impl PublicUrlErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidUrl => "invalid_url",
+            Self::WildcardHost => "wildcard_host",
+            Self::Credentials => "credentials",
+            Self::QueryOrFragment => "query_or_fragment",
+            Self::PathNotAllowed => "path_not_allowed",
+            Self::PathMismatch => "path_mismatch",
+            Self::EnvironmentLocked => "environment_locked",
+            Self::SaveAndReset => "save_and_reset",
+            Self::PasskeyAcknowledgementRequired => "passkey_acknowledgement_required",
+        }
+    }
 }
 
 /// Why a public URL was rejected.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct PublicUrlError {
-    pub code: &'static str,
+    pub code: PublicUrlErrorCode,
     pub message: String,
 }
 
 impl PublicUrlError {
-    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: PublicUrlErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -150,10 +176,10 @@ impl PublicUrlError {
 /// Validate a public URL: absolute http or https, a host, no credentials, no
 /// query or fragment, and no wildcard host. Any path is accepted here.
 pub fn parse_public_url(value: &str) -> Result<Url, PublicUrlError> {
-    use error_codes::*;
+    use PublicUrlErrorCode::*;
     let invalid = || {
         PublicUrlError::new(
-            INVALID_URL,
+            InvalidUrl,
             "the public URL must be an absolute http or https URL",
         )
     };
@@ -163,19 +189,19 @@ pub fn parse_public_url(value: &str) -> Result<Url, PublicUrlError> {
     }
     if url.host_str().is_some_and(|host| host.contains('*')) {
         return Err(PublicUrlError::new(
-            WILDCARD_HOST,
+            WildcardHost,
             "the public URL must name a single host",
         ));
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(PublicUrlError::new(
-            CREDENTIALS,
+            Credentials,
             "the public URL must not include a username or password",
         ));
     }
     if url.query().is_some() || url.fragment().is_some() {
         return Err(PublicUrlError::new(
-            QUERY_OR_FRAGMENT,
+            QueryOrFragment,
             "the public URL must not include a query or fragment",
         ));
     }
@@ -191,12 +217,12 @@ pub fn normalize_saved_public_url(value: &str, base_path: &str) -> Result<String
     if !path.is_empty() && path != base_path {
         return Err(if base_path.is_empty() {
             PublicUrlError::new(
-                error_codes::PATH_NOT_ALLOWED,
+                PublicUrlErrorCode::PathNotAllowed,
                 "the public URL must not include a path because Scryer is served at the root",
             )
         } else {
             PublicUrlError::new(
-                error_codes::PATH_MISMATCH,
+                PublicUrlErrorCode::PathMismatch,
                 format!("the public URL path must be empty or {base_path}"),
             )
         });
@@ -424,28 +450,28 @@ mod tests {
     #[test]
     fn rejections_carry_stable_codes() {
         let code = |value: &str| parse_public_url(value).unwrap_err().code;
-        assert_eq!(code("not a URL"), error_codes::INVALID_URL);
-        assert_eq!(code("ftp://media.home"), error_codes::INVALID_URL);
-        assert_eq!(code("https://*.home"), error_codes::WILDCARD_HOST);
+        assert_eq!(code("not a URL"), PublicUrlErrorCode::InvalidUrl);
+        assert_eq!(code("ftp://media.home"), PublicUrlErrorCode::InvalidUrl);
+        assert_eq!(code("https://*.home"), PublicUrlErrorCode::WildcardHost);
         assert_eq!(
             code("https://user:secret@media.home"),
-            error_codes::CREDENTIALS
+            PublicUrlErrorCode::Credentials
         );
         assert_eq!(
             code("https://media.home?a=b"),
-            error_codes::QUERY_OR_FRAGMENT
+            PublicUrlErrorCode::QueryOrFragment
         );
         assert_eq!(
             normalize_saved_public_url("https://media.home/scryer", "")
                 .unwrap_err()
                 .code,
-            error_codes::PATH_NOT_ALLOWED
+            PublicUrlErrorCode::PathNotAllowed
         );
         assert_eq!(
             normalize_saved_public_url("https://media.home/other", "/scryer")
                 .unwrap_err()
                 .code,
-            error_codes::PATH_MISMATCH
+            PublicUrlErrorCode::PathMismatch
         );
     }
 

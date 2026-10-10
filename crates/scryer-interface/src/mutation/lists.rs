@@ -9,9 +9,10 @@ use crate::mappers::{
 };
 use crate::types::{
     AddListExclusionInput, ListAccountLinkPayload, ListAccountPayload, ListAccountPollPayload,
-    ListExclusionPayload, ListPolicyValue, ListProviderAppPayload, ListProviderSettingChangeInput,
-    ListProviderSettingsPayload, ListScopeValue, ListSubscriptionPayload, ListSyncEnqueuedPayload,
-    MemberListPolicyPayload, SubscribeListInput, UpdateListSubscriptionInput,
+    ListAccountPollStatusValue, ListExclusionPayload, ListPolicyValue, ListProviderAppPayload,
+    ListProviderSettingChangeInput, ListProviderSettingsPayload, ListScopeValue,
+    ListSubscriptionPayload, ListSyncEnqueuedPayload, MemberListPolicyPayload, SubscribeListInput,
+    UpdateListSubscriptionInput,
 };
 
 fn enqueued(ids: Vec<String>) -> ListSyncEnqueuedPayload {
@@ -59,7 +60,7 @@ impl ListMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(ListAccountPollPayload {
-            status: poll.status,
+            status: ListAccountPollStatusValue::from_application(poll.status),
             account: poll.account.map(ListAccountPayload::from_view),
         })
     }

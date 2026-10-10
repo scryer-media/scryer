@@ -1,5 +1,6 @@
 use super::*;
 use crate::lists::account_transport::*;
+use crate::lists::accounts::ListAccountPollStatus;
 use crate::lists::test_support::{MemoryListStore, subscription};
 use crate::lists::{ListPluginProvider, ListProviderClient, UserListAccountRepository};
 use scryer_domain::{ListAccountCredential, ListScope, UserListAccount, UserListAccountStatus};
@@ -372,7 +373,7 @@ async fn start_plex(harness: &MediaRequestTestHarness) -> String {
     assert!(start.poll_required);
     start.session_id
 }
-async fn poll_status(harness: &MediaRequestTestHarness, session: &str) -> String {
+async fn poll_status(harness: &MediaRequestTestHarness, session: &str) -> ListAccountPollStatus {
     harness
         .app
         .poll_list_account_link(&harness.user, session)
@@ -389,7 +390,10 @@ async fn private_account_poll_keeps_the_session_after_a_failed_provider_check() 
     let harness = harness(auth.clone()).await;
     let session = start_plex(&harness).await;
     for _ in 0..2 {
-        assert_eq!(poll_status(&harness, &session).await, "unavailable");
+        assert_eq!(
+            poll_status(&harness, &session).await,
+            ListAccountPollStatus::Unavailable
+        );
     }
     // Another member still cannot reach the retained session.
     assert!(matches!(
@@ -414,7 +418,7 @@ async fn private_account_poll_keeps_the_session_after_a_failed_provider_check() 
         .poll_list_account_link(&harness.user, &session)
         .await
         .unwrap();
-    assert_eq!(replay.status, "linked");
+    assert_eq!(replay.status, ListAccountPollStatus::Linked);
     assert_eq!(replay.account.unwrap().account.id, view.account.id);
     assert_eq!(auth.polls.load(Ordering::SeqCst), 3);
 }
@@ -468,15 +472,21 @@ async fn private_account_poll_pauses_provider_checks_after_a_rate_limit() {
             limited_at + chrono::Duration::seconds(seconds),
         )
     };
-    assert_eq!(poll_at(0).await.unwrap().status, "rate_limited");
-    assert_eq!(poll_at(29).await.unwrap().status, "rate_limited");
+    assert_eq!(
+        poll_at(0).await.unwrap().status,
+        ListAccountPollStatus::RateLimited
+    );
+    assert_eq!(
+        poll_at(29).await.unwrap().status,
+        ListAccountPollStatus::RateLimited
+    );
     assert_eq!(
         auth.polls.load(Ordering::SeqCst),
         1,
         "a rate-limited link waits before asking the provider again"
     );
     let linked = poll_at(31).await.unwrap();
-    assert_eq!(linked.status, "linked");
+    assert_eq!(linked.status, ListAccountPollStatus::Linked);
     assert_eq!(auth.polls.load(Ordering::SeqCst), 2);
 }
 #[tokio::test]
@@ -532,7 +542,10 @@ async fn private_account_linked_replays_are_bounded_per_member_and_do_not_block_
     // More completed links than the per-member pending cap of 8.
     for _ in 0..10 {
         let session = start_plex(&harness).await;
-        assert_eq!(poll_status(&harness, &session).await, "linked");
+        assert_eq!(
+            poll_status(&harness, &session).await,
+            ListAccountPollStatus::Linked
+        );
         sessions.push(session);
     }
     for (index, session) in sessions.iter().enumerate() {
@@ -546,7 +559,7 @@ async fn private_account_linked_replays_are_bounded_per_member_and_do_not_block_
                 "older linked record {index} is evicted"
             );
         } else {
-            assert_eq!(replay.unwrap().status, "linked");
+            assert_eq!(replay.unwrap().status, ListAccountPollStatus::Linked);
         }
     }
 }
@@ -559,7 +572,10 @@ async fn private_account_poll_retries_a_failed_account_write_without_asking_the_
         .domain_events
         .fail_append
         .store(true, Ordering::SeqCst);
-    assert_eq!(poll_status(&harness, &session).await, "unavailable");
+    assert_eq!(
+        poll_status(&harness, &session).await,
+        ListAccountPollStatus::Unavailable
+    );
     harness
         .domain_events
         .fail_append
@@ -590,7 +606,10 @@ async fn private_account_poll_keeps_the_grant_when_the_identity_read_is_briefly_
     }
     harness.app.services.lists.plugins = Arc::new(plugins);
     let session = start_plex(&harness).await;
-    assert_eq!(poll_status(&harness, &session).await, "unavailable");
+    assert_eq!(
+        poll_status(&harness, &session).await,
+        ListAccountPollStatus::Unavailable
+    );
     let view = harness
         .app
         .poll_list_account_link(&harness.user, &session)
@@ -619,7 +638,10 @@ async fn private_account_poll_in_progress_is_busy_then_reports_the_link() {
     .await
     .expect("provider check entered");
     // The browser lost the first response and asks again meanwhile.
-    assert_eq!(poll_status(&harness, &session).await, "busy");
+    assert_eq!(
+        poll_status(&harness, &session).await,
+        ListAccountPollStatus::Busy
+    );
     auth.poll_release.notify_one();
     let linked = timeout(Duration::from_secs(30), first)
         .await
@@ -632,7 +654,7 @@ async fn private_account_poll_in_progress_is_busy_then_reports_the_link() {
         .poll_list_account_link(&harness.user, &session)
         .await
         .unwrap();
-    assert_eq!(again.status, "linked");
+    assert_eq!(again.status, ListAccountPollStatus::Linked);
     assert_eq!(again.account.unwrap().account.id, linked.account.id);
     assert_eq!(auth.polls.load(Ordering::SeqCst), 1);
     assert_eq!(

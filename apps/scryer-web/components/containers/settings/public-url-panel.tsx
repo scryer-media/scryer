@@ -10,33 +10,34 @@ import { updateServiceSettingsMutation } from "@/lib/graphql/mutations";
 import { graphQlErrorExtension, userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import type {
   ConfigValueSource,
+  PasskeyRelyingPartySource,
   PublicUrlChangePreview,
   PublicUrlErrorCode,
   ServiceSettings,
 } from "@/lib/types/settings";
 
 const SOURCE_KEYS: Record<ConfigValueSource, string> = {
-  environment: "settings.publicUrlSourceEnvironment",
-  settings: "settings.publicUrlSourceSettings",
-  default: "settings.publicUrlSourceDefault",
+  ENVIRONMENT: "settings.publicUrlSourceEnvironment",
+  SETTINGS: "settings.publicUrlSourceSettings",
+  DEFAULT: "settings.publicUrlSourceDefault",
 };
 
-const PASSKEY_SOURCE_KEYS: Record<ServiceSettings["passkeyRpSource"], string> = {
-  environment: "settings.publicUrlSourceEnvironment",
-  public_url: "settings.publicUrlSourcePublicUrl",
-  none: "settings.publicUrlSourceDefault",
+const PASSKEY_SOURCE_KEYS: Record<PasskeyRelyingPartySource, string> = {
+  ENVIRONMENT: "settings.publicUrlSourceEnvironment",
+  PUBLIC_URL: "settings.publicUrlSourcePublicUrl",
+  NONE: "settings.publicUrlSourceDefault",
 };
 
 const ERROR_KEYS: Record<PublicUrlErrorCode, string> = {
-  invalid_url: "settings.publicUrlError.invalid_url",
-  wildcard_host: "settings.publicUrlError.wildcard_host",
-  credentials: "settings.publicUrlError.credentials",
-  query_or_fragment: "settings.publicUrlError.query_or_fragment",
-  path_not_allowed: "settings.publicUrlError.path_not_allowed",
-  path_mismatch: "settings.publicUrlError.path_mismatch",
-  environment_locked: "settings.publicUrlError.environment_locked",
-  save_and_reset: "settings.publicUrlError.save_and_reset",
-  passkey_acknowledgement_required: "settings.publicUrlError.passkey_acknowledgement_required",
+  INVALID_URL: "settings.publicUrlError.invalid_url",
+  WILDCARD_HOST: "settings.publicUrlError.wildcard_host",
+  CREDENTIALS: "settings.publicUrlError.credentials",
+  QUERY_OR_FRAGMENT: "settings.publicUrlError.query_or_fragment",
+  PATH_NOT_ALLOWED: "settings.publicUrlError.path_not_allowed",
+  PATH_MISMATCH: "settings.publicUrlError.path_mismatch",
+  ENVIRONMENT_LOCKED: "settings.publicUrlError.environment_locked",
+  SAVE_AND_RESET: "settings.publicUrlError.save_and_reset",
+  PASSKEY_ACKNOWLEDGEMENT_REQUIRED: "settings.publicUrlError.passkey_acknowledgement_required",
 };
 
 function isPublicUrlErrorCode(value: string | null): value is PublicUrlErrorCode {
@@ -145,7 +146,7 @@ export function PublicUrlPanel() {
   function passkeyWarning(preview: PublicUrlChangePreview): string {
     const rpId = preview.currentPasskeyRpId ?? "";
     const parts = [
-      preview.passkeyImpact === "disabled"
+      preview.passkeyImpact === "DISABLED"
         ? t("settings.publicUrlPasskeyWarningDisabled", { rpId })
         : t("settings.publicUrlPasskeyWarningChanged", { rpId, nextRpId: preview.nextPasskeyRpId ?? "" }),
       preview.passkeyUserCount == null || preview.passkeyOnlyUserCount == null
@@ -170,7 +171,7 @@ export function PublicUrlPanel() {
     [t("settings.publicUrlBasePath"), settings.basePath || "/", t(SOURCE_KEYS[settings.basePathSource])],
     [t("settings.publicUrlBindAddress"), settings.bindAddress, t(SOURCE_KEYS[settings.bindSource])],
     [t("settings.publicUrlTrustedProxies"), settings.trustedProxyIps.length > 0 ? settings.trustedProxyIps.join(", ") : none,
-      t(settings.trustedProxySource === "settings" ? SOURCE_KEYS.settings : SOURCE_KEYS.environment)],
+      t(settings.trustedProxySource === "settings" ? SOURCE_KEYS.SETTINGS : SOURCE_KEYS.ENVIRONMENT)],
     [t("settings.publicUrlPasskeyRpId"), settings.passkeyRpId ?? none, t(PASSKEY_SOURCE_KEYS[settings.passkeyRpSource])],
     [t("settings.publicUrlPasskeyRpOrigin"), settings.passkeyRpOrigin ?? none, t(PASSKEY_SOURCE_KEYS[settings.passkeyRpSource])],
   ] : [];

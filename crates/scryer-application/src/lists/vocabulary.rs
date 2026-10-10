@@ -9,10 +9,28 @@ use tokio::time::{Duration, Instant};
 use super::ListSubscriptionRepository;
 use crate::{AppError, AppResult, AppUseCase, MetadataGateway};
 
+/// Registry category of a canonical tag. The snake_case serde names are the
+/// gateway's wire values and the cached snapshot's stored values.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum CanonicalTagCategory {
+    Genre,
+    Theme,
+}
+
+impl CanonicalTagCategory {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Genre => "genre",
+            Self::Theme => "theme",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VocabularyEntry {
     pub key: String,
-    pub category: String,
+    pub category: CanonicalTagCategory,
     pub name: String,
     pub aliases: Vec<String>,
 }
@@ -43,10 +61,9 @@ pub fn validate_vocabulary(reply: &VocabularyReply) -> AppResult<()> {
     }
     let mut keys = HashSet::new();
     for entry in &reply.entries {
-        if !matches!(entry.category.as_str(), "genre" | "theme")
-            || !entry
-                .key
-                .starts_with(&format!("canonical:{}:", entry.category))
+        if !entry
+            .key
+            .starts_with(&format!("canonical:{}:", entry.category.as_str()))
             || entry.key.len() > 256
             || entry.name.trim().is_empty()
             || entry.name.len() > 256

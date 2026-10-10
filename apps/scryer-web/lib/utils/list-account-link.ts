@@ -144,12 +144,12 @@ export type ListAccountPollStep =
  */
 export function listAccountPollStep(status: unknown): ListAccountPollStep {
   switch (status) {
-    case "pending":
-    case "busy":
+    case "PENDING":
+    case "BUSY":
       return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS, retrying: false };
-    case "unavailable":
+    case "UNAVAILABLE":
       return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_UNAVAILABLE_MS, retrying: true };
-    case "rate_limited":
+    case "RATE_LIMITED":
       return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_RATE_LIMITED_MS, retrying: true };
     default:
       return { kind: "failed" };

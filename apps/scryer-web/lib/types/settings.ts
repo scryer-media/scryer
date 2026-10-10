@@ -434,25 +434,27 @@ export type ServiceSettings = {
   bindSource: ConfigValueSource;
   passkeyRpId: string | null;
   passkeyRpOrigin: string | null;
-  passkeyRpSource: "environment" | "public_url" | "none";
+  passkeyRpSource: PasskeyRelyingPartySource;
   passkeyUserCount: number | null;
   passkeyOnlyUserCount: number | null;
 };
 
-export type ConfigValueSource = "environment" | "settings" | "default";
+export type ConfigValueSource = "ENVIRONMENT" | "SETTINGS" | "DEFAULT";
+
+export type PasskeyRelyingPartySource = "ENVIRONMENT" | "PUBLIC_URL" | "NONE";
 
 export type PublicUrlErrorCode =
-  | "invalid_url"
-  | "wildcard_host"
-  | "credentials"
-  | "query_or_fragment"
-  | "path_not_allowed"
-  | "path_mismatch"
-  | "environment_locked"
-  | "save_and_reset"
-  | "passkey_acknowledgement_required";
+  | "INVALID_URL"
+  | "WILDCARD_HOST"
+  | "CREDENTIALS"
+  | "QUERY_OR_FRAGMENT"
+  | "PATH_NOT_ALLOWED"
+  | "PATH_MISMATCH"
+  | "ENVIRONMENT_LOCKED"
+  | "SAVE_AND_RESET"
+  | "PASSKEY_ACKNOWLEDGEMENT_REQUIRED";
 
-export type PasskeyImpact = "unaffected" | "unchanged" | "changed" | "disabled";
+export type PasskeyImpact = "UNAFFECTED" | "UNCHANGED" | "CHANGED" | "DISABLED";
 
 export type PublicUrlChangePreview = {
   normalizedPublicUrl: string | null;

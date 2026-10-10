@@ -46,7 +46,7 @@ export function PersonalAccountConnections(props: ConnectionsProps) {
                 <h3 className="font-semibold">{provider.name}</h3>
                 {linked ? <p className="truncate text-sm text-muted-foreground">{linked.displayName ?? linked.username ?? linked.externalUserId}</p> : null}
               </div>
-              {linked ? <Badge tone={linked.status.toUpperCase() === "LINKED" || linked.status.toUpperCase() === "ACTIVE" ? "positive" : "warning"}>{t(linked.status.toUpperCase() === "LINKED" || linked.status.toUpperCase() === "ACTIVE" ? "lists.accounts.connected" : "lists.accounts.reconnect")}</Badge> : null}
+              {linked ? <Badge tone={linked.status === "ACTIVE" ? "positive" : "warning"}>{t(linked.status === "ACTIVE" ? "lists.accounts.connected" : "lists.accounts.reconnect")}</Badge> : null}
             </div>
             {linked?.errorMessage ? <p className="text-sm text-destructive">{linked.errorMessage}</p> : null}
             <div className="flex flex-wrap gap-2">

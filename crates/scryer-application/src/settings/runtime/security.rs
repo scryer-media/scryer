@@ -187,14 +187,14 @@ impl AppUseCase {
         if value.is_none() && !reset {
             return Ok(None);
         }
-        use crate::public_url::error_codes;
-        let rejected = |code: &'static str, message: String| AppError::PublicUrlRejected {
+        use crate::public_url::PublicUrlErrorCode;
+        let rejected = |code: PublicUrlErrorCode, message: String| AppError::PublicUrlRejected {
             message,
             code,
         };
         if value.is_some() && reset {
             return Err(rejected(
-                error_codes::SAVE_AND_RESET,
+                PublicUrlErrorCode::SaveAndReset,
                 "cannot save and reset the public URL together".into(),
             ));
         }
@@ -207,7 +207,7 @@ impl AppUseCase {
             .is_some()
         {
             return Err(rejected(
-                error_codes::ENVIRONMENT_LOCKED,
+                PublicUrlErrorCode::EnvironmentLocked,
                 format!(
                     "the public URL is set by {} and cannot be changed here",
                     crate::public_url::PUBLIC_URL_ENV
@@ -620,7 +620,7 @@ impl AppUseCase {
                     message: "this change stops registered passkeys from working after the next \
                               restart; confirm it explicitly to save"
                         .into(),
-                    code: crate::public_url::error_codes::PASSKEY_ACKNOWLEDGEMENT_REQUIRED,
+                    code: crate::public_url::PublicUrlErrorCode::PasskeyAcknowledgementRequired,
                 });
             }
         }

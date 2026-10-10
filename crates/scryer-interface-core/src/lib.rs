@@ -587,7 +587,9 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::PublicUrlRejected { message, code } => {
             Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
                 extensions.set("code", "PUBLIC_URL_REJECTED");
-                extensions.set("reason", code);
+                // Spelled like the PublicUrlErrorCodeValue enum, so one client
+                // lookup serves both this error and the preview payloads.
+                extensions.set("reason", code.as_str().to_ascii_uppercase());
             })
         }
         // The retired direct root write (FR-077). Its own code, so a client can
@@ -1125,7 +1127,7 @@ mod tests {
     fn a_rejected_public_url_carries_its_reason_code() {
         let error = to_gql_error(AppError::PublicUrlRejected {
             message: "the public URL must name a single host".into(),
-            code: "wildcard_host",
+            code: scryer_application::public_url::PublicUrlErrorCode::WildcardHost,
         });
         assert_eq!(
             error.message,
@@ -1134,7 +1136,7 @@ mod tests {
         assert_eq!(graphql_error_code(&error), Some("PUBLIC_URL_REJECTED"));
         assert_eq!(
             graphql_error_extension_string(&error, "reason"),
-            Some("wildcard_host")
+            Some("WILDCARD_HOST")
         );
     }
 
