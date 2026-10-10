@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Eye, ListPlus } from "lucide-react";
 
+import { LabeledFieldset } from "@/components/common/labeled-fieldset";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Button } from "@/components/ui/button";
 import { CheckboxField } from "@/components/ui/checkbox";
@@ -17,6 +18,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SingleSelectField } from "@/components/ui/select";
 import { ActionTooltip } from "@/components/ui/tooltip";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useSessionUser, type AuthUser } from "@/lib/hooks/use-auth";
+import { hasLibraryPermission, LIBRARY_PERMISSIONS } from "@/lib/utils/permissions";
 import { defaultMonitorTypeForFacet } from "@/lib/facets/helpers";
 import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import type {
@@ -34,13 +37,13 @@ import {
   emptyListDraft,
   findProviderItem,
   followListOfferedKinds,
+  isListMediaParam,
+  listKindsFromSourceParams,
   isListModeSelectable,
   LIST_KINDS,
   LIST_ON_LEAVE_OPTIONS,
   listDraftProblems,
-  listIntervalParts,
   listKindLabelKey,
-  listModeHelpKey,
   listModeLabelKey,
   listOnLeaveLabelKey,
   missingSourceParams,
@@ -72,19 +75,31 @@ type FollowListDialogProps = {
   routeOptions: ListRouteOptions;
   onClose: () => void;
   onPreviewSource: (source: ListSourceDraft) => Promise<ListPreview | null>;
+  onPreviewSubscription: (id: string, draft?: ListSubscriptionDraft) => Promise<ListPreview | null>;
   onSubscribe: (source: ListSourceDraft, draft: ListSubscriptionDraft) => Promise<boolean>;
   onUpdate: (id: string, draft: ListSubscriptionDraft) => Promise<boolean>;
 };
 
-const SECTION_HEADING = "text-[13px] font-semibold uppercase tracking-[0.06em] text-[var(--scry-muted)]";
 const ID = "follow-list";
 
-function initialDraft(target: FollowListTarget, routeOptions: ListRouteOptions): ListSubscriptionDraft {
-  if (target.kind === "edit") return subscriptionToDraft(target.subscription);
-  const draft = emptyListDraft(target.name, target.kinds);
-  draft.routes = target.kinds.map((kind) =>
-    defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind)),
-  );
+function initialDraft(target: FollowListTarget, routeOptions: ListRouteOptions, user: AuthUser | null): ListSubscriptionDraft {
+  if (target.kind === "edit") {
+    const draft = subscriptionToDraft(target.subscription);
+    const item = target.manifest && findProviderItem([target.manifest], target.subscription.source.provider, target.subscription.source.sourceType)?.item;
+    draft.kinds = listKindsFromSourceParams(draft.kinds, item?.params ?? [], target.subscription.source.params, true);
+    return draft;
+  }
+  const draft = emptyListDraft(target.name, listKindsFromSourceParams(target.kinds, target.item?.params ?? [], target.source.params));
+  if (target.source.credentialId) draft.mode = "REQUEST";
+  draft.routes = target.kinds.map((kind) => {
+    const route = defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind));
+    const library = routeOptions.libraries.find((entry) => entry.id === route.libraryId);
+    if (target.source.credentialId && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)) {
+      route.qualityProfileId = library?.requestQualityProfileDefaultId ?? library?.requestQualityProfileIds?.[0] ?? null;
+      route.rootFolderId = null;
+    }
+    return route;
+  });
   return draft;
 }
 
@@ -108,24 +123,32 @@ function FollowListDialogBody({
   routeOptions,
   onClose,
   onPreviewSource,
+  onPreviewSubscription,
   onSubscribe,
   onUpdate,
 }: FollowListDialogProps & { target: FollowListTarget }) {
   const t = useTranslate();
+  const user = useSessionUser();
   const { definitions: tagDefinitions, loading: tagsLoading } = useTitleTagDefinitions();
-  const [draft, setDraft] = React.useState(() => initialDraft(target, routeOptions));
+  const [draft, setDraft] = React.useState(() => initialDraft(target, routeOptions, user));
   const [source, setSource] = React.useState<ListSourceDraft | null>(
-    target.kind === "new" ? target.source : null,
+    target.kind === "new" ? {
+      ...target.source,
+      params: [
+        ...target.source.params.filter((param) => !target.item?.params.some((definition) => definition.key === param.key && isListMediaParam(definition))),
+        ...(target.item?.params.filter(isListMediaParam).map((param) => ({ key: param.key, value: "__include__" })) ?? []),
+      ],
+    } : null,
   );
-  const [preview, setPreview] = React.useState<ListPreview | null>(
-    target.kind === "new" ? target.preview : null,
-  );
+  const [preview, setPreview] = React.useState<ListPreview | null>(null);
+  const [previewDraftKey, setPreviewDraftKey] = React.useState<string | null>(null);
+  const draftKey = JSON.stringify({ draft, source });
   const [previewing, setPreviewing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
   const manifest = target.manifest;
   const item = target.kind === "new" ? target.item : null;
-  const paramDefinitions = item?.params ?? [];
+  const paramDefinitions = (item?.params ?? []).filter((param) => !isListMediaParam(param));
   const sourceItem =
     target.kind === "new"
       ? target.item
@@ -139,13 +162,13 @@ function FollowListDialogBody({
     providerCoverage: manifest?.coverage,
     savedKinds: target.kind === "edit" ? target.subscription.kinds : null,
   });
-  const intervalSeconds =
-    target.kind === "edit" ? target.subscription.intervalSeconds : (item?.defaultIntervalSeconds ?? null);
-  const interval = intervalSeconds ? listIntervalParts(intervalSeconds) : null;
 
   const missingParams = source ? missingSourceParams(paramDefinitions, source.params) : [];
+  const personal = target.kind === "new" ? !!target.source.credentialId : target.subscription.scope === "PERSONAL";
+  const canDirectAdd = draft.kinds.length > 0 && draft.kinds.every((kind) => hasLibraryPermission(user, draft.routes.find((route) => route.kind === kind)?.libraryId, LIBRARY_PERMISSIONS.manageTitles));
+  const modes: readonly ListMode[] = personal ? canDirectAdd ? ["SEARCH", "ADD", "REQUEST"] : ["REQUEST"] : PUBLIC_LIST_MODES;
   const problems = listDraftProblems(draft);
-  const canSave = !saving && problems.length === 0 && missingParams.length === 0;
+  const canSave = !saving && problems.length === 0 && missingParams.length === 0 && modes.includes(draft.mode);
 
   const toggleKind = (kind: Facet, checked: boolean) => {
     setDraft((current) => {
@@ -160,10 +183,12 @@ function FollowListDialogBody({
   };
 
   const runPreview = async () => {
-    if (!source) return;
     setPreviewing(true);
     try {
-      setPreview(await onPreviewSource(source));
+      setPreview(target.kind === "edit"
+        ? await onPreviewSubscription(target.subscription.id, draft)
+        : source ? await onPreviewSource({ ...source, previewFilters: draft.filters, previewKinds: draft.kinds, previewMaxPerSync: draft.maxPerSync }) : null);
+      setPreviewDraftKey(draftKey);
     } finally {
       setPreviewing(false);
     }
@@ -207,9 +232,8 @@ function FollowListDialogBody({
       </DialogHeader>
 
       <div className="space-y-6 p-5 sm:p-6">
-        {source && paramDefinitions.length > 0 ? (
-          <section className="space-y-3">
-            <h3 className={SECTION_HEADING}>{t("lists.follow.sourceHeading")}</h3>
+        {source && !source.fixedParams && paramDefinitions.length > 0 ? (
+          <LabeledFieldset label={t("lists.follow.sourceHeading")}>
             <div className="grid gap-3 sm:grid-cols-2">
               {paramDefinitions.map((definition) => {
                 const value = source.params.find((param) => param.key === definition.key)?.value ?? "";
@@ -246,42 +270,39 @@ function FollowListDialogBody({
                 );
               })}
             </div>
-          </section>
+          </LabeledFieldset>
         ) : null}
 
-        <section className="space-y-3">
-          <label className="block space-y-1.5" htmlFor={`${ID}-name`}>
-            <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.name")}</span>
-            <Input
-              id={`${ID}-name`}
-              value={draft.name}
-              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-            />
-          </label>
-          <div className="space-y-2">
-            <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.kinds")}</span>
-            <div className="flex flex-wrap gap-x-6 gap-y-2">
-              {offeredKinds.map((kind) => (
-                <CheckboxField
-                  key={kind}
-                  id={`${ID}-kind-${kind.toLowerCase()}`}
-                  label={t(listKindLabelKey(kind))}
-                  checked={draft.kinds.includes(kind)}
-                  onCheckedChange={(checked) => toggleKind(kind, checked === true)}
-                />
-              ))}
-            </div>
-          </div>
-        </section>
+        <label className="block space-y-1.5" htmlFor={`${ID}-name`}>
+          <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.name")}</span>
+          <Input
+            id={`${ID}-name`}
+            value={draft.name}
+            onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+          />
+        </label>
 
-        <section className="space-y-3">
-          <h3 className={SECTION_HEADING}>{t("lists.follow.modeHeading")}</h3>
+        <LabeledFieldset label={t("lists.follow.kinds")}>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {offeredKinds.map((kind) => (
+              <CheckboxField
+                key={kind}
+                id={`${ID}-kind-${kind.toLowerCase()}`}
+                label={t(listKindLabelKey(kind))}
+                checked={draft.kinds.includes(kind)}
+                onCheckedChange={(checked) => toggleKind(kind, checked === true)}
+              />
+            ))}
+          </div>
+        </LabeledFieldset>
+
+        <LabeledFieldset label={t("lists.follow.modeHeading")}>
           <RadioGroup
             value={draft.mode}
             onValueChange={(mode) => setDraft((current) => ({ ...current, mode: mode as ListMode }))}
             className="grid gap-2 sm:grid-cols-2"
           >
-            {PUBLIC_LIST_MODES.map((mode) => {
+            {modes.map((mode) => {
               const selectable = isListModeSelectable(mode);
               const option = (
                 <label
@@ -297,7 +318,6 @@ function FollowListDialogBody({
                   />
                   <span className={selectable ? undefined : "opacity-60"}>
                     <span className="block font-medium text-[var(--scry-ink2)]">{t(listModeLabelKey(mode))}</span>
-                    <span className="block text-xs text-[var(--scry-muted)]">{t(listModeHelpKey(mode))}</span>
                   </span>
                 </label>
               );
@@ -310,49 +330,57 @@ function FollowListDialogBody({
               );
             })}
           </RadioGroup>
-        </section>
+        </LabeledFieldset>
 
         {draft.kinds.length > 0 ? (
-          <section className="space-y-3">
-            <h3 className={SECTION_HEADING}>{t("lists.follow.routesHeading")}</h3>
-            <p className="text-[12.5px] text-[var(--scry-muted)]">{t("lists.follow.routesHelp")}</p>
+          // Each card's own header says what it routes, so the group needs no visible heading.
+          <section className="space-y-3" aria-label={t("lists.follow.routesHeading")}>
             {draft.kinds.map((kind) => {
               const route =
                 draft.routes.find((entry) => entry.kind === kind) ??
                 defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind));
               return (
                 <ListRouteCard
+                  filters={draft.filters}
+                  onFiltersChange={(filters) => setDraft((current) => ({ ...current, filters }))}
                   key={kind}
                   kind={kind}
                   route={route}
                   libraries={routeOptions.libraries}
-                  qualityProfiles={routeOptions.qualityProfiles}
+                  requestOnly={personal && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)}
+                  qualityProfiles={personal && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)
+                    ? routeOptions.qualityProfiles.filter((profile) => {
+                      const library = routeOptions.libraries.find((entry) => entry.id === route.libraryId);
+                      return (library?.requestQualityProfileIds?.length ? library.requestQualityProfileIds : [library?.requestQualityProfileDefaultId]).includes(profile.id);
+                    })
+                    : routeOptions.qualityProfiles}
                   tagDefinitions={tagDefinitions}
                   tagsLoading={tagsLoading}
                   idPrefix={ID}
-                  onChange={(next) =>
-                    setDraft((current) => ({
-                      ...current,
-                      routes: [...current.routes.filter((entry) => entry.kind !== kind), next],
-                    }))
-                  }
+                  onChange={(next) => setDraft((current) => {
+                    const selectedLibrary = routeOptions.libraries.find((library) => library.id === next.libraryId);
+                    const managesLibrary = hasLibraryPermission(user, next.libraryId, LIBRARY_PERMISSIONS.manageTitles);
+                    const allowedProfiles = selectedLibrary?.requestQualityProfileIds?.length ? selectedLibrary.requestQualityProfileIds : [selectedLibrary?.requestQualityProfileDefaultId];
+                    const normalized = personal && !managesLibrary ? { ...next, rootFolderId: null, qualityProfileId: next.qualityProfileId && allowedProfiles.includes(next.qualityProfileId) ? next.qualityProfileId : selectedLibrary?.requestQualityProfileDefaultId ?? selectedLibrary?.requestQualityProfileIds?.[0] ?? null } : next;
+                    const routes = [...current.routes.filter((entry) => entry.kind !== kind), normalized];
+                    const direct = current.kinds.every((selectedKind) => hasLibraryPermission(user, routes.find((route) => route.kind === selectedKind)?.libraryId, LIBRARY_PERMISSIONS.manageTitles));
+                    return { ...current, routes, mode: personal && !direct ? "REQUEST" : current.mode };
+                  })}
                 />
               );
             })}
           </section>
         ) : null}
 
-        <section className="space-y-3">
-          <h3 className={SECTION_HEADING}>{t("lists.follow.filtersHeading")}</h3>
+        <LabeledFieldset label={t("lists.follow.filtersHeading")}>
           <ListFiltersFields
             filters={draft.filters}
             idPrefix={ID}
             onChange={(filters) => setDraft((current) => ({ ...current, filters }))}
           />
-        </section>
+        </LabeledFieldset>
 
-        <section className="space-y-3">
-          <h3 className={SECTION_HEADING}>{t("lists.follow.syncHeading")}</h3>
+        <LabeledFieldset label={t("lists.follow.syncHeading")}>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5" htmlFor={`${ID}-max-per-sync`}>
               <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.maxPerSync")}</span>
@@ -366,30 +394,23 @@ function FollowListDialogBody({
                   setDraft((current) => ({ ...current, maxPerSync: digits ? Number(digits) : null }));
                 }}
               />
-              <span className="block text-xs text-[var(--scry-muted)]">{t("lists.follow.maxPerSyncHelp")}</span>
             </label>
             <SingleSelectField
               id={`${ID}-on-leave`}
               label={t("lists.follow.onLeave")}
-              description={t("lists.follow.onLeaveHelp")}
               value={draft.onLeave}
-              options={LIST_ON_LEAVE_OPTIONS.map((value) => ({ value, label: t(listOnLeaveLabelKey(value)) }))}
+              options={LIST_ON_LEAVE_OPTIONS.filter((value) => !personal || canDirectAdd || value === "KEEP" || value === "LOG").map((value) => ({ value, label: t(listOnLeaveLabelKey(value)) }))}
               onValueChange={(value) =>
                 setDraft((current) => ({ ...current, onLeave: value as ListSubscriptionDraft["onLeave"] }))
               }
             />
           </div>
-          {interval ? (
-            <p id={`${ID}-interval`} className="text-[12.5px] text-[var(--scry-muted)]">
-              {t("lists.follow.interval", { interval: t(interval.key, { count: interval.count }) })}
-            </p>
-          ) : null}
-        </section>
+        </LabeledFieldset>
 
-        {source ? (
+        {source || target.kind === "edit" ? (
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <h3 className={SECTION_HEADING}>{t("lists.preview.heading")}</h3>
+              <h3 className="text-sm font-medium">{t("lists.preview.heading")}</h3>
               <Button
                 id={`${ID}-preview-button`}
                 type="button"
@@ -402,11 +423,7 @@ function FollowListDialogBody({
                 {t("lists.preview.run")}
               </Button>
             </div>
-            {preview ? (
-              <ListPreviewSummary preview={preview} idPrefix={ID} />
-            ) : (
-              <p className="text-[12.5px] text-[var(--scry-muted)]">{t("lists.preview.notRun")}</p>
-            )}
+            {preview && previewDraftKey === draftKey ? <ListPreviewSummary preview={preview} idPrefix={ID} /> : null}
           </section>
         ) : null}
 

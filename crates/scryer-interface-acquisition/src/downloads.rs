@@ -10,6 +10,42 @@ use scryer_interface_media::{mappers, types::*};
 #[derive(Default)]
 pub struct DownloadMutations;
 
+/// Replacement archive password for one failed download client job.
+#[derive(async_graphql::InputObject)]
+pub struct RetryDownloadPasswordInput {
+    /// Canonical Scryer download ID of the submission whose job is retried.
+    pub download_id: async_graphql::ID,
+    /// Download client ID that owns the failed job; required for a retry.
+    pub client_id: async_graphql::ID,
+    /// Download client type; only `sabnzbd`, `nzbget`, and `weaver` support password retries.
+    pub client_type: String,
+    /// Client-side item ID of the failed job.
+    pub download_client_item_id: String,
+    /// New archive password to try; must not be empty. Write-only: it is never returned or logged.
+    #[graphql(secret)]
+    pub password: String,
+}
+
+/// Outcome of a single password retry dispatch to the download client.
+#[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq)]
+pub enum DownloadPasswordRetryStatusValue {
+    /// The download client accepted the retry.
+    Accepted,
+    /// The download client refused the retry.
+    Refused,
+    /// The outcome is unknown; the retry stays claimed until reconciliation resolves it.
+    AwaitingReconciliation,
+}
+
+/// Result of a download password retry.
+#[derive(async_graphql::SimpleObject)]
+pub struct DownloadPasswordRetryPayload {
+    /// Whether the download client accepted, refused, or has not confirmed the retry.
+    pub status: DownloadPasswordRetryStatusValue,
+    /// Client-side item ID of the retried job when the client accepted it; null otherwise.
+    pub download_client_item_id: Option<String>,
+}
+
 async fn queue_item_payload_for_action(
     app: &AppUseCase,
     actor: &User,
@@ -84,6 +120,51 @@ pub(crate) fn queue_download_conflict_payload(
 
 #[Object]
 impl DownloadMutations {
+    /// Retry a failed download client job once with a new archive password; requires import-resolution permission on the download's library.
+    async fn retry_download_password(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Download and client job to retry, with the replacement password.")]
+        input: RetryDownloadPasswordInput,
+    ) -> GqlResult<DownloadPasswordRetryPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let download_id =
+            scryer_domain::download_identity::DownloadId::parse(input.download_id.as_str())
+                .ok_or_else(|| {
+                    to_gql_error(AppError::Validation("invalid canonical download id".into()))
+                })?;
+        let source = scryer_application::ClientJobLocator::new(
+            Some(input.client_id.as_str()),
+            &input.client_type,
+            &input.download_client_item_id,
+        );
+        let outcome = app
+            .retry_download_password(&actor, download_id, source, &input.password)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(match outcome {
+            scryer_application::DownloadClientRetryOutcome::Accepted { item_id } => {
+                DownloadPasswordRetryPayload {
+                    status: DownloadPasswordRetryStatusValue::Accepted,
+                    download_client_item_id: Some(item_id),
+                }
+            }
+            scryer_application::DownloadClientRetryOutcome::Refused => {
+                DownloadPasswordRetryPayload {
+                    status: DownloadPasswordRetryStatusValue::Refused,
+                    download_client_item_id: None,
+                }
+            }
+            scryer_application::DownloadClientRetryOutcome::Uncertain => {
+                DownloadPasswordRetryPayload {
+                    status: DownloadPasswordRetryStatusValue::AwaitingReconciliation,
+                    download_client_item_id: None,
+                }
+            }
+        })
+    }
+
     /// Evaluate an external announcement using normal automatic acquisition rules.
     async fn submit_external_release(
         &self,
@@ -515,6 +596,24 @@ impl DownloadMutations {
             dest_path: result.dest_path,
             error_message: result.error_message,
         })
+    }
+
+    /// Release the sources a completed import is holding.
+    async fn release_held_import_sources(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Completed import that is holding its download's sources. Clears the holds of every import of that download together, settles the download through import verification so the download client's removal policy applies only once it is proven imported, and removes the released imports' extraction workspaces only when every video in them was imported and nothing else uses them; any other workspace is preserved."
+        )]
+        input: ReleaseHeldImportSourcesInput,
+    ) -> GqlResult<HeldImportSourcesReleasedPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let released =
+            scryer_application::release_held_import_sources(&app, &actor, input.import_id.as_ref())
+                .await
+                .map_err(to_gql_error)?;
+        Ok(HeldImportSourcesReleasedPayload::from(released))
     }
 
     /// Cancel a queued or copying import operation by its server-issued stream identity.

@@ -386,9 +386,33 @@ pub enum UiTableViewModeValue {
     PosterTable,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Screen class a catalog layout was chosen on; each class keeps its own layout.
+pub enum UiDeviceClassValue {
+    /// Desktop and tablet-sized screens.
+    Desktop,
+    /// Phone-sized screens.
+    Mobile,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Catalog presentation mode.
+pub enum UiCatalogViewModeValue {
+    /// Compact table.
+    Compact,
+    /// Table with posters.
+    PosterTable,
+    /// Poster grid.
+    Poster,
+}
+
 #[derive(SimpleObject, Clone)]
-/// One persisted table-column preference for a facet and table mode.
+/// One persisted table-column preference for a device class, facet and table mode.
 pub struct UiTableColumnSettingPayload {
+    /// Device class to which the column setting applies.
+    pub device_class: UiDeviceClassValue,
     /// Media facet to which the column setting applies.
     pub facet: UiSettingsFacetValue,
     /// Table mode to which the column setting applies.
@@ -424,13 +448,30 @@ pub struct UiSettingsPayload {
     pub sidebar_mode: UiSidebarModeValue,
     /// Content area opened by default.
     pub default_landing_view: UiDefaultLandingViewValue,
+    /// Interface language code saved on the caller's profile, or null to follow the browser.
+    pub language: Option<String>,
     /// Persisted table-column settings.
     pub table_columns: Vec<UiTableColumnSettingPayload>,
+    /// Persisted catalog view modes, per device class and facet.
+    pub catalog_views: Vec<UiCatalogViewSettingPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// The catalog view mode saved for one device class and facet.
+pub struct UiCatalogViewSettingPayload {
+    /// Device class the view mode was chosen on.
+    pub device_class: UiDeviceClassValue,
+    /// Media facet the view mode applies to.
+    pub facet: UiSettingsFacetValue,
+    /// Saved view mode.
+    pub view_mode: UiCatalogViewModeValue,
 }
 
 #[derive(InputObject, Clone)]
 /// Input form for one table-column preference.
 pub struct UiTableColumnSettingInput {
+    /// Device class to which the setting applies; null means desktop.
+    pub device_class: Option<UiDeviceClassValue>,
     /// Media facet to which the setting applies.
     pub facet: UiSettingsFacetValue,
     /// Table mode to which the setting applies.
@@ -466,8 +507,36 @@ pub struct SetMyUiSettingsInput {
     pub sidebar_mode: UiSidebarModeValue,
     /// Content area to open by default.
     pub default_landing_view: UiDefaultLandingViewValue,
-    /// Complete table-column setting list; empty clears all saved column settings.
-    pub table_columns: Vec<UiTableColumnSettingInput>,
+    /// Optional interface language code; null preserves the saved value and an empty string clears it.
+    pub language: Option<String>,
+    /// Optional complete table-column setting list; null preserves the saved columns and an empty list clears them.
+    pub table_columns: Option<Vec<UiTableColumnSettingInput>>,
+}
+
+#[derive(InputObject, Clone)]
+/// One column of a catalog layout saved with setMyCatalogView.
+pub struct UiCatalogColumnInput {
+    /// Table mode to which the setting applies.
+    pub table_view_mode: UiTableViewModeValue,
+    /// Stable column identifier.
+    pub column_id: String,
+    /// Zero-based display order.
+    pub column_order: i32,
+    /// Whether the column should be visible.
+    pub visible: bool,
+}
+
+#[derive(InputObject, Clone)]
+/// The caller's catalog layout for one device class and facet.
+pub struct SetMyCatalogViewInput {
+    /// Device class the layout was chosen on.
+    pub device_class: UiDeviceClassValue,
+    /// Media facet the layout applies to.
+    pub facet: UiSettingsFacetValue,
+    /// Optional view mode; null preserves the saved value.
+    pub view_mode: Option<UiCatalogViewModeValue>,
+    /// Optional complete column list for this device class and facet; null preserves the saved columns.
+    pub columns: Option<Vec<UiCatalogColumnInput>>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -838,6 +907,176 @@ pub struct ServiceSettingsPayload {
     pub trusted_proxy_override: Option<Vec<String>>,
     /// Whether the effective policy comes from settings or environment.
     pub trusted_proxy_source: String,
+    /// Effective public URL; null when unset or invalid.
+    pub public_url: Option<String>,
+    /// Where the public URL comes from.
+    pub public_url_source: ConfigValueSourceValue,
+    /// Saved public URL, shown even while the environment overrides it.
+    pub public_url_saved: Option<String>,
+    /// Why the configured public URL is not in effect, when it is invalid.
+    pub public_url_error: Option<String>,
+    /// Stable reason for public_url_error, for localized messages.
+    pub public_url_error_code: Option<PublicUrlErrorCodeValue>,
+    /// False while SCRYER_PUBLIC_URL is set, because the environment wins.
+    pub public_url_editable: bool,
+    /// Base path the instance serves under; empty at the root.
+    pub base_path: String,
+    /// Where the base path comes from; never the saved settings.
+    pub base_path_source: ConfigValueSourceValue,
+    /// Listening address and port.
+    pub bind_address: String,
+    /// Where the listening address comes from; never the saved settings.
+    pub bind_source: ConfigValueSourceValue,
+    /// Passkey relying-party ID in effect since startup.
+    pub passkey_rp_id: Option<String>,
+    /// Passkey relying-party origin in effect since startup.
+    pub passkey_rp_origin: Option<String>,
+    /// Where the passkey relying party comes from.
+    pub passkey_rp_source: PasskeyRelyingPartySourceValue,
+    /// Users with at least one passkey; null when the count could not be read.
+    pub passkey_user_count: Option<i64>,
+    /// Users whose only second factor is a passkey; null when unknown.
+    pub passkey_only_user_count: Option<i64>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// What saving a proposed public URL would do, without saving it.
+pub struct PublicUrlChangePreviewPayload {
+    /// The value as it would be stored; null for a reset or a rejected value.
+    pub normalized_public_url: Option<String>,
+    /// Why the value would be refused.
+    pub error: Option<String>,
+    /// Stable reason for error, for localized messages.
+    pub error_code: Option<PublicUrlErrorCodeValue>,
+    /// Effect on passkeys after the next restart.
+    pub passkey_impact: PasskeyImpactValue,
+    /// Passkey relying-party ID in effect now.
+    pub current_passkey_rp_id: Option<String>,
+    /// Passkey relying-party ID after the next restart; null when passkeys would be off.
+    pub next_passkey_rp_id: Option<String>,
+    /// Users with at least one passkey; null when the count could not be read.
+    pub passkey_user_count: Option<i64>,
+    /// Users whose only second factor is a passkey; null when unknown.
+    pub passkey_only_user_count: Option<i64>,
+    /// Whether the save must set acknowledgePasskeyImpact.
+    pub acknowledgement_required: bool,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Where an effective addressing value comes from.
+pub enum ConfigValueSourceValue {
+    /// An environment variable.
+    Environment,
+    /// The saved setting.
+    Settings,
+    /// The built-in default.
+    Default,
+}
+
+impl ConfigValueSourceValue {
+    pub fn from_application(value: scryer_application::public_url::ConfigValueSource) -> Self {
+        use scryer_application::public_url::ConfigValueSource;
+        match value {
+            ConfigValueSource::Environment => Self::Environment,
+            ConfigValueSource::Settings => Self::Settings,
+            ConfigValueSource::Default => Self::Default,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Where the running passkey relying party comes from.
+pub enum PasskeyRelyingPartySourceValue {
+    /// The SCRYER_WEBAUTHN_RP_ID and SCRYER_WEBAUTHN_RP_ORIGIN variables.
+    Environment,
+    /// Derived from the public URL because both variables were unset.
+    PublicUrl,
+    /// Passkeys are not configured.
+    None,
+}
+
+impl PasskeyRelyingPartySourceValue {
+    pub fn from_application(
+        value: scryer_application::public_url::PasskeyRelyingPartySource,
+    ) -> Self {
+        use scryer_application::public_url::PasskeyRelyingPartySource;
+        match value {
+            PasskeyRelyingPartySource::Environment => Self::Environment,
+            PasskeyRelyingPartySource::PublicUrl => Self::PublicUrl,
+            PasskeyRelyingPartySource::None => Self::None,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What saving a public URL would do to passkeys after the next restart.
+pub enum PasskeyImpactValue {
+    /// Passkeys do not come from the public URL, so the change cannot affect them.
+    Unaffected,
+    /// The relying party stays the same.
+    Unchanged,
+    /// Passkeys move to a different domain; existing passkeys stop working.
+    Changed,
+    /// The new value cannot carry passkeys; passkeys turn off.
+    Disabled,
+}
+
+impl PasskeyImpactValue {
+    pub fn from_application(value: scryer_application::public_url::PasskeyImpact) -> Self {
+        use scryer_application::public_url::PasskeyImpact;
+        match value {
+            PasskeyImpact::Unaffected => Self::Unaffected,
+            PasskeyImpact::Unchanged => Self::Unchanged,
+            PasskeyImpact::Changed => Self::Changed,
+            PasskeyImpact::Disabled => Self::Disabled,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Stable reason a public URL is rejected, for localized messages.
+pub enum PublicUrlErrorCodeValue {
+    /// Not an absolute http or https URL with a host.
+    InvalidUrl,
+    /// The host contains a wildcard.
+    WildcardHost,
+    /// The URL carries a username or password.
+    Credentials,
+    /// The URL carries a query or fragment.
+    QueryOrFragment,
+    /// A path was given while the instance is served at the root.
+    PathNotAllowed,
+    /// The path differs from the base path the instance serves under.
+    PathMismatch,
+    /// SCRYER_PUBLIC_URL sets the public URL, so it cannot be changed here.
+    EnvironmentLocked,
+    /// A save and a reset were requested together.
+    SaveAndReset,
+    /// The change breaks registered passkeys and was not acknowledged.
+    PasskeyAcknowledgementRequired,
+}
+
+impl PublicUrlErrorCodeValue {
+    pub fn from_application(value: scryer_application::public_url::PublicUrlErrorCode) -> Self {
+        use scryer_application::public_url::PublicUrlErrorCode;
+        match value {
+            PublicUrlErrorCode::InvalidUrl => Self::InvalidUrl,
+            PublicUrlErrorCode::WildcardHost => Self::WildcardHost,
+            PublicUrlErrorCode::Credentials => Self::Credentials,
+            PublicUrlErrorCode::QueryOrFragment => Self::QueryOrFragment,
+            PublicUrlErrorCode::PathNotAllowed => Self::PathNotAllowed,
+            PublicUrlErrorCode::PathMismatch => Self::PathMismatch,
+            PublicUrlErrorCode::EnvironmentLocked => Self::EnvironmentLocked,
+            PublicUrlErrorCode::SaveAndReset => Self::SaveAndReset,
+            PublicUrlErrorCode::PasskeyAcknowledgementRequired => {
+                Self::PasskeyAcknowledgementRequired
+            }
+        }
+    }
 }
 
 #[derive(InputObject, Clone)]
@@ -968,6 +1207,14 @@ pub struct UpdateServiceSettingsInput {
     pub trusted_proxy_ips: Option<Vec<String>>,
     /// Clear the saved override and use environment configuration.
     pub reset_trusted_proxy_ips: Option<bool>,
+    /// Save the instance public URL. Omission preserves the saved value.
+    pub public_url: Option<String>,
+    /// Clear the saved public URL.
+    pub reset_public_url: Option<bool>,
+    /// Confirm that registered passkeys stop working after the next restart.
+    /// Required when the public URL change moves or disables passkeys while
+    /// any are registered.
+    pub acknowledge_passkey_impact: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]

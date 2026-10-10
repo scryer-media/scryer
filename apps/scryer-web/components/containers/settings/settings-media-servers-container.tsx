@@ -344,7 +344,7 @@ export function SettingsMediaServersContainer() {
     void Promise.all([refreshConnections(), refreshLibraries(), refreshAuthRuntimeState()])
       .catch((error: unknown) => {
         if (!cancelled) {
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
         }
       });
     return () => {
@@ -461,7 +461,7 @@ export function SettingsMediaServersContainer() {
           : t("settings.plexServerDiscoveryEmpty"),
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setPlexDiscoveryBusy(false);
     }
@@ -500,7 +500,7 @@ export function SettingsMediaServersContainer() {
           : "No Emby Connect servers were found",
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setEmbyConnectBusy(false);
     }
@@ -523,9 +523,9 @@ export function SettingsMediaServersContainer() {
       if (data?.testEmbyConnect?.status !== "ok") {
         throw new Error(data?.testEmbyConnect?.message ?? "Emby Connect test failed");
       }
-      setGlobalStatus("Emby Connect test passed");
+      setGlobalStatus("Emby Connect test passed", { level: "SUCCESS" });
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : "Emby Connect test failed");
+      setGlobalStatus(error instanceof Error ? error.message : "Emby Connect test failed", { level: "ERROR" });
     } finally {
       setEmbyConnectBusy(false);
     }
@@ -580,13 +580,13 @@ export function SettingsMediaServersContainer() {
           ),
         }).toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.mediaServerUpdated"));
+        setGlobalStatus(t("status.mediaServerUpdated"), { level: "SUCCESS" });
       } else {
         const { error } = await client.mutation(createMediaServerConnectionMutation, {
           input: buildCreateInput(submitted, plexDiscoveryToken, effectiveFormLoginEnabled),
         }).toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.mediaServerCreated"));
+        setGlobalStatus(t("status.mediaServerCreated"), { level: "SUCCESS" });
       }
 
       resetDraft();
@@ -598,7 +598,7 @@ export function SettingsMediaServersContainer() {
       if (!isReportedConnectionFeedbackError(error)) {
         const message = error instanceof Error ? error.message : t("status.failedToUpdate");
         setEditorError(message);
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
       }
     } finally {
       setMutatingConnectionId(null);
@@ -659,11 +659,11 @@ export function SettingsMediaServersContainer() {
         },
       }).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.mediaServerUpdated"));
+      setGlobalStatus(t("status.mediaServerUpdated"), { level: "SUCCESS" });
       await refreshConnections();
       notifyExternalAccountInviteSourcesChanged();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingConnectionId(null);
     }
@@ -684,7 +684,7 @@ export function SettingsMediaServersContainer() {
         .mutation(deleteMediaServerConnectionMutation, { id: connection.id })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.mediaServerDeleted", { name: connection.displayName }));
+      setGlobalStatus(t("status.mediaServerDeleted", { name: connection.displayName }), { level: "SUCCESS" });
       await refreshConnections();
       notifyExternalAccountInviteSourcesChanged();
       if (editingConnectionId === connection.id) {
@@ -693,7 +693,7 @@ export function SettingsMediaServersContainer() {
         setEditorMode("create");
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingConnectionId(null);
       setPendingDeleteConnection(null);

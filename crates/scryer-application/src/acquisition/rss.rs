@@ -1198,7 +1198,7 @@ impl AppUseCase {
                 // A temporary feed failure must not suppress already-held
                 // releases. They are re-evaluated through this same pass.
                 warn!(error = %err, "RSS sync: failed to fetch RSS feed from indexers; evaluating active pending releases");
-                IndexerSearchResponse {
+                IndexerSearchResponse { next_cursor: None,
                     results: Vec::new(),
 
                     completion: IndexerSearchCompletion::Partial {
@@ -3677,6 +3677,37 @@ mod tests {
             assert_eq!(parked.allowed, rescued);
             assert_eq!(parked.score, rss_decision.release_score);
         }
+    }
+
+    #[tokio::test]
+    async fn multilingual_spelling_rss_swedish_unique_alias_and_local_collision() {
+        let mut title = make_title("swedish-show", "Over the Atlantic", Some(2019));
+        title.facet = MediaFacet::Series;
+        title.tagged_aliases = vec![scryer_domain::TaggedAlias {
+            name: "Över Atlanten".into(),
+            language: "swe".into(),
+        }];
+        let raw = "Over.Atlanten.S11E02.SWEDiSH.1080p.WEB.h264-INGRID";
+        let attributes = IndexerResponseAttributes::default();
+        let bank = build_title_context_bank(std::slice::from_ref(&title));
+        assert_eq!(
+            match_release_to_title_context(raw, &attributes, &bank)
+                .await
+                .unwrap()
+                .unwrap()
+                .title_id,
+            title.id
+        );
+        let mut rival = make_title("other-show", "Over Atlanten", Some(2019));
+        rival.facet = MediaFacet::Series;
+        rival.monitored = false;
+        let bank = build_title_context_bank(&[title, rival]);
+        assert!(
+            match_release_to_title_context(raw, &attributes, &bank)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

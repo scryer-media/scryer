@@ -134,12 +134,12 @@ pub(crate) fn quality_from_video_dimensions(
     let height = height.unwrap_or_default();
     match (width, height) {
         (w, h) if w >= 7680 || h >= 4200 => Some("4320p"),
-        (w, h) if w >= 3840 || h >= 2100 => Some("2160p"),
-        (_, h) if h >= 1300 => Some("1440p"),
-        (w, h) if w >= 1920 || h >= 1000 => Some("1080p"),
-        (w, h) if w >= 1280 || h >= 700 => Some("720p"),
-        (w, h) if w >= 854 || h >= 480 => Some("480p"),
-        (_, h) if h >= 300 => Some("360p"),
+        (w, h) if w >= 3200 || h >= 2100 => Some("2160p"),
+        (w, h) if w >= 2400 || h >= 1300 => Some("1440p"),
+        (w, h) if w >= 1800 || h >= 1000 => Some("1080p"),
+        (w, h) if w >= 1200 || h >= 700 => Some("720p"),
+        (w, h) if w >= 1000 || h >= 560 => Some("576p"),
+        (w, h) if w > 0 && h > 0 => Some("480p"),
         _ => None,
     }
 }
@@ -294,6 +294,81 @@ mod tests {
         );
         assert_eq!(resolved_channels(None, Some("quad")), None);
         assert_eq!(resolved_channels(None, None), None);
+    }
+
+    #[test]
+    fn resolution_boundaries_use_either_dimension() {
+        for (width, height, tier, below) in [
+            (7680, 4200, "4320p", "2160p"),
+            (3200, 2100, "2160p", "1440p"),
+            (2400, 1300, "1440p", "1080p"),
+            (1800, 1000, "1080p", "720p"),
+            (1200, 700, "720p", "576p"),
+            (1000, 560, "576p", "480p"),
+        ] {
+            for (w, h, expected) in [
+                (width - 1, 1, below),
+                (width, 1, tier),
+                (1, height - 1, below),
+                (1, height, tier),
+            ] {
+                assert_eq!(
+                    quality_from_video_dimensions(Some(w), Some(h)),
+                    Some(expected),
+                    "{w}x{h}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolution_crops_and_overlapping_tiers_choose_the_highest_match() {
+        for (width, height, expected) in [
+            (1916, 800, "1080p"),
+            (1276, 536, "720p"),
+            (3836, 1600, "2160p"),
+            (2556, 1068, "1440p"),
+            (2560, 1080, "1440p"),
+            (1920, 1080, "1080p"),
+            (2560, 1440, "1440p"),
+            (3840, 2160, "2160p"),
+            (7680, 4320, "4320p"),
+            (1800, 2100, "2160p"),
+            (7680, 560, "4320p"),
+            (720, 576, "576p"),
+            (854, 480, "480p"),
+            (640, 360, "480p"),
+        ] {
+            assert_eq!(
+                quality_from_video_dimensions(Some(width), Some(height)),
+                Some(expected),
+                "{width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolution_partial_dimensions_require_a_positive_threshold_or_both_for_sd() {
+        for (width, height, expected) in [
+            (None, None, None),
+            (Some(0), Some(0), None),
+            (Some(-1), Some(-1), None),
+            (Some(999), None, None),
+            (None, Some(559), None),
+            (Some(1), Some(0), None),
+            (Some(-1), Some(1), None),
+            (Some(1), Some(1), Some("480p")),
+            (Some(1000), None, Some("576p")),
+            (None, Some(560), Some("576p")),
+            (Some(1800), Some(-1), Some("1080p")),
+            (Some(0), Some(1300), Some("1440p")),
+        ] {
+            assert_eq!(
+                quality_from_video_dimensions(width, height),
+                expected,
+                "{width:?}x{height:?}"
+            );
+        }
     }
 
     #[test]

@@ -78,6 +78,10 @@ use crate::{graphql::metadata_gateway as graphql_docs, smg_enrollment};
 #[path = "client_lists.rs"]
 mod lists;
 
+#[path = "client_list_accounts.rs"]
+mod list_accounts;
+pub use list_accounts::HttpListAccountAuthGateway;
+
 /// SHA-256 of a GraphQL query document, for Automatic Persisted Queries.
 ///
 /// **Compatibility only.** The APQ protocol fixes the algorithm: the gateway
@@ -1113,6 +1117,14 @@ impl MetadataGatewayClient {
             .append_pair("extensions", &extensions_str)
             .append_pair("variables", &variables_str);
 
+        // Keep encoded request targets within common proxy limits as well as
+        // the HTTP client's URI limit. Large batches use the same signed APQ POST.
+        if url.as_str().len() > 8 * 1024 {
+            return self
+                .execute_graphql_apq_register(operation_name, query, &extensions, &variables)
+                .await;
+        }
+
         let get_result = self
             .send_request_with_retry(
                 || {
@@ -1313,6 +1325,15 @@ impl MetadataGatewayClient {
         &self,
         payload: serde_json::Value,
     ) -> AppResult<T> {
+        self.execute_graphql_with_response_limit(payload, None)
+            .await
+    }
+
+    async fn execute_graphql_with_response_limit<T: serde::de::DeserializeOwned>(
+        &self,
+        payload: serde_json::Value,
+        response_limit: Option<usize>,
+    ) -> AppResult<T> {
         debug!(endpoint = %self.endpoint, "sending metadata gateway request");
         let response = self.send_with_retry(&payload).await?;
 
@@ -1364,10 +1385,7 @@ impl MetadataGatewayClient {
                     preview.escaped_text()
                 )));
             }
-            let retry_text = retry_resp
-                .text()
-                .await
-                .map_err(|err| AppError::Repository(err.to_string()))?;
+            let retry_text = Self::read_graphql_body(retry_resp, response_limit).await?;
             return self.parse_graphql_response(&retry_text);
         }
 
@@ -1390,14 +1408,43 @@ impl MetadataGatewayClient {
             )));
         }
 
-        let raw_text = response
-            .text()
-            .await
-            .map_err(|err| AppError::Repository(err.to_string()))?;
+        let raw_text = Self::read_graphql_body(response, response_limit).await?;
 
         debug!(status = %status, body_len = raw_text.len(), "metadata gateway response");
 
         self.parse_graphql_response(&raw_text)
+    }
+
+    async fn read_graphql_body(
+        mut response: reqwest::Response,
+        limit: Option<usize>,
+    ) -> AppResult<String> {
+        let Some(limit) = limit else {
+            return response
+                .text()
+                .await
+                .map_err(|err| AppError::Repository(err.to_string()));
+        };
+        let oversized =
+            || AppError::Repository("metadata gateway response exceeds size limit".into());
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+        {
+            return Err(oversized());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|err| AppError::Repository(err.to_string()))?
+        {
+            if chunk.len() > limit.saturating_sub(bytes.len()) {
+                return Err(oversized());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        String::from_utf8(bytes).map_err(|err| AppError::Repository(err.to_string()))
     }
 
     /// The `titles` flow shared by movies and series.
@@ -3015,6 +3062,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canonical_vocabulary_rejects_oversized_wire_body_before_parsing() {
+        let server = MockServer::start().await;
+        let body = format!(
+            "{}{}",
+            " ".repeat(2 * 1024 * 1024),
+            r#"{"data":{"canonicalTagVocabulary":{"version":"v1","unchanged":true,"entries":[]}}}"#
+        );
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = signed_gateway_client(format!("{}/graphql", server.uri())).await;
+        let error = client
+            .canonical_tag_vocabulary(Some("v1"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("response exceeds size limit"));
+    }
+
+    #[tokio::test]
+    async fn bounded_graphql_body_rejects_chunked_overflow_without_content_length() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(socket.read_u8().await.unwrap());
+                }
+                socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\n1234\r\n5\r\n56789\r\n0\r\n\r\n").await.unwrap();
+            });
+            let response = scryer_outbound_http::smg_reqwest_client().get(format!("http://{address}")).send().await.unwrap();
+            assert_eq!(response.content_length(), None);
+            let error = MetadataGatewayClient::read_graphql_body(response, Some(8)).await.unwrap_err();
+            assert!(error.to_string().contains("response exceeds size limit"));
+            server.await.unwrap();
+        }).await.expect("chunked fixture completed");
+    }
+
+    #[tokio::test]
+    async fn bounded_graphql_body_accepts_exact_limit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("12345678"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let response = scryer_outbound_http::smg_reqwest_client()
+            .get(server.uri())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            MetadataGatewayClient::read_graphql_body(response, Some(8))
+                .await
+                .unwrap(),
+            "12345678"
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_vocabulary_uses_signed_gateway_transport_and_known_version() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/graphql"))
+            .and(body_string_contains("canonicalTagVocabulary"))
+            .and(body_string_contains("\"knownVersion\":\"fixture-v1\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "canonicalTagVocabulary": { "version": "fixture-v1", "unchanged": true, "entries": [] } }
+            }))).expect(1).mount(&server).await;
+        let client = signed_gateway_client(format!("{}/graphql", server.uri())).await;
+        let reply = client
+            .canonical_tag_vocabulary(Some("fixture-v1"))
+            .await
+            .unwrap();
+        assert!(reply.unchanged);
+        assert!(reply.entries.is_empty());
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_v2_signed_request(&requests[0]);
+    }
+
+    #[tokio::test]
     async fn get_metadata_bulk_uses_metadata_bulk_when_available() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -3611,6 +3744,49 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn apq_oversized_encoded_variables_use_post_without_losing_refs() {
+        let server = MockServer::start().await;
+        let variables = json!({"refs": (0..43).map(|id| json!({
+            "id": id,
+            "externalIds": (0..21).map(|external| json!({
+                "source":"mal", "kind":"anime", "id":format!("{id}-{external}")
+            })).collect::<Vec<_>>()
+        })).collect::<Vec<_>>(), "kind":"anime", "createMissing":true});
+        let client = unsigned_gateway_client(format!("{}/graphql", server.uri()));
+        let payload = json!({"operationName": "ResolveTitles", "query":"query ResolveTitles { fixture }",
+            "variables":variables, "extensions":{"persistedQuery":{"version":1,"sha256Hash":"fixture-hash"}}});
+        let mut encoded = reqwest::Url::parse(&format!("{}/graphql", server.uri())).unwrap();
+        encoded
+            .query_pairs_mut()
+            .append_pair("variables", &variables.to_string());
+        assert!(encoded.as_str().len() > 65_535);
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(wiremock::matchers::body_json(payload))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data":{"fixture":true}})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result: serde_json::Value = client
+            .execute_graphql_apq(
+                "ResolveTitles",
+                "query ResolveTitles { fixture }",
+                "fixture-hash",
+                variables,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, json!({"fixture":true}));
     }
 
     #[tokio::test]
@@ -7023,6 +7199,29 @@ impl MetadataGateway for MetadataGatewayClient {
             .await
     }
 
+    async fn canonical_tag_vocabulary(
+        &self,
+        known_version: Option<&str>,
+    ) -> AppResult<scryer_application::lists::vocabulary::VocabularyReply> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Response {
+            canonical_tag_vocabulary: scryer_application::lists::vocabulary::VocabularyReply,
+        }
+        let response: Response = self.execute_graphql_with_response_limit(serde_json::json!({
+            "query": "query CanonicalTagVocabulary($knownVersion: String) { canonicalTagVocabulary(knownVersion: $knownVersion) { version unchanged entries { key category name aliases } } }",
+            "variables": { "knownVersion": known_version }
+        }), Some(2 * 1024 * 1024)).await?;
+        Ok(response.canonical_tag_vocabulary)
+    }
+
+    async fn list_movie_targets(
+        &self,
+        ids: &[i64],
+    ) -> AppResult<Vec<scryer_application::lists::gateway::ListMovieTarget>> {
+        self.fetch_list_movie_targets(ids).await
+    }
+
     async fn list_chart_catalog(
         &self,
         language: &str,
@@ -7040,13 +7239,6 @@ impl MetadataGateway for MetadataGatewayClient {
     ) -> AppResult<Vec<scryer_application::lists::gateway::ListChartItem>> {
         self.fetch_list_chart_items(provider, chart_key, scope, limit, language)
             .await
-    }
-
-    async fn list_imdb_user_list(
-        &self,
-        list_id: &str,
-    ) -> AppResult<Vec<scryer_application::lists::gateway::ListChartItem>> {
-        self.fetch_list_imdb_user_list(list_id).await
     }
 
     async fn search_titles_multi(

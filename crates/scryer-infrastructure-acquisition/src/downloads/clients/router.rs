@@ -591,6 +591,20 @@ impl DownloadClient for FeedbackTimeoutDownloadClient {
         .await
     }
 
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<scryer_application::DownloadCleanupPayload>> {
+        self.run_feedback_read(self.inner.get_cleanup_payload_for_source(
+            client_id,
+            client_type,
+            download_client_item_id,
+        ))
+        .await
+    }
+
     async fn get_completed_download_for_source(
         &self,
         client_id: &str,
@@ -619,6 +633,25 @@ impl DownloadClient for FeedbackTimeoutDownloadClient {
 
     async fn resume_queue_item_for_client(&self, client_id: &str, id: &str) -> AppResult<()> {
         self.inner.resume_queue_item_for_client(client_id, id).await
+    }
+
+    async fn retry_failed_job(
+        &self,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        self.inner.retry_failed_job(id, password).await
+    }
+
+    async fn retry_failed_job_for_client(
+        &self,
+        client_id: &str,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        self.inner
+            .retry_failed_job_for_client(client_id, id, password)
+            .await
     }
 
     async fn delete_queue_item(
@@ -2241,6 +2274,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 self.delete_staged_nzb(Some(&staged_nzb), "browser_download_served")
                     .await;
                 Ok(ResolvedDownloadArtifact::Nzb {
+                    password_candidates: Default::default(),
                     bytes: bytes?,
                     file_name: None,
                     content_type: None,
@@ -2719,7 +2753,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             // Fail-closed: a selected client whose proxy will not resolve is a
             // routing failure, not a client to use unproxied.
             let proxy_config = self.proxy_for_download_client(&config).await?;
-            info!(
+            debug!(
                 client_id = config.id.as_str(),
                 stage = "proxy_resolved",
                 "download client submit stage"
@@ -2806,14 +2840,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
             };
 
-            info!(
+            debug!(
                 client_id = config.id.as_str(),
                 staged_nzb = effective_request.staged_nzb.is_some(),
                 stage = "routing_applied",
                 "download client submit stage"
             );
             let submit_result = client.submit_download(&effective_request).await;
-            info!(
+            debug!(
                 client_id = config.id.as_str(),
                 accepted = submit_result.is_ok(),
                 stage = "client_returned",
@@ -3613,6 +3647,59 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         Ok(all_items)
     }
 
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<scryer_application::DownloadCleanupPayload>> {
+        if !client_type.trim().eq_ignore_ascii_case("nzbget") {
+            return Ok(self
+                .get_completed_download_for_source(client_id, client_type, download_client_item_id)
+                .await?
+                .map(|download| scryer_application::DownloadCleanupPayload {
+                    download,
+                    native_delete_paths: Vec::new(),
+                }));
+        }
+        let reference = download_client_item_id.trim();
+        if client_id.trim().is_empty() || reference.is_empty() {
+            return Ok(None);
+        }
+        let clients = self.list_enabled_clients_by_priority_excluding(&[]).await?;
+        let Some(config) = clients.iter().find(|config| {
+            config.id == client_id.trim() && config.client_type.eq_ignore_ascii_case("nzbget")
+        }) else {
+            return Ok(None);
+        };
+        let proxy_config = self.proxy_for_download_client(config).await?;
+        let client = Self::client_from_config(
+            config,
+            self.staged_nzb_store.clone(),
+            self.staged_nzb_pipeline_limit.clone(),
+            self.plugin_provider.as_ref(),
+            self.feedback_read_timeout,
+            proxy_config.as_ref(),
+        )?;
+        let Some(mut payload) = client
+            .get_cleanup_payload_for_source(&config.id, &config.client_type, reference)
+            .await?
+        else {
+            return Ok(None);
+        };
+        payload.download.client_id = config.id.clone();
+        if let Some(mappings) = download_client_remote_path_mappings(config).as_deref() {
+            for path in &mut payload.native_delete_paths {
+                let mut location = payload.download.clone();
+                location.dest_dir = path.clone();
+                apply_remote_path_mappings_to_completed_download(&mut location, mappings);
+                *path = location.dest_dir;
+            }
+            apply_remote_path_mappings_to_completed_download(&mut payload.download, mappings);
+        }
+        Ok(Some(payload))
+    }
+
     async fn get_completed_download_for_source(
         &self,
         client_id: &str,
@@ -3726,6 +3813,22 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         Err(AppError::Validation(format!(
             "download client not found: {client_id}"
         )))
+    }
+
+    async fn retry_failed_job_for_client(
+        &self,
+        client_id: &str,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        let client = match self.resolve_client_for_id(client_id).await {
+            Ok(Some(client)) => client,
+            // Configuration failures happen before any remote mutation.
+            Ok(None) | Err(_) => {
+                return Ok(scryer_application::DownloadClientRetryOutcome::Refused);
+            }
+        };
+        client.retry_failed_job(id, password).await
     }
 
     async fn delete_queue_item(
@@ -4013,6 +4116,7 @@ mod tests {
 
     fn resolved_nzb_fixture() -> ResolvedDownloadArtifact {
         ResolvedDownloadArtifact::Nzb {
+            password_candidates: Default::default(),
             bytes: b"<nzb></nzb>".to_vec(),
             file_name: Some("fixture.nzb".to_string()),
             content_type: Some("application/x-nzb".to_string()),
@@ -5866,6 +5970,7 @@ mod tests {
         );
         request.indexer_id = Some("indexer-1".to_string());
         request.staged_nzb = Some(StagedNzbRef {
+            password_candidates: Default::default(),
             id: "staged-missing-client".to_string(),
             compressed_path: std::path::PathBuf::from("/tmp/staged-missing-client.nzb.zst"),
             raw_size_bytes: 128,
@@ -5933,6 +6038,7 @@ mod tests {
         );
         request.indexer_id = Some("indexer-1".to_string());
         request.staged_nzb = Some(StagedNzbRef {
+            password_candidates: Default::default(),
             id: "staged-incompatible".to_string(),
             compressed_path: std::path::PathBuf::from("/tmp/staged-incompatible.nzb.zst"),
             raw_size_bytes: 128,
@@ -5999,6 +6105,7 @@ mod tests {
         );
         request.indexer_id = Some("indexer-1".to_string());
         request.staged_nzb = Some(StagedNzbRef {
+            password_candidates: Default::default(),
             id: "staged-scope-disabled".to_string(),
             compressed_path: std::path::PathBuf::from("/tmp/staged-scope-disabled.nzb.zst"),
             raw_size_bytes: 128,
@@ -6066,6 +6173,7 @@ mod tests {
         );
         request.indexer_id = Some("indexer-1".to_string());
         request.staged_nzb = Some(StagedNzbRef {
+            password_candidates: Default::default(),
             id: "staged-1".to_string(),
             compressed_path: std::path::PathBuf::from("/tmp/staged-1.nzb.zst"),
             raw_size_bytes: 128,
@@ -6372,6 +6480,7 @@ mod tests {
             source_hint: Some("https://example.invalid/release.nzb".to_string()),
             staged_nzb: None,
             resolved_download_artifact: Some(ResolvedDownloadArtifact::Nzb {
+                password_candidates: Default::default(),
                 bytes: ANIME_CATEGORY_NZB.to_vec(),
                 file_name: Some("release.nzb".to_string()),
                 content_type: Some("application/x-nzb".to_string()),
@@ -8495,6 +8604,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nzbget_cleanup_lookup_maps_final_and_native_paths_for_exact_client() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"result":[{
+                "NZBID":42, "Status":"FAILURE/UNPACK", "Name":"Job", "DestDir":"/remote/intermediate/job",
+                "FinalDir":"/remote/final/job", "DeleteStatus":"NONE", "ParStatus":"SUCCESS", "UnpackStatus":"FAILURE",
+                "MoveStatus":"NONE", "ScriptStatus":"NONE", "MarkStatus":"NONE", "UrlStatus":"NONE"
+            }]}))).expect(1).mount(&server).await;
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository { configs: vec![DownloadClientConfig {
+                config_json: serde_json::json!({"host":server.address().ip().to_string(), "port":server.address().port().to_string(), "remote_path_mappings":"/remote => /mapped"}).to_string(),
+                ..test_config("nzb", "NZBGet", "nzbget", 0)
+            }] }),
+            Arc::new(MockSettingsRepository::default()), null_staged_nzb_store(), test_pipeline_limit(), None,
+        );
+        assert!(
+            router
+                .get_cleanup_payload_for_source("other", "nzbget", "42")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let payload = router
+            .get_cleanup_payload_for_source("nzb", "nzbget", "42")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload.download.client_id, "nzb");
+        assert_eq!(payload.download.dest_dir, "/mapped/final/job");
+        assert_eq!(
+            payload.native_delete_paths,
+            vec!["/mapped/intermediate/job"]
+        );
+    }
+
+    #[tokio::test]
     async fn list_completed_downloads_applies_remote_path_mappings_from_client_config() {
         let client = Arc::new(MockDownloadClient::default());
         client
@@ -8779,6 +8924,10 @@ mod tests {
                 .get_completed_download_for_source("client-a", "qbittorrent", "item-a")
                 .await
                 .expect_err("targeted completed download reads should time out"),
+            wrapped
+                .get_cleanup_payload_for_source("client-a", "nzbget", "item-a")
+                .await
+                .expect_err("cleanup-only reads should time out"),
         ];
 
         for error in errors {

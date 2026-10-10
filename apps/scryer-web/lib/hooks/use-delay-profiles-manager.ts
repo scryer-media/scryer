@@ -148,7 +148,7 @@ export function useDelayProfilesManager() {
           })
           .toPromise();
         if (result.error) {
-          showStatus(t("settings.delayProfileSaveError"));
+          showStatus(t("settings.delayProfileSaveError"), { level: "ERROR" });
           return false;
         }
         const saved = result.data?.upsertDelayProfile
@@ -159,10 +159,10 @@ export function useDelayProfilesManager() {
           : profiles.map((profile) => (profile.id === saved.id ? saved : profile));
         setProfiles(next);
         setDraft(cloneDelayProfileDraft(buildDelayProfileTemplate(next)));
-        showStatus(t("settings.delayProfilesSaved"));
+        showStatus(t("settings.delayProfilesSaved"), { level: "SUCCESS" });
         return true;
       } catch {
-        showStatus(t("settings.delayProfileSaveError"));
+        showStatus(t("settings.delayProfileSaveError"), { level: "ERROR" });
         return false;
       } finally {
         setSaving(false);
@@ -179,14 +179,14 @@ export function useDelayProfilesManager() {
           .mutation(deleteDelayProfileMutation, { id: profileId })
           .toPromise();
         if (result.error) {
-          showStatus(t("settings.delayProfileSaveError"));
+          showStatus(t("settings.delayProfileSaveError"), { level: "ERROR" });
           return false;
         }
         const next = profiles.filter((profile) => profile.id !== profileId);
         setProfiles(next);
         return true;
       } catch {
-        showStatus(t("settings.delayProfileSaveError"));
+        showStatus(t("settings.delayProfileSaveError"), { level: "ERROR" });
         return false;
       } finally {
         setSaving(false);

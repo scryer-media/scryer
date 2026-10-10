@@ -141,7 +141,7 @@ export function SettingsRecycleBinContainer() {
       setSettings(data.recycleBinSettings);
     } catch (error) {
       setSettings(null);
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     } finally {
       setSettingsLoading(false);
     }
@@ -178,7 +178,7 @@ export function SettingsRecycleBinContainer() {
         setSelectedLibraryIds((current) => normalizeLibraryFilterSelection(current, nextLibraries));
       })
       .catch((error) => {
-        if (!cancelled) setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+        if (!cancelled) setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
       })
       .finally(() => {
         if (!cancelled) setLibrariesLoading(false);
@@ -213,7 +213,7 @@ export function SettingsRecycleBinContainer() {
       setTotalCount(data?.recycledItems?.totalCount ?? 0);
       setSelectedItemIds((current) => new Set(Array.from(current).filter((id) => nextIds.has(id))));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     } finally {
       setItemsLoading(false);
     }
@@ -249,9 +249,10 @@ export function SettingsRecycleBinContainer() {
         savedRelocation && savedRelocation.failures.length > 0
           ? t("status.recycleBinSettingsSavedWithRelocationFailures")
           : t("status.recycleBinSettingsSaved"),
+        { level: "SUCCESS" },
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setSettingsSaving(false);
     }
@@ -273,7 +274,7 @@ export function SettingsRecycleBinContainer() {
         setItemsRefreshRevision((current) => current + 1);
       });
       jobUnregistersRef.current.add(unregister);
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "SUCCESS" });
     },
     [registerInteractiveJobRun, setGlobalStatus, t],
   );
@@ -322,7 +323,7 @@ export function SettingsRecycleBinContainer() {
         conflictPolicy: "KEEP_BOTH",
       });
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingId(null);
     }
@@ -364,7 +365,7 @@ export function SettingsRecycleBinContainer() {
       );
       setPendingAction(null);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingId(null);
     }
@@ -394,7 +395,7 @@ export function SettingsRecycleBinContainer() {
       );
       setPendingAction(null);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingId(null);
     }
@@ -427,7 +428,7 @@ export function SettingsRecycleBinContainer() {
       );
       setPendingAction(null);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingId(null);
     }

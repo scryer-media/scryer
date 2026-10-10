@@ -13,7 +13,9 @@ export type JobScheduleKind =
   | "MANUAL"
   | "INTERVAL"
   | "STARTUP_AND_INTERVAL"
-  | "DAILY_AT_TIME";
+  | "DAILY_AT_TIME"
+  | "CRON"
+  | "WEEKLY_AT_TIME";
 
 export type JobTriggerSource =
   | "MANUAL"
@@ -54,7 +56,8 @@ export type JobKey =
   | "ACQUISITION_SEARCH"
   | "AUTO_BACKUP"
   | "APPLICATION_UPGRADE"
-  | "LOCATION_OPERATION";
+  | "LOCATION_OPERATION"
+  | "CUSTOM_JOB";
 
 export type JobScheduleInfo = {
   kind: JobScheduleKind;
@@ -66,6 +69,8 @@ export type JobScheduleInfo = {
 
 export type JobDefinition = {
   key: JobKey;
+  /** The script id of a user-defined job; null for built-in jobs. */
+  customJobId: string | null;
   displayName: string;
   description: string;
   category: JobCategory;
@@ -78,6 +83,8 @@ export type JobDefinition = {
 export type JobRun = {
   id: string;
   jobKey: JobKey;
+  /** The script id of a user-defined job; null for built-in jobs. */
+  customJobId: string | null;
   displayName: string;
   category: JobCategory;
   section: JobSection;
@@ -90,4 +97,13 @@ export type JobRun = {
   errorText: string | null;
   progressJson: unknown;
   libraryScanProgress: LibraryScanProgress | null;
+};
+
+/**
+ * Identifies one job instance. Built-in jobs are identified by their key alone;
+ * every user-defined job shares the CUSTOM_JOB key and is told apart by its id.
+ */
+export type JobTarget = {
+  jobKey: JobKey;
+  customJobId: string | null;
 };

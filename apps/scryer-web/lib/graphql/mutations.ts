@@ -6,11 +6,13 @@ import {
   MAINTENANCE_RULE_SET_DETAIL_FIELDS,
   MAINTENANCE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
+  POST_PROCESSING_SCRIPT_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
   REQUEST_RULE_DECISION_FIELDS,
   REQUEST_RULE_SET_DETAIL_FIELDS,
   REQUEST_RULE_SET_FIELDS,
+  SCRIPT_INTERPRETER_SETTINGS_FIELDS,
   SEEDING_PROFILE_FIELDS,
   SUBTITLE_PROVIDER_CONFIG_FIELDS,
   SUBTITLE_SETTINGS_FIELDS,
@@ -652,6 +654,12 @@ export const dismissMediaRequestMutation = `mutation DismissMediaRequest($reques
 }
 }`;
 
+export const reopenMediaRequestMutation = `mutation ReopenMediaRequest($requestId: ID!) {
+  reopenMediaRequest(requestId: $requestId) {
+    requestId
+  }
+}`;
+
 export const updateMyMediaRequestMutation = `mutation UpdateMyMediaRequest($input: UpdateMediaRequestInput!) {
   updateMyMediaRequest(input: $input) {
     id
@@ -813,8 +821,8 @@ export const ignorePendingImportMutation = `mutation IgnorePendingImport($pendin
   }
 }`;
 
-export const triggerJobMutation = `mutation TriggerJob($jobKey: JobKeyValue!) {
-  triggerJob(jobKey: $jobKey) {
+export const triggerJobMutation = `mutation TriggerJob($jobKey: JobKeyValue!, $customJobId: ID) {
+  triggerJob(jobKey: $jobKey, customJobId: $customJobId) {
 ${JOB_RUN_FIELDS}
   }
 }`;
@@ -891,12 +899,48 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
     density
     sidebarMode
     defaultLandingView
+    language
     tableColumns {
+      deviceClass
       facet
       tableViewMode
       columnId
       columnOrder
       visible
+    }
+    catalogViews {
+      deviceClass
+      facet
+      viewMode
+    }
+  }
+}`;
+
+export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMyCatalogViewInput!) {
+  setMyCatalogView(input: $input) {
+    theme
+    dateTimeFormat
+    highlightColor
+    secondaryColor
+    highContrastMode
+    reduceMotion
+    hideSponsorButton
+    density
+    sidebarMode
+    defaultLandingView
+    language
+    tableColumns {
+      deviceClass
+      facet
+      tableViewMode
+      columnId
+      columnOrder
+      visible
+    }
+    catalogViews {
+      deviceClass
+      facet
+      viewMode
     }
   }
 }`;
@@ -1291,7 +1335,22 @@ const serviceSettingsFieldSelection = `
     tlsKeyPath
     trustedProxyIps
     trustedProxyOverride
-    trustedProxySource`;
+    trustedProxySource
+    publicUrl
+    publicUrlSource
+    publicUrlSaved
+    publicUrlError
+    publicUrlErrorCode
+    publicUrlEditable
+    basePath
+    basePathSource
+    bindAddress
+    bindSource
+    passkeyRpId
+    passkeyRpOrigin
+    passkeyRpSource
+    passkeyUserCount
+    passkeyOnlyUserCount`;
 
 export const saveQualityProfileSettingsMutation = `mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
   saveQualityProfileSettings(input: $input) {${qualityProfileSettingsFieldSelection}
@@ -1871,6 +1930,8 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
       resultCount
       elapsedMs
       failureReason
+      skipReason
+      skippedUntil
     }
     startedAt
     completedAt
@@ -2867,10 +2928,11 @@ export const rehydrateAllMetadataMutation = `mutation RehydrateAllMetadata($inpu
   }
 }`;
 
-const ppScriptFields = `
-    id name description scriptType scriptContent appliedFacets
-    executionMode timeoutSecs priority enabled debug createdAt updatedAt
-`;
+const ppScriptFields = POST_PROCESSING_SCRIPT_FIELDS;
+
+export const updateScriptInterpreterSettingsMutation = `mutation UpdateScriptInterpreterSettings($input: ScriptInterpreterSettingsInput!) {
+  updateScriptInterpreterSettings(input: $input) {${SCRIPT_INTERPRETER_SETTINGS_FIELDS}  }
+}`;
 
 export const createPostProcessingScriptMutation = `mutation CreatePostProcessingScript($input: CreatePostProcessingScriptInput!) {
   createPostProcessingScript(input: $input) {${ppScriptFields}}
@@ -3044,6 +3106,19 @@ export const retryImportMutation = `mutation RetryImport($input: RetryImportInpu
     sourcePath
     destPath
     errorMessage
+  }
+}`;
+
+export const releaseHeldImportSourcesMutation = `mutation ReleaseHeldImportSources($input: ReleaseHeldImportSourcesInput!) {
+  releaseHeldImportSources(input: $input) {
+    importId
+    releasedImportIds
+    settlement
+    clientPolicy
+    workspaceRemoved
+    workspacesRemoved
+    preservedWorkspaceReasons
+    workspaceLookupIncomplete
   }
 }`;
 

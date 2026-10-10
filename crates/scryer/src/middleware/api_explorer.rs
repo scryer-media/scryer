@@ -368,6 +368,7 @@ mod tests {
             auth_runtime: ctx.auth_runtime.clone(),
             rate_limiter: ScryerRateLimiter::from_env(Default::default()),
             ws_origin_policy: WebSocketOriginPolicy::default(),
+            list_account_origin_policy: Default::default(),
             authless_web_client_proof: AuthlessWebClientProofState::new(),
         };
         let mut request = Request::builder()

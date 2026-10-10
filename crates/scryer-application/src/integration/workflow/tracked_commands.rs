@@ -914,9 +914,13 @@ impl AppUseCase {
 /// resolve or replace the download; Sonarr's `FailedDownloadService` acts only
 /// on `Failed`/`IsEncrypted` and lets warnings persist the same way.
 ///
-/// Usenet downloads keep the timeout. Anything that is not a warned,
-/// Scryer-origin download is irrelevant and reports `true` (the tracker then
-/// ignores it on its own checks).
+/// Usenet clients keep the timeout: no seeding obligation exists, and a stuck
+/// usenet download is exactly what failed-download handling is for. For NZBGet
+/// the resulting cleanup still revalidates the history row before any native
+/// delete, so a retained warning is failed in Scryer without touching its
+/// payload. Anything that is not a warned, Scryer-origin download is
+/// irrelevant and reports `true` (the tracker then ignores it on its own
+/// checks).
 pub(crate) fn warning_timeout_applies(
     app: &AppUseCase,
     td: &crate::tracked_downloads::TrackedDownload,
@@ -1065,6 +1069,10 @@ async fn process_tracked_download_snapshot(
     // freshness writes those rows came due for are written here as one
     // transaction rather than one per row inside a resolution transaction.
     crate::download_identity::flush_shared_observation_touches(app).await;
+
+    // A definitive refusal can clear its durable claim after the native job
+    // disappears. Keep ambiguous claims visible, clear only settled holds.
+    runtime.tracker.reconcile_password_retry_holds(app).await;
 
     let full_authoritative_listing = matches!(
         prune,
@@ -1357,6 +1365,23 @@ pub(crate) async fn drop_source_removed_from_client(
             return;
         }
     };
+
+    if let Some(binding) = &binding {
+        match app
+            .services
+            .workflow
+            .download_submissions
+            .password_retry_observation(&binding.download_id)
+            .await
+        {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(_) => {
+                tracing::warn!(download_id = %binding.download_id,
+                    "client job absence cannot retire a pending password retry; awaiting reconciliation");
+                return;
+            }
+        }
+    }
 
     if let Err(error) = finalize_scryer_download_ignored_for_download(
         app,
@@ -1988,6 +2013,20 @@ pub(crate) async fn assign_tracked_download_title_command(
     publish_runtime_tracked_download_and_activity_item(app, tracker, Some(activity_item)).await;
     Ok(())
 }
+
+/// Run one tracked-download command against `tracker` with no work in flight.
+#[cfg(test)]
+pub(crate) async fn run_tracked_download_command_for_tests(
+    app: &AppUseCase,
+    actor: &User,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    command: crate::tracked_downloads::TrackedDownloadCommand,
+) {
+    let mut in_flight = HashSet::new();
+    let (work_tx, _work_rx) = tokio::sync::mpsc::unbounded_channel();
+    handle_tracked_download_command(app, actor, tracker, &mut in_flight, &work_tx, command).await;
+}
+
 async fn handle_tracked_download_command(
     app: &AppUseCase,
     actor: &User,
@@ -2205,6 +2244,112 @@ async fn handle_tracked_download_command(
                     .await;
             }
             let _ = reply.send(result);
+        }
+        TrackedDownloadCommand::ReleaseHeldImport {
+            id,
+            canonical_download_id,
+            verification,
+            reply,
+        } => {
+            use crate::tracked_downloads::HeldImportReleaseSettlement;
+            let requested_id = id;
+            let (id, target) = resolve_tracked_command_target_for_download(
+                tracker,
+                canonical_download_id.as_ref(),
+                &requested_id,
+            );
+            if target.is_some() && tracked_work_in_flight.contains(&id) {
+                let _ = reply.send(Err(AppError::Validation(format!(
+                    "tracked download {requested_id} is busy processing"
+                ))));
+                return;
+            }
+            let Some(download_id) =
+                target.filter(|download_id| tracker.get_by_download_id(*download_id).is_some())
+            else {
+                let _ = reply.send(Err(AppError::NotFound(format!(
+                    "tracked download {requested_id}"
+                ))));
+                return;
+            };
+            // Only a download the hold itself blocked is settled here. Any
+            // other state belongs to the workflow that put it there.
+            let blocked_on_hold = tracker.get_by_download_id(download_id).is_some_and(|td| {
+                td.state == TrackedDownloadState::ImportBlocked
+                    && td.status_messages.iter().any(|message| {
+                        message == crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING
+                    })
+            });
+            if !blocked_on_hold {
+                let _ = reply.send(Ok(HeldImportReleaseSettlement::Unchanged));
+                return;
+            }
+            let Some(td) = tracker.get_mut_by_download_id(download_id) else {
+                let _ = reply.send(Err(AppError::NotFound(format!(
+                    "tracked download {requested_id}"
+                ))));
+                return;
+            };
+            let verdict = match crate::completed_download_handler::settle_released_import_hold(
+                app,
+                td,
+                verification,
+            )
+            .await
+            {
+                Ok(verdict) => verdict,
+                Err(error) => {
+                    // Not settled: the download stays blocked on the hold's
+                    // warning and nothing is cleaned up. The download is
+                    // tracked, so a missing record met while settling must
+                    // not read as an untracked download: the release stays
+                    // resumable.
+                    let error = match error {
+                        AppError::NotFound(message) => AppError::Validation(format!(
+                            "held sources could not be settled: {message}"
+                        )),
+                        other => other,
+                    };
+                    let _ = reply.send(Err(error));
+                    return;
+                }
+            };
+            use crate::completed_download_handler::ReleasedHoldVerdict;
+            let imported = verdict == ReleasedHoldVerdict::Imported;
+            let activity_item = Some(tracked_download_activity_queue_item(td));
+            if imported {
+                tracker
+                    .persist_terminal_state_by_download_id(
+                        app,
+                        download_id,
+                        TrackedDownloadState::Imported,
+                    )
+                    .await;
+                finalize_tracked_terminal_state_for_download(
+                    app,
+                    tracker,
+                    download_id,
+                    TrackedDownloadState::Imported,
+                )
+                .await;
+            } else if verdict == ReleasedHoldVerdict::Unproven {
+                // Still an operator decision point, now for a different
+                // reason: record it durably so a restart shows why the
+                // download stays blocked rather than the released hold.
+                crate::tracked_downloads::persist_import_blocked_state_marker(
+                    app,
+                    td,
+                    crate::tracked_downloads::ImportBlockedReason::AfterImport,
+                    td.status_messages.first().map(String::as_str),
+                )
+                .await;
+            }
+            publish_runtime_tracked_download_and_activity_item(app, tracker, activity_item).await;
+            let _ = reply.send(Ok(match verdict {
+                ReleasedHoldVerdict::Imported => HeldImportReleaseSettlement::Imported,
+                ReleasedHoldVerdict::AwaitingImport => HeldImportReleaseSettlement::AwaitingImport,
+                ReleasedHoldVerdict::Unproven => HeldImportReleaseSettlement::Unproven,
+            }));
         }
         TrackedDownloadCommand::MarkImportedIfAwaitingImport {
             source_identity: _,

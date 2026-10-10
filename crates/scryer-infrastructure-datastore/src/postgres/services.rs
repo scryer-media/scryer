@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use scryer_application::{AppError, AppResult};
 use sqlx::ConnectOptions;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgConnectOptions;
 use tracing::log::LevelFilter;
 
 use crate::encryption::{EncryptionKey, load_existing_encryption_key_without_generation};
@@ -12,7 +12,7 @@ use crate::types::MigrationMode;
 
 const DEFAULT_POSTGRES_MAX_CONNECTIONS: u32 = 16;
 const MAX_POSTGRES_CONNECTIONS_CAP: u32 = 128;
-const POSTGRES_SLOW_STATEMENT_WARN_MS: u64 = 1000;
+const POSTGRES_SLOW_STATEMENT_MS: u64 = 2000;
 
 fn postgres_max_connections_from_env() -> u32 {
     std::env::var("SCRYER_POSTGRES_MAX_CONNECTIONS")
@@ -67,17 +67,16 @@ impl PostgresServices {
                     AppError::Repository(format!("invalid PostgreSQL database URL: {error}"))
                 })?;
         connect_options = connect_options.log_slow_statements(
-            LevelFilter::Warn,
-            std::time::Duration::from_millis(POSTGRES_SLOW_STATEMENT_WARN_MS),
+            LevelFilter::Debug,
+            std::time::Duration::from_millis(POSTGRES_SLOW_STATEMENT_MS),
         );
 
-        let pool = PgPoolOptions::new()
-            .max_connections(postgres_max_connections_from_env())
-            .connect_with(connect_options)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("cannot open PostgreSQL database: {error}"))
-            })?;
+        let pool = super::startup::connect_pool_with_startup_retry(
+            connect_options,
+            postgres_max_connections_from_env(),
+            super::startup::StartupRetryPolicy::from_env(),
+        )
+        .await?;
 
         let migration_encryption_key = load_existing_encryption_key_without_generation(data_dir)
             .map_err(AppError::Repository)?;

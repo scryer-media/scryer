@@ -67,13 +67,14 @@ use crate::{
     SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
     TitleEpisodeProgressSummary, TitleImageBlob, TitleImageKind, TitleImageProcessor,
     TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
-    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary, UiSettings,
-    UiSettingsUpdate, UpstreamScheduler, UserExternalAccountRepository, UserUiSettingsRepository,
-    VerifiedExternalIdentity, WebauthnChallengeRecord, WebauthnCredentialRecord,
-    WebauthnRepository, WorkflowOperationInfo, WorkflowOperationRepository,
-    ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo, ports::LogicalBackupExporter,
-    ports::TotpRepository, types::TotpCredentialRecord, types::TotpEnrollmentChallengeRecord,
-    types::TotpFailedAttemptRecord, types::TotpRecoveryCodeRecord,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary,
+    UiCatalogViewSetting, UiCatalogViewUpdate, UiSettings, UiSettingsUpdate, UpstreamScheduler,
+    UserExternalAccountRepository, UserUiSettingsRepository, VerifiedExternalIdentity,
+    WebauthnChallengeRecord, WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
+    WorkflowOperationRepository, ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo,
+    ports::LogicalBackupExporter, ports::TotpRepository, types::TotpCredentialRecord,
+    types::TotpEnrollmentChallengeRecord, types::TotpFailedAttemptRecord,
+    types::TotpRecoveryCodeRecord,
 };
 
 #[derive(Default)]
@@ -1157,6 +1158,17 @@ impl MediaFileRepository for NullMediaFileRepository {
         ))
     }
 
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        _title_id: &str,
+        _file_id: &str,
+        _episode_ids: &[String],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "media file repository is not configured".to_string(),
+        ))
+    }
+
     async fn mark_scan_failed(&self, _file_id: &str, _error: &str) -> AppResult<()> {
         Err(AppError::Repository(
             "media file repository is not configured".to_string(),
@@ -2052,8 +2064,23 @@ impl PostProcessingScriptRepository for NullPostProcessingScriptRepository {
     ) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
         Ok(vec![])
     }
+    async fn list_enabled_scheduled(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        Ok(vec![])
+    }
+    async fn list_scripts_by_trigger(
+        &self,
+        _trigger: scryer_domain::ScriptTrigger,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        Ok(vec![])
+    }
     async fn record_run(&self, _run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
         Ok(())
+    }
+    async fn update_run(&self, _run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
+        Ok(())
+    }
+    async fn reconcile_interrupted_runs(&self) -> AppResult<u64> {
+        Ok(0)
     }
     async fn list_runs_for_script(
         &self,
@@ -3318,6 +3345,16 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         ))
     }
 
+    async fn reopen_rejected(
+        &self,
+        _request_id: &str,
+        _reopened_event: NewDomainEvent,
+    ) -> AppResult<MediaRequestUpdateResult> {
+        Err(AppError::Repository(
+            "media request repository not configured".into(),
+        ))
+    }
+
     async fn count_pending_by_facet(
         &self,
         _library_ids: &[String],
@@ -4042,7 +4079,25 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         current.density = settings.density;
         current.sidebar_mode = settings.sidebar_mode;
         current.default_landing_view = settings.default_landing_view;
-        current.table_columns = settings.table_columns;
+        current.language = settings.language.flatten();
+        current.table_columns = settings.table_columns.unwrap_or_default();
+        Ok(current)
+    }
+
+    async fn set_catalog_view(
+        &self,
+        user_id: &str,
+        update: UiCatalogViewUpdate,
+    ) -> AppResult<UiSettings> {
+        let mut current = UiSettings::defaults_for_user(user_id.to_string());
+        if let Some(view_mode) = update.view_mode {
+            current.catalog_views.push(UiCatalogViewSetting {
+                device_class: update.device_class,
+                facet: update.facet,
+                view_mode,
+            });
+        }
+        current.table_columns = update.columns.unwrap_or_default();
         Ok(current)
     }
 }
@@ -4625,6 +4680,7 @@ pub mod test_nulls {
             _: tokio_util::sync::CancellationToken,
         ) -> AppResult<IndexerSearchResponse> {
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: crate::IndexerSearchCompletion::Complete,
 
                 indexer_outcomes: Vec::new(),

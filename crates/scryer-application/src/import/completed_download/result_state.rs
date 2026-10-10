@@ -232,6 +232,155 @@ fn schedule_partial_import_retry(td: &mut TrackedDownload) {
     });
 }
 
+/// What settling a released hold did to the tracked download.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReleasedHoldVerdict {
+    /// Verification proved the download complete.
+    Imported,
+    /// Not proven complete: back to `ImportPending` behind the ordinary retry
+    /// backoff, with nothing cleaned up.
+    AwaitingImport,
+    /// A held import's reason means the download may hold content that was
+    /// never extracted or imported, and verification did not prove every
+    /// expected unit imported. It is left blocked for the operator, with no
+    /// retry scheduled and nothing cleaned up.
+    Unproven,
+}
+
+/// Shown on a download whose release was refused because nothing proves
+/// every file in it was imported.
+pub(crate) const RELEASED_HOLD_UNPROVEN_WARNING: &str = "Held sources were released, but nothing \
+     proves every file in this download was imported, so it was not marked imported and \
+     nothing was removed. Import the rest or remove the download yourself.";
+
+/// Settle a download whose import was held, once an operator released that
+/// hold, exactly as the import path would verify it: with the release
+/// evidence resolved from the download's submission, and in the same mode the
+/// held imports used. Imported only when that verification proves the
+/// download complete. When `require_positive_proof` is set, anything short of
+/// that proof, including a verdict that rests on the verifier's fallback
+/// (expected units not established, partly covered, or only visible files
+/// accounted for), leaves it blocked rather than returning it to the retry.
+///
+/// An error means nothing was settled and the download was left untouched:
+/// its completed source is unknown, or the release evidence of a download
+/// Scryer grabbed could not be resolved. Without that evidence a pack whose
+/// name does not parse could verify against its imported files alone.
+pub(crate) async fn settle_released_import_hold(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    verification: crate::tracked_downloads::HeldImportVerification,
+) -> AppResult<ReleasedHoldVerdict> {
+    let Some(completed) = td.completed_source.clone() else {
+        return Err(crate::AppError::Validation(
+            "the completed download has not been observed yet; release again once it has".into(),
+        ));
+    };
+    let (completed, release_evidence) =
+        match resolve_completed_download_origin_for_import(app, &completed, Some(&td.client_item))
+            .await?
+        {
+            ResolvedCompletedDownloadOriginForImport::Ready {
+                completed,
+                release_evidence,
+            } => (*completed, Some(release_evidence)),
+            ResolvedCompletedDownloadOriginForImport::NoScryerOrigin => {
+                if td.client_item.is_scryer_origin {
+                    return Err(crate::AppError::Validation(
+                        "the grab this download came from could not be resolved; release again \
+                         once it can"
+                            .into(),
+                    ));
+                }
+                (completed, None)
+            }
+        };
+    let snapshot = td.clone();
+    let verified = async {
+        use super::verification::{VerificationOutcome, verify_released_hold_outcome};
+        let mut outcomes = Vec::with_capacity(2);
+        // A held automatic import with no recorded mode is verified as one.
+        if verification.automatic || verification.manual_expected_mapping_count.is_none() {
+            outcomes.push(
+                verify_released_hold_outcome(
+                    app,
+                    &snapshot,
+                    &completed,
+                    release_evidence.as_ref(),
+                    None,
+                )
+                .await?,
+            );
+        }
+        if let Some(expected) = verification.manual_expected_mapping_count {
+            outcomes.push(
+                verify_released_hold_outcome(
+                    app,
+                    &snapshot,
+                    &completed,
+                    release_evidence.as_ref(),
+                    Some(expected),
+                )
+                .await?,
+            );
+        }
+        Ok::<_, crate::AppError>(if outcomes.contains(&VerificationOutcome::NotProven) {
+            VerificationOutcome::NotProven
+        } else if outcomes.contains(&VerificationOutcome::Fallback) {
+            VerificationOutcome::Fallback
+        } else {
+            VerificationOutcome::Proven
+        })
+    }
+    .await;
+    match verified {
+        Ok(outcome)
+            if outcome == super::verification::VerificationOutcome::Proven
+                || (outcome == super::verification::VerificationOutcome::Fallback
+                    && !verification.require_positive_proof) =>
+        {
+            td.clear_no_video_import_retry();
+            td.clear_import_execution_retry();
+            td.state = TrackedDownloadState::Imported;
+            td.status = TrackedDownloadStatus::Ok;
+            td.status_messages.clear();
+            Ok(ReleasedHoldVerdict::Imported)
+        }
+        // The ordinary retry settles on the fallback verdict, so a download
+        // that needs positive proof never goes back to it: it stays blocked
+        // for the operator whether the proof fell short or is missing. When
+        // the evidence could not be read at all, nothing is settled and the
+        // release stays open for another attempt.
+        Ok(_) if verification.require_positive_proof => {
+            block_unproven_release(td);
+            Ok(ReleasedHoldVerdict::Unproven)
+        }
+        Err(error) if verification.require_positive_proof => {
+            tracing::warn!(tracked_id = %td.id, error = %error, "import verification evidence is unavailable");
+            Err(error)
+        }
+        Ok(_) => {
+            schedule_partial_import_retry(td);
+            Ok(ReleasedHoldVerdict::AwaitingImport)
+        }
+        Err(error) => {
+            tracing::warn!(tracked_id = %td.id, error = %error, "import verification evidence is unavailable");
+            schedule_import_verification_retry(td);
+            Ok(ReleasedHoldVerdict::AwaitingImport)
+        }
+    }
+}
+
+/// Leave a released download blocked for the operator, with no retry that
+/// could later settle it and nothing cleaned up.
+fn block_unproven_release(td: &mut TrackedDownload) {
+    td.clear_no_video_import_retry();
+    td.clear_import_execution_retry();
+    td.state = TrackedDownloadState::ImportBlocked;
+    td.status = TrackedDownloadStatus::Warning;
+    td.status_messages = vec![RELEASED_HOLD_UNPROVEN_WARNING.to_string()];
+}
+
 #[cfg(test)]
 pub(super) async fn apply_import_result(
     app: &AppUseCase,
@@ -250,6 +399,15 @@ pub(crate) async fn apply_import_result_with_completed(
     completed: Option<&CompletedDownload>,
     release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
 ) -> bool {
+    if result.decision == ImportDecision::Imported
+        && result.error_message.as_deref()
+            == Some(crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING)
+    {
+        td.state = TrackedDownloadState::ImportBlocked;
+        td.status = TrackedDownloadStatus::Warning;
+        td.status_messages = vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING.into()];
+        return false;
+    }
     let already_imported = result.decision == ImportDecision::Skipped
         && result.skip_reason == Some(ImportSkipReason::AlreadyImported);
     let intentionally_ignored_aggregate =
@@ -401,6 +559,33 @@ pub(crate) async fn apply_import_result_with_completed(
         td.status_messages = vec![import_result_message(&result, ImportStatus::Failed)];
         td.burned_by_import_gate = true;
         return false;
+    }
+
+    if result.skip_reason == Some(ImportSkipReason::UnwantedExecutables) {
+        // A download that holds nothing but executables is a bad posting, not
+        // a download to review. A grab of Scryer's own goes to failure
+        // handling, which blocklists the release, reopens the scope and lets
+        // terminal cleanup remove the download and its files from the client.
+        // A download Scryer did not grab stays blocked for the operator.
+        td.clear_no_video_import_retry();
+        td.clear_import_execution_retry();
+        if td.client_item.is_scryer_origin {
+            let message = result
+                .error_message
+                .clone()
+                .unwrap_or_else(|| import_result_message(&result, ImportStatus::Failed));
+            tracing::warn!(
+                id = %td.id,
+                reason = %message,
+                "import: download holds only unwanted executables; routing to failure handling"
+            );
+            td.state = TrackedDownloadState::FailedPending;
+            td.status = TrackedDownloadStatus::Error;
+            td.client_item.attention_reason = Some(message.clone());
+            td.status_messages = vec![message];
+            td.burned_by_import_gate = true;
+            return false;
+        }
     }
 
     if result.skip_reason == Some(ImportSkipReason::NoVideoFiles) {

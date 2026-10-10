@@ -26,9 +26,10 @@ pub(super) async fn guard_import_retry_tx(tx: &mut SqlTx<'_>, id: &str) -> AppRe
     )
     .await?;
     if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-        "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason = {} LIMIT 1",
-        &[SqlArg::Text(id.into()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into())]).await?.is_some() {
-        return Err(AppError::Validation("download is awaiting import retry reconciliation".into()));
+        "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason IN ({}, {}) LIMIT 1",
+        &[SqlArg::Text(id.into()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into()),
+          SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?.is_some() {
+        return Err(AppError::Validation("download is awaiting retry reconciliation".into()));
     }
     Ok(())
 }
@@ -97,8 +98,9 @@ impl ImportStore {
                     return Ok(scryer_application::ImportRetryClaimOutcome::Busy);
                 }
                 if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason = {} LIMIT 1",
-                    &[SqlArg::Text(id.clone()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into())]).await?.is_some() {
+                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason IN ({}, {}) LIMIT 1",
+                    &[SqlArg::Text(id.clone()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into()),
+                      SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?.is_some() {
                     return Ok(scryer_application::ImportRetryClaimOutcome::Busy);
                 }
                 if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
@@ -111,6 +113,36 @@ impl ImportStore {
                     &[SqlArg::OptText(claim.source.client_id.clone()), SqlArg::Text(claim.source.item_id.clone()), SqlArg::Text(id.clone())]).await?.is_some() {
                     return Ok(scryer_application::ImportRetryClaimOutcome::Busy);
                 }
+                // A retry replaces submission details, never preservation
+                // evidence. Only an explicit post-delivery release clears it.
+                let previous = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT payload_json FROM imports WHERE id = {}",
+                    &[SqlArg::Text(claim.import_id.clone())]).await?;
+                let mut payload: serde_json::Value = serde_json::from_str(&payload_json)
+                    .map_err(|_| AppError::Repository("retry payload is unavailable".into()))?;
+                if previous.as_ref().map(archive_import_has_pending_sources).transpose()?.unwrap_or(false) {
+                    // The reason travels with the hold so the operator is
+                    // still told why the sources are kept.
+                    let previous_reason = previous
+                        .as_ref()
+                        .map(|row| row.text("payload_json"))
+                        .transpose()?
+                        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+                        .and_then(|previous| {
+                            previous[scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY]
+                                .as_str()
+                                .map(str::to_string)
+                        });
+                    let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid retry payload".into()))?;
+                    object.insert("archive_processing_pending".into(), serde_json::Value::Bool(true));
+                    if let Some(reason) = previous_reason {
+                        object.insert(
+                            scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY.into(),
+                            serde_json::Value::String(reason),
+                        );
+                    }
+                }
+                let payload_json = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
                 let payload_arg = json_arg_for_tx(tx, Some(&payload_json))?;
                 let changed = SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE imports SET status = 'processing', result_json = NULL, payload_json = {}, started_at = {}, finished_at = NULL, updated_at = {}

@@ -1542,6 +1542,7 @@ pub(crate) struct AuthState {
     pub(crate) auth_runtime: AuthRuntimeStateHandle,
     pub(crate) rate_limiter: ScryerRateLimiter,
     pub(crate) ws_origin_policy: WebSocketOriginPolicy,
+    pub(crate) list_account_origin_policy: crate::list_account_origin::ListAccountOriginPolicy,
     pub(crate) authless_web_client_proof: AuthlessWebClientProofState,
 }
 
@@ -1721,7 +1722,8 @@ pub(crate) async fn graphql_handler(
         async_graphql::BatchRequest::Single(req) => async_graphql::BatchRequest::Single(
             req.data(session_persistence)
                 .data(login_attempt_limiter)
-                .data(RequestClientIp(client_ip)),
+                .data(RequestClientIp(client_ip))
+                .data(state.list_account_origin_policy.request_context()),
         ),
         async_graphql::BatchRequest::Batch(reqs) => async_graphql::BatchRequest::Batch(
             reqs.into_iter()
@@ -1729,6 +1731,7 @@ pub(crate) async fn graphql_handler(
                     req.data(session_persistence)
                         .data(login_attempt_limiter.clone())
                         .data(RequestClientIp(client_ip))
+                        .data(state.list_account_origin_policy.request_context())
                 })
                 .collect(),
         ),
@@ -3015,8 +3018,10 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         }
         // The refusal code is a GraphQL-side contract; over REST this stays the
         // validation failure it is.
-        AppError::LocationPlanRefused { message, .. }
-        | AppError::LocationRootRefused { message, .. } => {
+        AppError::ValidationRefused { message, .. }
+        | AppError::LocationPlanRefused { message, .. }
+        | AppError::LocationRootRefused { message, .. }
+        | AppError::PublicUrlRejected { message, .. } => {
             (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message))).into_response()
         }
         // The retired direct root write is a GraphQL-side contract too; over
@@ -3063,6 +3068,10 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         }
         AppError::ArchiveExtractionPluginRequired { message, .. } => {
             (StatusCode::CONFLICT, Json(ErrorResponse::new(message))).into_response()
+        }
+        AppError::ArchiveExtractionFailed { message }
+        | AppError::ArchivePasswordRequired { message } => {
+            (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message))).into_response()
         }
         AppError::ArchiveExtractionTimedOut { message } => (
             StatusCode::GATEWAY_TIMEOUT,
@@ -3346,6 +3355,7 @@ mod tests {
             auth_runtime: AuthRuntimeStateHandle::new(auth_enabled_snapshot()),
             rate_limiter: ScryerRateLimiter::from_env(Default::default()),
             ws_origin_policy: WebSocketOriginPolicy::default(),
+            list_account_origin_policy: Default::default(),
             authless_web_client_proof: AuthlessWebClientProofState::new(),
         };
         let router = Router::new()
@@ -3436,6 +3446,7 @@ mod tests {
             auth_runtime: context.auth_runtime.clone(),
             rate_limiter: ScryerRateLimiter::from_env(Default::default()),
             ws_origin_policy: WebSocketOriginPolicy::default(),
+            list_account_origin_policy: Default::default(),
             authless_web_client_proof: AuthlessWebClientProofState::new(),
         };
 
@@ -3570,6 +3581,7 @@ mod tests {
             auth_runtime: AuthRuntimeStateHandle::new(auth_disabled_snapshot()),
             rate_limiter: ScryerRateLimiter::from_env(Default::default()),
             ws_origin_policy: WebSocketOriginPolicy::default(),
+            list_account_origin_policy: Default::default(),
             authless_web_client_proof: AuthlessWebClientProofState::new(),
         };
         let mut headers = HeaderMap::new();
@@ -3598,6 +3610,7 @@ mod tests {
             auth_runtime: AuthRuntimeStateHandle::new(auth_disabled_snapshot()),
             rate_limiter: ScryerRateLimiter::from_env(Default::default()),
             ws_origin_policy: WebSocketOriginPolicy::default(),
+            list_account_origin_policy: Default::default(),
             authless_web_client_proof: proof_state.clone(),
         };
         let router = Router::new()
@@ -3666,6 +3679,85 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.message.contains("authentication failed"));
+    }
+
+    #[tokio::test]
+    async fn account_link_origin_rejects_spoofed_http_headers_in_single_and_batch_requests() {
+        tokio::time::timeout(Duration::from_secs(60), async {
+            let context = common::TestContext::new().await;
+            let admin = context.app.find_or_create_default_user().await.expect("administrator");
+            let api_key = context.app.create_api_key(&admin, scryer_application::CreateApiKey {
+                label: "origin boundary".into(),
+                expiry: scryer_application::ApiKeyExpiryPreset::Never,
+            }).await.expect("API key");
+            crate::settings_bootstrap::seed_service_setting_definitions(context.settings_store.clone())
+                .await
+                .expect("seed setting definitions");
+            context.app.install_public_url(
+                scryer_application::public_url::PublicUrlPolicy::new(None, None),
+                scryer_application::public_url::InstanceAddressing {
+                    base_path: "/scryer".into(),
+                    ..Default::default()
+                },
+            );
+            let origin_policy = crate::list_account_origin::ListAccountOriginPolicy::new(
+                context.app.public_url_runtime(),
+                "127.0.0.1:8080".parse().expect("bind"),
+                false,
+                crate::list_account_origin::InterfaceAddresses::fixed(Vec::new()),
+            );
+            assert!(!origin_policy.request_context().approved_origins().await.contains(&"https://media.home".to_string()));
+
+            // A saved public URL applies to the next request without a restart.
+            let settings = context.app.update_service_settings(&admin, scryer_application::UpdateServiceSettings {
+                tls_cert_path: None,
+                tls_key_path: None,
+                trusted_proxy_ips: None,
+                reset_trusted_proxy_ips: false,
+                public_url: Some("https://media.home/scryer/".into()),
+                reset_public_url: false,
+                acknowledge_passkey_impact: false,
+            }).await.expect("save public URL");
+            assert_eq!(settings.public_url.effective.as_deref(), Some("https://media.home/scryer"));
+            let approved = origin_policy.request_context().approved_origins().await.to_vec();
+            assert!(approved.contains(&"https://media.home".to_string()));
+            assert!(approved.contains(&"http://127.0.0.1:8080".to_string()));
+            assert!(!approved.contains(&"https://attacker.invalid".to_string()));
+
+            let state = AuthState {
+                app: context.app.clone(),
+                schema: context.schema.clone(),
+                auth_runtime: context.auth_runtime.clone(),
+                rate_limiter: ScryerRateLimiter::from_env(Default::default()),
+                ws_origin_policy: WebSocketOriginPolicy::default(),
+                list_account_origin_policy: origin_policy.clone(),
+                authless_web_client_proof: AuthlessWebClientProofState::new(),
+            };
+            let router = Router::new().route("/graphql", post(graphql_handler)).with_state(state);
+            let operation = serde_json::json!({
+                "query": "mutation { startListAccountLink(provider: \"trakt\", origin: \"https://attacker.invalid\") { sessionId } }"
+            });
+            for body in [operation.clone(), serde_json::json!([operation])] {
+                let request = Request::builder()
+                    .method(Method::POST)
+                    .uri("/graphql")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, format!("Bearer {}", api_key.raw_key))
+                    .header(header::HOST, "attacker.invalid")
+                    .header(header::ORIGIN, "https://attacker.invalid")
+                    .header("x-forwarded-host", "attacker.invalid")
+                    .header("x-forwarded-proto", "https")
+                    .extension(ConnectInfo(SocketAddr::from((Ipv4Addr::LOCALHOST, 45000))))
+                    .body(Body::from(body.to_string())).expect("GraphQL request");
+                let response = router.clone().oneshot(request).await.expect("GraphQL response");
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = to_bytes(response.into_body(), 64 * 1024).await.expect("response body");
+                let response: Value = serde_json::from_slice(&bytes).expect("GraphQL JSON");
+                let result = response.as_array().map_or(&response, |batch| &batch[0]);
+                assert_eq!(result["errors"][0]["extensions"]["code"], "LIST_ACCOUNT_ORIGIN_NOT_ALLOWED");
+                assert!(result["data"].is_null());
+            }
+        }).await.expect("HTTP origin boundary check completes");
     }
 
     fn clear_cors_env() {
@@ -5361,6 +5453,7 @@ mod tests {
             auth_runtime: context.auth_runtime.clone(),
             rate_limiter: limiter.clone(),
             ws_origin_policy: WebSocketOriginPolicy::default(),
+            list_account_origin_policy: Default::default(),
             authless_web_client_proof: AuthlessWebClientProofState::new(),
         };
         let router = Router::new()
@@ -5414,6 +5507,7 @@ mod tests {
             auth_runtime: context.auth_runtime.clone(),
             rate_limiter: ScryerRateLimiter::for_authentication_test(1, 1, 1, 10),
             ws_origin_policy: WebSocketOriginPolicy::default(),
+            list_account_origin_policy: Default::default(),
             authless_web_client_proof: AuthlessWebClientProofState::new(),
         };
         let router = Router::new()

@@ -123,6 +123,7 @@ fn membership(
     seen_at: chrono::DateTime<Utc>,
 ) -> ListMembership {
     ListMembership {
+        series_movie: None,
         subscription_id: subscription_id.into(),
         item_key: item_key.into(),
         rank: Some(1),
@@ -142,6 +143,83 @@ fn membership(
         left_at: None,
         left_handled: false,
     }
+}
+
+#[tokio::test]
+async fn series_movie_membership_round_trips_separate_canonical_and_parent_identity() {
+    let store = test_store(None).await;
+    ListSubscriptionRepository::create(
+        &store,
+        subscription("movie-list", ListScope::Public, OWNER),
+    )
+    .await
+    .unwrap();
+    let mut row = membership("movie-list", "selected-movie", Utc::now());
+    row.smg_title_id = Some(3021408);
+    row.kind = MediaFacet::Anime;
+    row.series_movie = Some(scryer_domain::ListSeriesMovieTarget {
+        parent_smg_id: 42,
+        parent_tvdb_id: 43,
+        parent_name: "Synthetic parent".into(),
+        link_id: Some("movie-link".into()),
+    });
+    store.upsert_many(&[row.clone()]).await.unwrap();
+    let stored = store.list_by_subscription("movie-list").await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].smg_title_id, row.smg_title_id);
+    assert_eq!(stored[0].series_movie, row.series_movie);
+    row.series_movie = None;
+    store.upsert_many(&[row]).await.unwrap();
+    assert!(
+        store.list_by_subscription("movie-list").await.unwrap()[0]
+            .series_movie
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn vocabulary_cache_round_trip_timestamp_only_and_primary_key_plan() {
+    use scryer_application::lists::vocabulary::{
+        CanonicalTagCategory, VocabularyEntry, VocabularySnapshot,
+    };
+    let store = test_store(None).await;
+    assert!(store.vocabulary_cache().await.unwrap().is_none());
+    let mut snapshot = VocabularySnapshot {
+        version: "v1".into(),
+        entries: vec![VocabularyEntry {
+            key: "canonical:genre:action".into(),
+            category: CanonicalTagCategory::Genre,
+            name: "Action".into(),
+            aliases: vec![],
+        }],
+        checked_at: Utc::now(),
+        jitter_seconds: 42,
+    };
+    store.save_vocabulary_cache(&snapshot, false).await.unwrap();
+    let loaded = store.vocabulary_cache().await.unwrap().unwrap();
+    assert_eq!(loaded.entries, snapshot.entries);
+    snapshot.checked_at += Duration::hours(1);
+    snapshot.entries.clear(); // Timestamp-only updates must not rewrite payload.
+    store.save_vocabulary_cache(&snapshot, true).await.unwrap();
+    let checked = store.vocabulary_cache().await.unwrap().unwrap();
+    assert_eq!(checked.entries, loaded.entries);
+    assert_eq!(
+        checked.checked_at.timestamp(),
+        snapshot.checked_at.timestamp()
+    );
+    snapshot.version = "v2".into();
+    snapshot.entries = loaded.entries;
+    store.save_vocabulary_cache(&snapshot, false).await.unwrap();
+    assert_eq!(
+        store.vocabulary_cache().await.unwrap().unwrap().version,
+        "v2"
+    );
+    let plans = SqlRuntime::fetch_all(store.datastore.read_exec(), "EXPLAIN QUERY PLAN SELECT version, payload_json, checked_at, jitter_seconds FROM canonical_tag_vocabulary_cache WHERE id = 'canonical'", &[]).await.unwrap();
+    assert!(
+        plans
+            .iter()
+            .any(|row| row.text("detail").unwrap().contains("USING INDEX"))
+    );
 }
 
 #[tokio::test]
@@ -382,6 +460,51 @@ async fn recording_a_sync_does_not_make_the_list_look_edited() {
         .await
         .expect("update");
     assert!(updated.updated_at > updated.sync.last_at.expect("synced"));
+}
+
+#[tokio::test]
+async fn expiring_sync_runs_removes_only_runs_started_before_the_cutoff() {
+    let store = test_store(None).await;
+    for id in ["sub-1", "sub-2"] {
+        ListSubscriptionRepository::create(&store, subscription(id, ListScope::Public, OWNER))
+            .await
+            .expect("create");
+    }
+    let now = Utc::now();
+    let cutoff = now - Duration::days(7);
+    let run_at = |subscription_id: &str, started_at| {
+        let mut run = ListSyncRun::started(subscription_id, None);
+        run.started_at = started_at;
+        run.outcome = ListSyncRunOutcome::Succeeded;
+        run
+    };
+    let expired = run_at("sub-1", cutoff - Duration::seconds(1));
+    let at_cutoff = run_at("sub-1", cutoff);
+    let recent = run_at("sub-1", now);
+    let other_expired = run_at("sub-2", cutoff - Duration::days(30));
+    let other_recent = run_at("sub-2", now - Duration::days(1));
+    for run in [&expired, &at_cutoff, &recent, &other_expired, &other_recent] {
+        store
+            .record_sync_run(run.clone())
+            .await
+            .expect("record run");
+    }
+
+    let deleted = store
+        .delete_sync_runs_older_than(cutoff)
+        .await
+        .expect("expire runs");
+
+    assert_eq!(deleted, 2);
+    let kept = |runs: Vec<ListSyncRun>| runs.into_iter().map(|run| run.id).collect::<Vec<_>>();
+    assert_eq!(
+        kept(store.list_sync_runs("sub-1", 10).await.expect("runs")),
+        vec![recent.id.clone(), at_cutoff.id.clone()]
+    );
+    assert_eq!(
+        kept(store.list_sync_runs("sub-2", 10).await.expect("runs")),
+        vec![other_recent.id.clone()]
+    );
 }
 
 #[tokio::test]
@@ -745,10 +868,14 @@ async fn a_source_can_be_followed_publicly_only_once() {
     let refused = ListSubscriptionRepository::create(&store, same_source.clone())
         .await
         .expect_err("a second public follow of the same source is refused");
-    assert!(matches!(
-        refused,
-        scryer_application::AppError::Validation(_)
-    ));
+    assert_eq!(
+        refused.validation_reason(),
+        Some(scryer_application::lists::refusal::ALREADY_FOLLOWED)
+    );
+    assert_eq!(
+        refused.to_string(),
+        "validation: this list is already followed"
+    );
     assert!(
         ListSubscriptionRepository::get_by_id(&store, "sub-2")
             .await
@@ -852,6 +979,7 @@ fn account(id: &str, user_id: &str) -> UserListAccount {
             expires_at: Some(now + Duration::days(7)),
             token_type: Some("bearer".into()),
             scope: Some("public".into()),
+            ..ListAccountCredential::default()
         },
         status: UserListAccountStatus::Active,
         error_message: None,
@@ -1003,4 +1131,64 @@ async fn deleting_a_member_removes_their_lists_accounts_and_policy() {
     );
     assert!(store.list_by_user_id(OWNER).await.unwrap().is_empty());
     assert!(store.get(OWNER).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn account_unlink_removes_only_owned_dependent_rows_and_is_atomic() {
+    let store = test_store(Some(EncryptionKey::generate())).await;
+    let linked = account("linked-account", OWNER);
+    let other = account("other-account", OTHER_MEMBER);
+    UserListAccountRepository::create(&store, linked.clone())
+        .await
+        .unwrap();
+    UserListAccountRepository::create(&store, other.clone())
+        .await
+        .unwrap();
+    let mut personal = subscription("private-follow", ListScope::Personal, OWNER);
+    personal.credential_id = Some(linked.id.clone());
+    ListSubscriptionRepository::create(&store, personal)
+        .await
+        .unwrap();
+    let public = subscription("public-follow", ListScope::Public, OWNER);
+    ListSubscriptionRepository::create(&store, public)
+        .await
+        .unwrap();
+    assert!(store.unlink(&linked.id, OTHER_MEMBER).await.is_err());
+    assert!(
+        UserListAccountRepository::get_by_id(&store, &linked.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        ListSubscriptionRepository::get_by_id(&store, "private-follow")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    store.unlink(&linked.id, OWNER).await.unwrap();
+    assert!(
+        UserListAccountRepository::get_by_id(&store, &linked.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ListSubscriptionRepository::get_by_id(&store, "private-follow")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ListSubscriptionRepository::get_by_id(&store, "public-follow")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        UserListAccountRepository::get_by_id(&store, &other.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
 }

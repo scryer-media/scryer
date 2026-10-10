@@ -173,6 +173,7 @@ impl StagedNzbStore for FileSystemStagedNzbStore {
             ))
         })?;
         Ok(StagedNzbRef {
+            password_candidates: Default::default(),
             id: pending.id,
             compressed_path: pending.compressed_path,
             raw_size_bytes,

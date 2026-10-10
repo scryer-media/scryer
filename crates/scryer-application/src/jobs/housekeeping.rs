@@ -17,6 +17,7 @@ const WORKFLOW_COMPLETED_RETENTION_DAYS: i64 = 7;
 const WORKFLOW_WARNING_FAILED_RETENTION_DAYS: i64 = 30;
 const RELEASE_ATTEMPT_RETENTION_DAYS: i64 = 90;
 pub const INDEXER_ERROR_RETENTION_DAYS: i64 = 30;
+const LIST_SYNC_RUN_RETENTION_DAYS: i64 = 7;
 const DOWNLOAD_DELETE_RETENTION_DAYS: i64 = 7;
 const DISCOVERY_SUCCESSFUL_GENERATIONS_TO_RETAIN: usize = 1;
 const DISCOVERY_DIAGNOSTIC_RETENTION_DAYS: i64 = 30;
@@ -604,7 +605,7 @@ impl AppUseCase {
 
     pub(crate) async fn run_scheduled_housekeeping(&self) -> AppResult<HousekeepingReport> {
         info!("starting housekeeping");
-        let orphaned_media_files = {
+        let (orphaned_media_files, promotions) = {
             let _same_path_upgrade_guard = self
                 .runtime
                 .imports
@@ -646,6 +647,7 @@ impl AppUseCase {
                 .list_media_files_with_roots()
                 .await?;
             let mut orphaned_media_files = 0u32;
+            let mut promotions = crate::catalog::workflow::PrimaryPromotionBatch::default();
             for media_file in all_files {
                 if protected_upgrade_file_ids.contains(&media_file.media_file_id) {
                     continue;
@@ -683,6 +685,12 @@ impl AppUseCase {
                     }
                 }
 
+                self.record_primary_promotion_candidate(
+                    &mut promotions,
+                    &media_file.title_id,
+                    &media_file.media_file_id,
+                )
+                .await;
                 if let Err(error) = self
                     .delete_media_file_record_with_dependents(&media_file.media_file_id)
                     .await
@@ -696,8 +704,10 @@ impl AppUseCase {
                 }
                 orphaned_media_files = orphaned_media_files.saturating_add(1);
             }
-            orphaned_media_files
+            (orphaned_media_files, promotions)
         };
+        self.finish_primary_promotion_batch(&DomainEventActor::system(), promotions)
+            .await;
 
         let general_settings = self.general_settings().await?;
         let history_retention_days = general_settings.history_retention_days as i64;
@@ -732,6 +742,15 @@ impl AppUseCase {
             .delete_older_than(
                 self.runtime.environment.now()
                     - chrono::Duration::days(INDEXER_ERROR_RETENTION_DAYS),
+            )
+            .await?;
+        let stale_list_sync_runs = self
+            .services
+            .lists
+            .subscriptions
+            .delete_sync_runs_older_than(
+                self.runtime.environment.now()
+                    - chrono::Duration::days(LIST_SYNC_RUN_RETENTION_DAYS),
             )
             .await?;
 
@@ -812,7 +831,8 @@ impl AppUseCase {
             + stale_download_import_artifacts
             + stale_import_history
             + stale_download_queue_deletes
-            + stale_rule_set_history;
+            + stale_rule_set_history
+            + stale_list_sync_runs;
 
         // 3. Stale staged NZB artifacts (> 1 hour old)
         let now = self.runtime.environment.now();
@@ -926,6 +946,7 @@ impl AppUseCase {
             stale_import_history,
             stale_download_queue_deletes,
             stale_rule_set_history,
+            stale_list_sync_runs,
             stale_history_records,
             staged_nzb_artifacts_pruned,
             recycled_purged,

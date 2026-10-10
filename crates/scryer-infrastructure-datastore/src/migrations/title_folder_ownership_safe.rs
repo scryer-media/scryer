@@ -392,6 +392,20 @@ mod tests {
             .clone()
     }
 
+    /// An assigned folder is the root joined with the platform separator, so a
+    /// Unix-shaped expectation is compared component by component.
+    fn assert_assigned(actual: FolderDecision, expected: &str) {
+        match actual {
+            FolderDecision::Assign(folder) => {
+                assert_eq!(
+                    std::path::Path::new(&folder),
+                    std::path::Path::new(expected)
+                )
+            }
+            other => panic!("expected Assign({expected:?}), got {other:?}"),
+        }
+    }
+
     #[test]
     fn single_folder_is_assigned_and_no_media_is_planned_for_deletion() {
         let plans = build_plans(
@@ -401,10 +415,7 @@ mod tests {
                 media("t1", "/data/Anime/Show A/Season 2/e2.mkv"),
             ],
         );
-        assert_eq!(
-            decision(&plans, "t1"),
-            FolderDecision::Assign("/data/Anime/Show A".to_string())
-        );
+        assert_assigned(decision(&plans, "t1"), "/data/Anime/Show A");
     }
 
     #[test]
@@ -477,10 +488,7 @@ mod tests {
                 media("b", "/data/Anime/Show A/e2.mkv"),
             ],
         );
-        assert_eq!(
-            decision(&plans, "a"),
-            FolderDecision::Assign("/data/Anime/Show A".to_string())
-        );
+        assert_assigned(decision(&plans, "a"), "/data/Anime/Show A");
         assert_eq!(
             decision(&plans, "b"),
             FolderDecision::Leave {
@@ -495,9 +503,6 @@ mod tests {
             vec![title("t1", Some("/old/root/Show A"))],
             vec![media("t1", "/data/Anime/Show A/e1.mkv")],
         );
-        assert_eq!(
-            decision(&plans, "t1"),
-            FolderDecision::Assign("/data/Anime/Show A".to_string())
-        );
+        assert_assigned(decision(&plans, "t1"), "/data/Anime/Show A");
     }
 }

@@ -391,8 +391,8 @@ pub struct MediaRequest {
     pub decision_id: Option<String>,
     /// Rule sets that voted for the effective outcome.
     pub decided_by_rule_set_ids: Vec<String>,
-    /// Tags the rules emitted, merged onto the created title at approval
-    /// (spec 0003 FR-050).
+    /// Tags the rules emitted, and the labels a list request's route applies,
+    /// merged onto the created title at approval (spec 0003 FR-050).
     pub policy_tags: Vec<String>,
     /// Versioned metadata snapshot captured at submit (spec 0003 FR-030).
     /// A raw JSON string here: the typed snapshot lives in the application
@@ -1535,6 +1535,59 @@ pub struct Title {
     pub min_availability: Option<String>,
     pub digital_release_date: Option<String>,
     pub folder_path: Option<String>,
+}
+
+pub const SEARCH_LANGUAGES_TAG_PREFIX: &str = "scryer:search-languages:";
+pub const SEARCH_ALIASES_TAG_PREFIX: &str = "scryer:search-aliases:";
+
+impl Title {
+    /// User-owned options live with the other structured title options, not
+    /// in provider metadata that a hydration may replace.
+    pub fn search_languages_override(&self) -> Option<Vec<String>> {
+        let values: Vec<_> = self
+            .tags
+            .iter()
+            .filter_map(|tag| tag.strip_prefix(SEARCH_LANGUAGES_TAG_PREFIX))
+            .collect();
+        (!values.is_empty()).then(|| {
+            values
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+    }
+
+    pub fn custom_search_aliases(&self) -> Vec<String> {
+        self.tags
+            .iter()
+            .filter_map(|tag| tag.strip_prefix(SEARCH_ALIASES_TAG_PREFIX))
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    pub fn with_custom_search_aliases(&self) -> Self {
+        let mut title = self.clone();
+        for alias in self.custom_search_aliases() {
+            if !title.aliases.contains(&alias) {
+                title.aliases.push(alias);
+            }
+        }
+        title
+    }
+}
+
+/// Replace a user-owned list while retaining an explicit empty override.
+pub fn set_title_search_option(tags: &mut Vec<String>, prefix: &str, values: Option<Vec<String>>) {
+    tags.retain(|tag| !tag.starts_with(prefix));
+    if let Some(values) = values {
+        if values.is_empty() {
+            tags.push(prefix.to_owned());
+        } else {
+            tags.extend(values.into_iter().map(|value| format!("{prefix}{value}")));
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -2705,6 +2758,54 @@ impl DownloadSeedingSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadPasswordFailure {
+    Required,
+    PasswordOrCorruption,
+}
+
+impl DownloadPasswordFailure {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Required => "archive_password_required",
+            Self::PasswordOrCorruption => "archive_password_or_corruption",
+        }
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Required => "ARCHIVE_PASSWORD_REQUIRED: a new archive password is required",
+            Self::PasswordOrCorruption => {
+                "ARCHIVE_PASSWORD_OR_CORRUPTION: the password may be incorrect or the archive may be damaged"
+            }
+        }
+    }
+}
+
+impl DownloadQueueItem {
+    pub fn password_failure(&self) -> Option<DownloadPasswordFailure> {
+        if self.state != DownloadQueueState::Failed {
+            return None;
+        }
+        match self.attention_reason.as_deref() {
+            Some(reason)
+                if reason == "archive_password_required"
+                    || reason.starts_with("ARCHIVE_PASSWORD_REQUIRED:") =>
+            {
+                Some(DownloadPasswordFailure::Required)
+            }
+            Some(reason)
+                if reason == "archive_password_or_corruption"
+                    || reason.starts_with("ARCHIVE_PASSWORD_OR_CORRUPTION:") =>
+            {
+                Some(DownloadPasswordFailure::PasswordOrCorruption)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DownloadQueueItem {
     pub id: String,
@@ -2855,6 +2956,85 @@ pub fn is_image_file(path: &std::path::Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+/// Extensions of files a media download has no business delivering: programs,
+/// installers, scripts and shortcuts for any desktop platform. A completed
+/// download whose only payload is one of these is not media, and is failed as
+/// a bad grab rather than parked for manual review. Compared ASCII
+/// case-insensitively against the final extension.
+pub const EXECUTABLE_EXTENSIONS: &[&str] = &[
+    "exe", "bat", "cmd", "com", "scr", "msi", "vbs", "ps1", "lnk", "js", "jar", "dll", "pif",
+    "app", "dmg", "pkg", "sh",
+];
+
+/// Extensions of the plain companion files a release carries next to its
+/// payload (info, checks, artwork, subtitles, the NZB itself and recovery
+/// sets). They never make a download's contents ambiguous on their own.
+pub const DOWNLOAD_HELPER_EXTENSIONS: &[&str] = &[
+    "nfo", "sfv", "srr", "txt", "jpg", "jpeg", "png", "srt", "sub", "idx", "nzb", "par2", "md5",
+];
+
+fn has_extension_in(path: &std::path::Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            extensions
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(ext))
+        })
+}
+
+pub fn is_executable_file(path: &std::path::Path) -> bool {
+    has_extension_in(path, EXECUTABLE_EXTENSIONS)
+}
+
+pub fn is_download_helper_file(path: &std::path::Path) -> bool {
+    has_extension_in(path, DOWNLOAD_HELPER_EXTENSIONS)
+}
+
+/// What a completed download that yielded no importable video holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoVideoDownloadContents<'a> {
+    /// No files at all.
+    Empty,
+    /// Executables and nothing else but plain helper files: an unwanted
+    /// grab. Holds every executable, in the order given.
+    UnwantedExecutables(Vec<&'a std::path::Path>),
+    /// Anything else: a (sample) video, an extensionless or unknown file, an
+    /// archive or archive volume, or helpers alone. Needs a human.
+    Other,
+}
+
+/// Classify the files of a completed download that produced no importable
+/// video. Only a set made of executables plus plain helpers, with at least
+/// one executable, is [`NoVideoDownloadContents::UnwantedExecutables`]; a
+/// single file that is neither video, executable nor helper makes the whole
+/// set [`NoVideoDownloadContents::Other`].
+pub fn classify_no_video_download<'a, I>(files: I) -> NoVideoDownloadContents<'a>
+where
+    I: IntoIterator<Item = &'a std::path::Path>,
+{
+    let mut executables = Vec::new();
+    let mut saw_any = false;
+    for file in files {
+        saw_any = true;
+        if is_video_file(file) {
+            return NoVideoDownloadContents::Other;
+        }
+        if is_executable_file(file) {
+            executables.push(file);
+        } else if !is_download_helper_file(file) {
+            return NoVideoDownloadContents::Other;
+        }
+    }
+    if !saw_any {
+        NoVideoDownloadContents::Empty
+    } else if executables.is_empty() {
+        NoVideoDownloadContents::Other
+    } else {
+        NoVideoDownloadContents::UnwantedExecutables(executables)
+    }
 }
 
 pub const ARCHIVE_EXTENSIONS: &[&str] = &["rar", "7z", "zip"];
@@ -3126,6 +3306,9 @@ pub enum ImportSkipReason {
     UnresolvedIdentity,
     UnparseableEpisode,
     NoVideoFiles,
+    /// No video, and the only payload is executables (helpers aside): the
+    /// grab delivered a program, not media.
+    UnwantedExecutables,
     DownloadInProgress,
     DiskFull,
     PermissionDenied,
@@ -3144,6 +3327,7 @@ impl ImportSkipReason {
             Self::UnresolvedIdentity => "unresolved_identity",
             Self::UnparseableEpisode => "unparseable_episode",
             Self::NoVideoFiles => "no_video_files",
+            Self::UnwantedExecutables => "unwanted_executables",
             Self::DownloadInProgress => "download_in_progress",
             Self::DiskFull => "disk_full",
             Self::PermissionDenied => "permission_denied",
@@ -3260,6 +3444,19 @@ pub enum ImportDestinationDisposition {
     AlreadyPresent,
 }
 
+/// Where the import left its source.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportSourceDisposition {
+    /// The source is still at its path; a move import removes it later through
+    /// its cleanup guard.
+    #[default]
+    Retained,
+    /// The source was archive extraction output and was renamed into place, so
+    /// nothing is left at its path and there is nothing to clean up.
+    RenamedIntoPlace,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImportFileResult {
     pub strategy: ImportStrategy,
@@ -3268,6 +3465,8 @@ pub struct ImportFileResult {
     pub size_bytes: u64,
     #[serde(default)]
     pub destination_disposition: ImportDestinationDisposition,
+    #[serde(default)]
+    pub source_disposition: ImportSourceDisposition,
     pub source_cleanup: Option<ImportSourceCleanupGuard>,
     /// What proving the destination concluded, for the placements that copied
     /// bytes (FR-045). `None` for a rename, hardlink, or symlink placement:
@@ -3288,17 +3487,20 @@ pub struct ImportFileResult {
 
 /// How thoroughly a copied file is proven before its source may be touched.
 ///
-/// FR-042: **full** (default) reads the destination back and compares it against
-/// the CRC streamed during the copy; **quick** uses the sampled head+tail proof
+/// FR-042: **full** reads the destination back and compares it against the CRC
+/// streamed during the copy; **quick** (default) uses the sampled head+tail proof
 /// plus size and is the universal floor — full falls back to it, and verification
 /// never drops below it.
+///
+/// The default is the import-copy preference an operator gets until they opt up
+/// to full. Location operations never read it: they always plan full.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VerificationDepth {
     /// Full destination read-back compared against the streamed CRC.
-    #[default]
     Full,
     /// Sampled head+tail content proof plus size.
+    #[default]
     Quick,
 }
 
@@ -3311,7 +3513,8 @@ impl VerificationDepth {
     }
 
     /// Parse a persisted setting value. Unknown values are an error rather than a
-    /// silent downgrade so a corrupt setting cannot quietly weaken verification.
+    /// silent match so a corrupt setting is reported instead of quietly read as
+    /// some depth.
     pub fn from_setting(value: &str) -> Result<Self, String> {
         match value.trim() {
             "full" => Ok(Self::Full),
@@ -3534,6 +3737,9 @@ pub enum TitleHistoryEventType {
     Imported,
     ImportFailed,
     ImportSkipped,
+    /// A post-download rule refused the import. A decision the operator's
+    /// rules made, kept apart from failures and plain skips.
+    ImportRejectedByRule,
     FileUpgraded,
     FileRecycled,
     FileDeleted,
@@ -3563,6 +3769,7 @@ impl TitleHistoryEventType {
             Self::Imported => "imported",
             Self::ImportFailed => "import_failed",
             Self::ImportSkipped => "import_skipped",
+            Self::ImportRejectedByRule => "import_rejected_by_rule",
             Self::FileUpgraded => "file_upgraded",
             Self::FileRecycled => "file_recycled",
             Self::FileDeleted => "file_deleted",
@@ -3587,6 +3794,7 @@ impl TitleHistoryEventType {
             "imported" => Some(Self::Imported),
             "import_failed" => Some(Self::ImportFailed),
             "import_skipped" => Some(Self::ImportSkipped),
+            "import_rejected_by_rule" => Some(Self::ImportRejectedByRule),
             "file_upgraded" => Some(Self::FileUpgraded),
             "file_recycled" => Some(Self::FileRecycled),
             "file_deleted" => Some(Self::FileDeleted),
@@ -3611,6 +3819,7 @@ impl TitleHistoryEventType {
         Self::Imported,
         Self::ImportFailed,
         Self::ImportSkipped,
+        Self::ImportRejectedByRule,
         Self::FileUpgraded,
         Self::FileRecycled,
         Self::FileDeleted,
@@ -3833,6 +4042,7 @@ pub enum DomainEventType {
     ImportSpaceRestored,
     MediaRequestSubmitted,
     MediaRequestUpdated,
+    MediaRequestReopened,
     MediaRequestApproved,
     MediaRequestRejected,
     MediaRequestCanceled,
@@ -3893,6 +4103,7 @@ impl DomainEventType {
             Self::ImportSpaceRestored => "import_space_restored",
             Self::MediaRequestSubmitted => "media_request_submitted",
             Self::MediaRequestUpdated => "media_request_updated",
+            Self::MediaRequestReopened => "media_request_reopened",
             Self::MediaRequestApproved => "media_request_approved",
             Self::MediaRequestRejected => "media_request_rejected",
             Self::MediaRequestCanceled => "media_request_canceled",
@@ -3953,6 +4164,7 @@ impl DomainEventType {
             "import_space_restored" => Some(Self::ImportSpaceRestored),
             "media_request_submitted" => Some(Self::MediaRequestSubmitted),
             "media_request_updated" => Some(Self::MediaRequestUpdated),
+            "media_request_reopened" => Some(Self::MediaRequestReopened),
             "media_request_approved" => Some(Self::MediaRequestApproved),
             "media_request_rejected" => Some(Self::MediaRequestRejected),
             "media_request_canceled" => Some(Self::MediaRequestCanceled),
@@ -4231,6 +4443,9 @@ pub struct GrabbedReleaseFacts {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadFailedEventData {
+    /// Stable identity for an operator retry; download_id below is the native client ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_download_id: Option<String>,
     #[serde(default)]
     pub title: Option<TitleContextSnapshot>,
     #[serde(default)]
@@ -4447,6 +4662,15 @@ pub struct MediaFileUpgradedEventData {
     /// `None`.
     #[serde(default)]
     pub size_bytes: Option<i64>,
+    /// The import that produced the upgrade, matching the `import_id` of the
+    /// `ImportCompleted` event it raised. Events persisted before this field
+    /// existed read back as `None`.
+    #[serde(default)]
+    pub import_id: Option<String>,
+    /// The download client's item id for that import, matching the
+    /// `source_ref` of its `ImportCompleted` event.
+    #[serde(default)]
+    pub source_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -4487,6 +4711,8 @@ pub enum DownloadQueueCommandAction {
     Pause,
     Resume,
     Delete,
+    /// An operator released the sources a completed import was holding.
+    ReleaseHeldSources,
 }
 
 impl DownloadQueueCommandAction {
@@ -4495,6 +4721,7 @@ impl DownloadQueueCommandAction {
             Self::Pause => "pause",
             Self::Resume => "resume",
             Self::Delete => "delete",
+            Self::ReleaseHeldSources => "release_held_sources",
         }
     }
 
@@ -4503,6 +4730,7 @@ impl DownloadQueueCommandAction {
             "pause" => Some(Self::Pause),
             "resume" => Some(Self::Resume),
             "delete" => Some(Self::Delete),
+            "release_held_sources" => Some(Self::ReleaseHeldSources),
             _ => None,
         }
     }
@@ -4512,6 +4740,10 @@ impl DownloadQueueCommandAction {
 pub struct DownloadQueueItemCommandIssuedEventData {
     pub item_id: String,
     pub action: DownloadQueueCommandAction,
+    /// What the command did, for commands whose outcome is worth recording.
+    /// Holds identifiers and outcomes only, never names or paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -4771,6 +5003,9 @@ pub enum DomainEventPayload {
     ImportSpaceRestored(import_space::SpaceIncidentEvent),
     MediaRequestSubmitted(MediaRequestSubmittedEventData),
     MediaRequestUpdated(MediaRequestSubmittedEventData),
+    /// A dismissed request was put back into the queue. The event's actor is
+    /// who reopened it and its timestamp is when.
+    MediaRequestReopened(MediaRequestSubmittedEventData),
     MediaRequestApproved(MediaRequestResolvedEventData),
     MediaRequestRejected(MediaRequestResolvedEventData),
     MediaRequestCanceled(MediaRequestResolvedEventData),
@@ -4833,6 +5068,7 @@ impl DomainEventPayload {
             Self::ImportSpaceRestored(_) => DomainEventType::ImportSpaceRestored,
             Self::MediaRequestSubmitted(_) => DomainEventType::MediaRequestSubmitted,
             Self::MediaRequestUpdated(_) => DomainEventType::MediaRequestUpdated,
+            Self::MediaRequestReopened(_) => DomainEventType::MediaRequestReopened,
             Self::MediaRequestApproved(_) => DomainEventType::MediaRequestApproved,
             Self::MediaRequestRejected(_) => DomainEventType::MediaRequestRejected,
             Self::MediaRequestCanceled(_) => DomainEventType::MediaRequestCanceled,
@@ -4894,16 +5130,29 @@ impl DomainEventPayload {
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum DomainEventStream {
     Global,
-    Title { title_id: String },
-    LibraryScan { session_id: String },
-    JobRun { run_id: String },
-    DownloadQueueItem { item_id: String },
+    /// Private product facts visible only to the owning member's sessions.
+    User {
+        user_id: String,
+    },
+    Title {
+        title_id: String,
+    },
+    LibraryScan {
+        session_id: String,
+    },
+    JobRun {
+        run_id: String,
+    },
+    DownloadQueueItem {
+        item_id: String,
+    },
 }
 
 impl DomainEventStream {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Global => "global",
+            Self::User { .. } => "user",
             Self::Title { .. } => "title",
             Self::LibraryScan { .. } => "library_scan",
             Self::JobRun { .. } => "job_run",
@@ -4914,6 +5163,7 @@ impl DomainEventStream {
     pub fn identifier(&self) -> Option<&str> {
         match self {
             Self::Global => None,
+            Self::User { user_id } => Some(user_id.as_str()),
             Self::Title { title_id } => Some(title_id.as_str()),
             Self::LibraryScan { session_id } => Some(session_id.as_str()),
             Self::JobRun { run_id } => Some(run_id.as_str()),
@@ -6895,6 +7145,10 @@ pub struct IndexerLimitCapabilities {
     pub api_quota_supported: bool,
     #[serde(default)]
     pub grab_quota_supported: bool,
+    /// The plugin answers searches one provider page at a time and resumes
+    /// from a cursor it returns.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paged_search: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -7634,6 +7888,136 @@ impl ExecutionMode {
     }
 }
 
+/// Language an inline script is written in. Decides the file extension the
+/// runner materializes inline content under, which in turn selects the
+/// interpreter. File scripts are dispatched by their own extension.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptLanguage {
+    #[default]
+    Shell,
+    Python,
+    PowerShell,
+    Batch,
+    Go,
+}
+
+impl ScriptLanguage {
+    pub const ALL: [Self; 5] = [
+        Self::Shell,
+        Self::Python,
+        Self::PowerShell,
+        Self::Batch,
+        Self::Go,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Python => "python",
+            Self::PowerShell => "powershell",
+            Self::Batch => "batch",
+            Self::Go => "go",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "shell" => Some(Self::Shell),
+            "python" => Some(Self::Python),
+            "powershell" => Some(Self::PowerShell),
+            "batch" => Some(Self::Batch),
+            "go" => Some(Self::Go),
+            _ => None,
+        }
+    }
+
+    /// Extension a materialized inline script of this language gets.
+    pub fn file_extension(self) -> &'static str {
+        match self {
+            Self::Shell => "sh",
+            Self::Python => "py",
+            Self::PowerShell => "ps1",
+            Self::Batch => "cmd",
+            Self::Go => "go",
+        }
+    }
+}
+
+/// What starts a script: the import pipeline after a file lands, or the job
+/// scheduler on the script's own schedule.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptTrigger {
+    #[default]
+    PostImport,
+    Schedule,
+}
+
+impl ScriptTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PostImport => "post_import",
+            Self::Schedule => "schedule",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "post_import" => Some(Self::PostImport),
+            "schedule" => Some(Self::Schedule),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleWeekday {
+    Monday,
+    Tuesday,
+    Wednesday,
+    Thursday,
+    Friday,
+    Saturday,
+    Sunday,
+}
+
+/// When a scheduled script runs. Stored as JSON on the script row; every
+/// variant compiles to the same "next fire after `now`" answer in the
+/// application layer. Local times are host-local, matching the daily jobs
+/// that already exist.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScriptSchedule {
+    /// Run button only.
+    #[default]
+    Manual,
+    /// Every `every_seconds` seconds, floor 60.
+    Interval { every_seconds: i64 },
+    /// Once a day at `time_local` (`HH:MM`).
+    Daily { time_local: String },
+    /// On each listed weekday at `time_local` (`HH:MM`).
+    Weekly {
+        days: Vec<ScheduleWeekday>,
+        time_local: String,
+    },
+    /// A five-field crontab expression, host-local time.
+    Cron { expression: String },
+}
+
+impl ScriptSchedule {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Interval { .. } => "interval",
+            Self::Daily { .. } => "daily",
+            Self::Weekly { .. } => "weekly",
+            Self::Cron { .. } => "cron",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PostProcessingScript {
     pub id: String,
@@ -7647,6 +8031,16 @@ pub struct PostProcessingScript {
     pub priority: i32,
     pub enabled: bool,
     pub debug: bool,
+    #[serde(default)]
+    pub language: ScriptLanguage,
+    #[serde(default)]
+    pub trigger: ScriptTrigger,
+    /// Set when `trigger` is `Schedule`; ignored for import-triggered scripts.
+    #[serde(default)]
+    pub schedule: Option<ScriptSchedule>,
+    /// Scheduled scripts only: also run once when the host starts.
+    #[serde(default)]
+    pub run_on_startup: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -7657,6 +8051,9 @@ pub enum ScriptRunStatus {
     Success,
     Failed,
     Timeout,
+    /// Started and not yet finished: a fire-and-forget scheduled script
+    /// records its run at spawn and updates it when the script exits.
+    Running,
 }
 
 impl ScriptRunStatus {
@@ -7665,6 +8062,7 @@ impl ScriptRunStatus {
             Self::Success => "success",
             Self::Failed => "failed",
             Self::Timeout => "timeout",
+            Self::Running => "running",
         }
     }
 
@@ -7673,6 +8071,7 @@ impl ScriptRunStatus {
             "success" => Some(Self::Success),
             "failed" => Some(Self::Failed),
             "timeout" => Some(Self::Timeout),
+            "running" => Some(Self::Running),
             _ => None,
         }
     }

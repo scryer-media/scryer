@@ -231,7 +231,7 @@ export function useConfigStepUp({
         setSettingsStepUpCode("");
         setSettingsStepUpError(null);
         setSettingsStepUpForced(false);
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
         navigateToSettingsProfile();
         return;
       }
@@ -250,7 +250,7 @@ export function useConfigStepUp({
       setSettingsStepUpCode("");
       setSettingsStepUpError(null);
       setSettingsStepUpForced(false);
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
       navigateToSettingsProfile();
     } finally {
       setSettingsStepUpBusy(false);

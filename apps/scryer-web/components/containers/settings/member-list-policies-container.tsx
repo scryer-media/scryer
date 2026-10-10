@@ -4,7 +4,7 @@ import { useClient } from "urql";
 import { MemberListPoliciesPanel } from "@/components/views/settings/member-list-policies-panel";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { listErrorMessage } from "@/lib/utils/list-error-message";
 import { setMemberListPolicyMutation } from "@/lib/graphql/mutations";
 import { listMemberPoliciesQuery } from "@/lib/graphql/queries";
 import type { ListPolicy, MemberListPolicy } from "@/lib/types/lists";
@@ -29,7 +29,7 @@ export function MemberListPoliciesContainer() {
       setPolicies((result.data?.listMemberPolicies ?? []) as MemberListPolicy[]);
       setError(null);
     } catch (loadError) {
-      setError(userFacingGraphQlErrorMessage(loadError, t("status.failedToLoad")));
+      setError(listErrorMessage(loadError, t, t("status.failedToLoad")));
     } finally {
       setLoading(false);
     }
@@ -55,7 +55,7 @@ export function MemberListPoliciesContainer() {
         if (previous) {
           setPolicies((current) => rollBackMemberListPolicy(current, previous, policy));
         }
-        setGlobalStatus(userFacingGraphQlErrorMessage(saveError, t("status.failedToUpdate")));
+        setGlobalStatus(listErrorMessage(saveError, t, t("status.failedToUpdate")), { level: "ERROR" });
       } finally {
         setSavingUserId(null);
       }

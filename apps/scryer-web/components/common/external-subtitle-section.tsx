@@ -148,6 +148,7 @@ export function ExternalSubtitleSection({
         pendingAction.kind === "delete"
           ? t("subtitle.deleted")
           : t("subtitle.blocklisted"),
+        pendingAction.kind === "delete" ? { level: "SUCCESS" } : undefined,
       );
       setPendingAction(null);
       setTypedConfirmation("");
@@ -155,6 +156,7 @@ export function ExternalSubtitleSection({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.apiError"),
+        { level: "ERROR" },
       );
     } finally {
       setSubmitting(false);

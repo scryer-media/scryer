@@ -7,11 +7,18 @@ mod blake3_identities_upgrade_tests;
 #[path = "blocklist_release_identity_upgrade_tests.rs"]
 mod blocklist_release_identity_upgrade_tests;
 pub mod canonical_download_identity;
+#[cfg(test)]
+#[path = "cropped_resolution_relabel_upgrade_tests.rs"]
+mod cropped_resolution_relabel_upgrade_tests;
+#[cfg(test)]
+mod discovery_query_indexes_upgrade_tests;
 pub mod event_storage;
 #[cfg(test)]
 #[path = "full_admin_manage_lists_upgrade_tests.rs"]
 mod full_admin_manage_lists_upgrade_tests;
 pub mod hook_ids;
+#[cfg(test)]
+mod imdb_user_list_follows_upgrade_tests;
 pub mod known_bad;
 #[cfg(test)]
 mod legacy_monitor_snapshot_upgrade_tests;
@@ -21,6 +28,8 @@ mod migration_progress_tests;
 pub mod notification_targets;
 pub mod post_0_16_6_prerelease;
 pub mod post_processing_output;
+pub mod release_url_scrub;
+pub mod repair_root_title_folders;
 pub mod rule_set_runtime_wrapper;
 pub mod synthetic_root_ids;
 #[cfg(test)]
@@ -30,6 +39,8 @@ pub mod title_catalog_sort_keys;
 pub mod title_folder_ownership;
 pub mod title_folder_ownership_safe;
 pub mod title_image_blobs;
+#[cfg(test)]
+mod title_lookup_and_download_seed_indexes_upgrade_tests;
 pub mod title_root_folder_ids;
 pub mod title_tag_definitions;
 
@@ -844,6 +855,9 @@ async fn run_rust_hook(
         "migrate_title_folder_ownership_safe" => {
             title_folder_ownership_safe::migrate_title_folder_ownership_safe_sqlite(tx).await
         }
+        "repair_root_title_folders" => {
+            repair_root_title_folders::repair_root_title_folders_sqlite(tx).await
+        }
         "migrate_title_image_blobs" => {
             title_image_blobs::migrate_title_image_blobs_sqlite(tx).await
         }
@@ -868,6 +882,12 @@ async fn run_rust_hook(
         }
         "compress_post_processing_output" => {
             post_processing_output::compress_post_processing_output_sqlite(tx).await
+        }
+        "backfill_import_skip_reason_projection" => {
+            event_storage::backfill_import_skip_reason_projection_sqlite(tx).await
+        }
+        "scrub_stored_release_url_credentials" => {
+            release_url_scrub::scrub_stored_release_url_credentials_sqlite(tx).await
         }
         #[cfg(test)]
         "test_insert_hook_marker" => {

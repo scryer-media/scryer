@@ -518,6 +518,11 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "list_sync_runs",
         classification: BackupTableClassification::Export,
     },
+    // Gateway-owned vocabulary is fetched again on demand after restore.
+    BackupTableCatalogEntry {
+        table: "canonical_tag_vocabulary_cache",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "discovery_presentation_selection",
         classification: BackupTableClassification::ResetOnRestore,
@@ -688,6 +693,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     BackupTableCatalogEntry {
         table: "download_cleanup",
         classification: BackupTableClassification::Export,
+    },
+    // Cleanup seeding progress. Clearing it on restore makes the next seed a
+    // full pass over the restored downloads.
+    BackupTableCatalogEntry {
+        table: "download_cleanup_seed_state",
+        classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
         table: "downloads",
@@ -1251,6 +1262,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "user_library_permission_masks",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "user_ui_catalog_views",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -2208,6 +2223,28 @@ mod tests {
             row_counts,
             part_checksums,
         }
+    }
+
+    #[test]
+    fn backup_table_catalog_resets_canonical_vocabulary_without_scheduling_hydration() {
+        let classification = BACKUP_TABLE_CATALOG
+            .iter()
+            .find(|entry| entry.table == "canonical_tag_vocabulary_cache")
+            .map(|entry| entry.classification);
+        assert_eq!(
+            classification,
+            Some(BackupTableClassification::ResetOnRestore)
+        );
+        assert!(
+            !BACKUP_RESTORE_HYDRATION_DERIVED_TABLES
+                .iter()
+                .any(|entry| entry.table == "canonical_tag_vocabulary_cache")
+        );
+        assert!(
+            !backup_export_table_names()
+                .iter()
+                .any(|table| table == "canonical_tag_vocabulary_cache")
+        );
     }
 
     #[test]

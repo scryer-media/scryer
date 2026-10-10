@@ -723,7 +723,7 @@ body {
  * settings rows (excluded here) span the same gradient across the whole row.
  * A row opts in by carrying one of the data-ui values listed below, so both
  * lists have to stay in sync or a row gets the gradient twice. */
-.dark [data-slot="table-body"] [data-slot="table-row"]:not([data-ui="title-table-row"]):not([data-ui="compact-title-table-row"]):not([data-ui="title-table-empty-row"]):not([data-ui="settings-user-table-row"]):not([data-ui="settings-plugin-table-row"]):not([data-ui="settings-table-row"]):not([data-ui="activity-row"]):not([data-ui="wanted-item-row"]):not([data-ui="pending-release-row"]):not([data-ui="media-info-row"]):not([data-ui="subtitle-search-result-row"]):hover > [data-slot="table-cell"] {
+.dark [data-slot="table-body"] [data-slot="table-row"]:not([data-ui="title-table-row"]):not([data-ui="compact-title-table-row"]):not([data-ui="title-table-empty-row"]):not([data-ui="settings-user-table-row"]):not([data-ui="settings-plugin-table-row"]):not([data-ui="settings-table-row"]):not([data-ui="activity-row"]):not([data-ui="wanted-item-row"]):not([data-ui="pending-release-row"]):not([data-ui="media-info-row"]):not([data-ui="subtitle-search-result-row"]):not([data-ui="list-subscription-row"]):hover > [data-slot="table-cell"] {
   background:
     linear-gradient(90deg, rgba(91, 100, 255, 0.02), rgba(56, 189, 248, 0.012) 72%, transparent 100%);
 }
@@ -737,7 +737,8 @@ body {
 .dark [data-slot="table-body"] [data-ui="wanted-item-row"]:hover,
 .dark [data-slot="table-body"] [data-ui="pending-release-row"]:hover,
 .dark [data-slot="table-body"] [data-ui="media-info-row"]:hover,
-.dark [data-slot="table-body"] [data-ui="subtitle-search-result-row"]:hover {
+.dark [data-slot="table-body"] [data-ui="subtitle-search-result-row"]:hover,
+.dark [data-slot="table-body"] [data-ui="list-subscription-row"]:hover {
   background:
     linear-gradient(90deg, rgba(91, 100, 255, 0.02), rgba(56, 189, 248, 0.012) 72%, transparent 100%);
 }

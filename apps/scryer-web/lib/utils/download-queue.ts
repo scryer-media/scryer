@@ -5,6 +5,13 @@ import type {
   DownloadQueueItem,
 } from "@/lib/types";
 
+export function importRetrySucceeded(
+  result: { decision?: string; skipReason?: string | null } | null | undefined,
+): boolean {
+  return result?.decision === "IMPORTED" ||
+    (result?.decision === "SKIPPED" && result.skipReason === "ALREADY_IMPORTED");
+}
+
 export type DownloadQueueDisplayStateInput = Pick<
   DownloadQueueItem,
   | "state"
@@ -19,7 +26,7 @@ export type DownloadQueueDisplayStateInput = Pick<
 
 type QueueItemValueKey = Exclude<
   keyof DownloadQueueItem,
-  "trackedStatusMessages" | "queueScope"
+  "trackedStatusMessages" | "queueScope" | "heldImportSources"
 >;
 
 const QUEUE_ITEM_VALUE_KEYS: readonly QueueItemValueKey[] = [
@@ -49,6 +56,8 @@ const QUEUE_ITEM_VALUE_KEYS: readonly QueueItemValueKey[] = [
   "attentionReason",
   "downloadClientItemId",
   "downloadId",
+  "passwordFailureCode",
+  "passwordRetryImportId",
   "importStatus",
   "importErrorCode",
   "importErrorMessage",
@@ -79,7 +88,9 @@ export function sameDownloadQueueItem(
       currentStatusMessages.every(
         (message, index) => message === nextStatusMessages[index],
       ) &&
-      JSON.stringify(current.queueScope) === JSON.stringify(next.queueScope))
+      JSON.stringify(current.queueScope) === JSON.stringify(next.queueScope) &&
+      JSON.stringify(current.heldImportSources ?? null) ===
+        JSON.stringify(next.heldImportSources ?? null))
   );
 }
 

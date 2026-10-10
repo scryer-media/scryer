@@ -87,7 +87,7 @@ async fn seed_enriched_series_title(ctx: &TestContext, name: &str) -> EnrichedTi
             .update_episode(
                 &episode.id,
                 EpisodeUpdate {
-                    air_date: Some(format!("2024-01-0{index}")),
+                    air_date: Some(Some(format!("2024-01-0{index}"))),
                     ..Default::default()
                 },
             )
@@ -583,7 +583,7 @@ async fn collection_counts_split_countable_and_record_totals() {
                 .update_episode(
                     &episode.id,
                     EpisodeUpdate {
-                        air_date: Some(format!("2024-02-0{index}")),
+                        air_date: Some(Some(format!("2024-02-0{index}"))),
                         ..Default::default()
                     },
                 )

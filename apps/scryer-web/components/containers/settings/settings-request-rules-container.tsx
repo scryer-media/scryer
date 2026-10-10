@@ -164,12 +164,13 @@ export function SettingsRequestRulesContainer() {
         if (error) throw error;
         const detail = (data?.requestRuleSet as RequestRuleSetDetail | null) ?? null;
         if (!detail) {
-          setGlobalStatus(t("status.failedToLoad"));
+          setGlobalStatus(t("status.failedToLoad"), { level: "ERROR" });
         }
         return detail;
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToLoad"),
+          { level: "ERROR" },
         );
         return null;
       }
@@ -314,6 +315,7 @@ export function SettingsRequestRulesContainer() {
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     }
   }, [client, setGlobalStatus, t]);
@@ -345,6 +347,7 @@ export function SettingsRequestRulesContainer() {
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     }
   }, [client, setGlobalStatus, t]);
@@ -430,7 +433,7 @@ export function SettingsRequestRulesContainer() {
         .mutation(deleteRequestRuleSetMutation, { id: record.id })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("settings.requestRuleDeleted", { name: record.name }));
+      setGlobalStatus(t("settings.requestRuleDeleted", { name: record.name }), { level: "SUCCESS" });
       if (editingRuleSetId === record.id) {
         closeEditor();
       }
@@ -442,6 +445,7 @@ export function SettingsRequestRulesContainer() {
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToDelete"),
+        { level: "ERROR" },
       );
     } finally {
       setMutatingRuleSetId(null);
@@ -491,7 +495,7 @@ export function SettingsRequestRulesContainer() {
           })
           .toPromise();
         if (metadata.error) throw metadata.error;
-        setGlobalStatus(t("settings.requestRuleUpdated"));
+        setGlobalStatus(t("settings.requestRuleUpdated"), { level: "SUCCESS" });
       } else {
         const { error } = await client
           .mutation(createRequestRuleSetMutation, {
@@ -499,7 +503,7 @@ export function SettingsRequestRulesContainer() {
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("settings.requestRuleCreated"));
+        setGlobalStatus(t("settings.requestRuleCreated"), { level: "SUCCESS" });
       }
       closeEditor();
       await refreshRuleSets();
@@ -532,6 +536,7 @@ export function SettingsRequestRulesContainer() {
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingRuleSetId(null);
@@ -553,10 +558,11 @@ export function SettingsRequestRulesContainer() {
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("settings.requestGateUpdated"));
+        setGlobalStatus(t("settings.requestGateUpdated"), { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setSavingGate(false);

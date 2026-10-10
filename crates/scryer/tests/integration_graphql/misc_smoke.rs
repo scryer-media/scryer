@@ -324,7 +324,7 @@ async fn graphql_query_subject_interactive_search_starts_and_polls() {
                 indexers { indexerId name priority status resultCount elapsedMs failureReason }
             }
         }"#,
-        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+        json!({ "input": { "query": "paperman" } }),
     )
     .await;
     assert_no_errors(&start);
@@ -372,7 +372,7 @@ async fn graphql_candidate_token_mutation_refuses_a_release_outside_the_search()
         r#"mutation($input: SearchReleasesInput!) {
             startInteractiveReleaseSearch(input: $input) { id state }
         }"#,
-        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+        json!({ "input": { "query": "paperman" } }),
     )
     .await;
     assert_no_errors(&start);
@@ -420,7 +420,7 @@ async fn graphql_unlinked_grab_refuses_a_release_outside_the_search() {
         r#"mutation($input: SearchReleasesInput!) {
             startInteractiveReleaseSearch(input: $input) { id state }
         }"#,
-        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+        json!({ "input": { "query": "paperman" } }),
     )
     .await;
     assert_no_errors(&start);
@@ -463,7 +463,7 @@ async fn graphql_one_shot_search_releases_requires_a_title() {
     let body = gql(
         &ctx,
         r#"query($input: SearchReleasesInput!) { searchReleases(input: $input) { title } }"#,
-        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+        json!({ "input": { "query": "paperman" } }),
     )
     .await;
     let errors = body["errors"].as_array().expect("expected graphql errors");

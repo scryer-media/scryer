@@ -19,10 +19,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchLanguagePicker } from "@/components/common/search-language-picker";
+import { InfoHelp } from "@/components/common/info-help";
+import { Input } from "@/components/ui/input";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { TitleTagsEditor } from "@/components/common/title-tags-picker";
 import { Button } from "@/components/ui/button";
-import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
+import {
+  formatAudioLanguageLabels,
+  formatSearchLanguageLabels,
+} from "@/lib/constants/audio-languages";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
@@ -87,17 +93,19 @@ type Props = {
 type SettingsRowProps = {
   icon: React.ElementType;
   label: string;
+  help?: string;
   effective: React.ReactNode;
   children: React.ReactNode;
 };
 
-function SettingsRow({ icon: Icon, label, effective, children }: SettingsRowProps) {
+function SettingsRow({ icon: Icon, label, help, effective, children }: SettingsRowProps) {
   return (
     <tr className="border-b border-border/70 last:border-b-0">
       <th scope="row" className="w-[24%] px-4 py-3 text-left align-middle sm:px-5">
         <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
           <Icon aria-hidden="true" className="size-4 shrink-0" />
           {label}
+          {help ? <InfoHelp text={help} ariaLabel={label} /> : null}
         </span>
       </th>
       <td className="w-[38%] px-4 py-3 align-middle text-sm text-foreground sm:px-5">
@@ -158,6 +166,17 @@ export function TitleOptionsSettingsGrid({
         ? "enabled"
         : "disabled";
   const effectiveUseSeasonFolders = title.effectiveUseSeasonFolders ?? true;
+  const searchLanguages = (title.tags ?? [])
+    .filter((tag) => tag.startsWith("scryer:search-languages:"))
+    .map((tag) => tag.slice("scryer:search-languages:".length))
+    .filter(Boolean);
+  const inheritsSearchLanguages = !(title.tags ?? []).some((tag) =>
+    tag.startsWith("scryer:search-languages:"),
+  );
+  const searchAliases = (title.tags ?? [])
+    .filter((tag) => tag.startsWith("scryer:search-aliases:"))
+    .map((tag) => tag.slice("scryer:search-aliases:".length))
+    .filter(Boolean);
   const currentMetadataLanguage =
     title.metadataLanguageOverride?.trim() || INHERIT_VALUE;
   const effectiveMetadataLanguage =
@@ -188,7 +207,7 @@ export function TitleOptionsSettingsGrid({
     try {
       await onUpdateTitleOptions(options);
     } catch {
-      setGlobalStatus(t("status.failedToUpdate"));
+      setGlobalStatus(t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setSaving(false);
     }
@@ -207,7 +226,7 @@ export function TitleOptionsSettingsGrid({
       }
       await onTitleChanged?.();
     } catch {
-      setGlobalStatus(t("status.failedToUpdate"));
+      setGlobalStatus(t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setAudioSaving(false);
     }
@@ -403,6 +422,52 @@ export function TitleOptionsSettingsGrid({
                 buttonClassName="w-[70%]"
               />
             </div>
+          </SettingsRow>
+
+          <SettingsRow
+            icon={Languages}
+            label={t("settings.searchLanguages")}
+            help={t("settings.searchLanguagesHelp")}
+            effective={
+              inheritsSearchLanguages
+                ? t("title.inheritDefault")
+                : formatSearchLanguageLabels(searchLanguages)
+            }
+          >
+            <div className="space-y-2">
+              <SearchLanguagePicker
+                value={searchLanguages}
+                onChange={(codes) => void saveTitleOptions({ searchLanguages: codes })}
+                disabled={saving}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={saving || inheritsSearchLanguages}
+                onClick={() => void saveTitleOptions({ searchLanguages: null })}
+              >
+                {t("title.inheritDefault")}
+              </Button>
+            </div>
+          </SettingsRow>
+          <SettingsRow
+            icon={Tag}
+            label={t("settings.searchAliases")}
+            effective={searchAliases.join("; ")}
+          >
+            <Input
+              key={searchAliases.join("\n")}
+              defaultValue={searchAliases.join("; ")}
+              disabled={saving}
+              aria-label={t("settings.searchAliases")}
+              placeholder={t("settings.searchAliasesHelp")}
+              onBlur={(event) => {
+                const aliases = event.target.value.split(";").map((value) => value.trim()).filter(Boolean);
+                if (aliases.join("\n") !== searchAliases.join("\n")) {
+                  void saveTitleOptions({ searchAliases: aliases });
+                }
+              }}
+            />
           </SettingsRow>
 
           <SettingsRow

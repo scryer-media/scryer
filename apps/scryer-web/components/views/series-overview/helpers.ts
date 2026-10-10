@@ -10,6 +10,7 @@ import type { UiDateTimeFormat } from "@/lib/types/settings";
 // `node --test`, which cannot resolve bundler path aliases. The type-only alias
 // imports above are erased by type stripping and are fine.
 import { formatUiDate } from "../../../lib/utils/date-format.ts";
+import { episodeTitleOrTba } from "../../../lib/utils/episode-title.ts";
 
 export function formatDate(
   iso: string | null | undefined,
@@ -124,6 +125,17 @@ export function episodeSortValue(episode: CollectionEpisode) {
     return Number.MAX_SAFE_INTEGER;
   }
   return Number.parseInt(match[0], 10);
+}
+
+/**
+ * The name an episode row shows. Upstream metadata can drop an episode's
+ * title, which then reads as a translated "TBA" rather than a blank.
+ */
+export function episodeDisplayTitle(
+  episode: Pick<CollectionEpisode, "title" | "episodeLabel">,
+  t: (key: string) => string,
+) {
+  return episodeTitleOrTba(episode.title?.trim() || episode.episodeLabel, t);
 }
 
 export function isEpisodeCountableForProgress(episode: CollectionEpisode) {

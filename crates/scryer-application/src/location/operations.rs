@@ -146,7 +146,66 @@ struct RootMoveDraftContext<'a> {
     merge_destination_titles: &'a BTreeMap<String, Title>,
     folder_template: &'a str,
     media_files_by_title: &'a BTreeMap<String, Vec<crate::TitleMediaFile>>,
+    /// Every configured root of every library, for the source-folder check.
+    all_root_paths: &'a [String],
     mode: LocationExecutionMode,
+}
+
+/// Why a title's recorded folder cannot be the source of a move, if it cannot.
+///
+/// Planning walks the source folder and treats everything inside it as the
+/// title's. A recorded folder that is a library root, contains one, or lies
+/// outside every root of the title's library would hand the move every title
+/// beneath it, so the title is held back for the operator instead. This only
+/// ever removes a title from what a move selects.
+pub(super) fn source_folder_refusal(
+    title: &Title,
+    library: Option<&scryer_domain::Library>,
+    all_root_paths: &[String],
+) -> Option<String> {
+    let folder = title
+        .folder_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())?;
+    let library_roots = library
+        .map(|library| {
+            library
+                .roots
+                .iter()
+                .map(|root| root.path.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // A library with no roots of its own falls back to the facet defaults
+    // elsewhere; here the folder only has to be inside some configured root.
+    let library_roots = if library_roots.is_empty() {
+        all_root_paths
+    } else {
+        library_roots.as_slice()
+    };
+    let violation = crate::title_folder_rules::title_folder_root_violation(
+        folder,
+        library_roots,
+        all_root_paths,
+    )?;
+    let display = crate::stored_paths::stored_path_to_display_string(folder);
+    let detail = match violation {
+        crate::title_folder_rules::TitleFolderRootViolation::EqualsRoot => {
+            "is a library root".to_string()
+        }
+        crate::title_folder_rules::TitleFolderRootViolation::ContainsRoot => {
+            "contains a library root".to_string()
+        }
+        crate::title_folder_rules::TitleFolderRootViolation::OutsideLibraryRoots => {
+            "is outside every root of its library".to_string()
+        }
+    };
+    Some(format!(
+        "the recorded folder for \"{}\" ({display}) {detail}, so moving it would take other \
+         titles' files with it; correct the title's folder before moving it",
+        title.name
+    ))
 }
 
 /// One title's draft plus the selection-wide state it contributes, applied in
@@ -2128,6 +2187,12 @@ impl AppUseCase {
             .await?;
         let depth = LOCATION_OPERATION_VERIFICATION_DEPTH;
         let probe = SystemVolumeProbe;
+        let all_root_paths = self
+            .all_library_root_folders()
+            .await?
+            .into_iter()
+            .map(|root| root.path)
+            .collect::<Vec<_>>();
 
         let mut drafts = Vec::with_capacity(titles.len());
         let mut moved_bytes = 0_u64;
@@ -2143,6 +2208,7 @@ impl AppUseCase {
             merge_destination_titles: &merge_destination_titles,
             folder_template: &folder_template,
             media_files_by_title: &media_files_by_title,
+            all_root_paths: &all_root_paths,
             mode,
         };
         // The folder walks, stats, and hashes behind each draft are the
@@ -2320,6 +2386,7 @@ impl AppUseCase {
             merge_destination_titles,
             folder_template,
             media_files_by_title,
+            all_root_paths,
             mode,
         } = context;
         let mut downgraded = None;
@@ -2378,6 +2445,17 @@ impl AppUseCase {
             return Ok(RootMoveTitleOutcome::settled(draft, downgraded));
         }
 
+        // Before anything walks or maps the source folder: a folder that is a
+        // root, holds one, or is outside the library is not this title's.
+        if let Some(reason) =
+            source_folder_refusal(title, libraries.get(&title.library_id), all_root_paths)
+        {
+            downgraded = Some(reason_codes::SOURCE_FOLDER_NOT_A_TITLE_FOLDER);
+            draft.class = TitleLocationClass::NeedsResolution;
+            draft.blocked_reason = Some(reason);
+            return Ok(RootMoveTitleOutcome::settled(draft, downgraded));
+        }
+
         let Some(destination_root_path) = destination_root_path else {
             downgraded = Some(reason_codes::DESTINATION_ROOT_UNCONFIGURED);
             draft.class = TitleLocationClass::NeedsResolution;
@@ -2402,6 +2480,22 @@ impl AppUseCase {
         let merge_destination = classified
             .merge_target_title_id()
             .and_then(|id| merge_destination_titles.get(id));
+
+        // The merged files are routed into the destination title's recorded
+        // folder, so that record has to be a title folder too.
+        if let Some(destination_title) = merge_destination
+            && source_folder_refusal(destination_title, Some(destination_library), all_root_paths)
+                .is_some()
+        {
+            downgraded = Some(reason_codes::SOURCE_FOLDER_NOT_A_TITLE_FOLDER);
+            draft.class = TitleLocationClass::NeedsResolution;
+            draft.blocked_reason = Some(format!(
+                "the recorded folder for \"{}\", the title being merged into, is not a title \
+                 folder; correct that title's folder before merging into it",
+                destination_title.name
+            ));
+            return Ok(RootMoveTitleOutcome::settled(draft, downgraded));
+        }
 
         // A merge also lands on the *destination title's* root, not on the
         // one the request named, when the two differ. FR-063 gives the

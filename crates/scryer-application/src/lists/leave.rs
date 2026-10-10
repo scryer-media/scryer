@@ -44,6 +44,11 @@ pub struct LeaveReport {
     /// Rows whose title was no longer in the library; marked handled with
     /// nothing to act on.
     pub gone: u64,
+    /// Rows of a personal list whose owner may not change the title; recorded
+    /// as a logged departure and marked handled with the title left as it is.
+    /// Like `failed`, `guarded` and `gone`, this is internal bookkeeping: only
+    /// `acted` reaches the sync job summary.
+    pub not_permitted: u64,
 }
 
 /// Run the on-leave action for every departed, not-yet-handled row of the
@@ -67,6 +72,7 @@ pub async fn handle_departures(
     };
     let mut guard = LeaveGuard::load(subscription, &departed, memberships, subscriptions).await?;
     let mut handled = Vec::new();
+    let mut unrouted = 0u64;
 
     for row in departed {
         let Some(title_id) = acting_title(subscription, &row).map(str::to_string) else {
@@ -84,6 +90,52 @@ pub async fn handle_departures(
         }
 
         let on_leave = subscription.on_leave;
+        if subscription.is_personal()
+            && matches!(on_leave, ListOnLeave::Unmonitor | ListOnLeave::Tag)
+        {
+            let Some(route) = subscription.route_for(row.kind.clone()) else {
+                // No library route for this kind is a configuration fault, not
+                // an answer about the owner; the departure stays owed until the
+                // list routes the kind again.
+                unrouted += 1;
+                report.failed += 1;
+                continue;
+            };
+            match actions.owner_manages_titles(subscription, route).await {
+                Ok(true) => {}
+                // The owner may not change this title. The answer will not
+                // improve by asking again every sync, so the departure is
+                // settled without touching the title, and recorded on the
+                // owner's own stream as a logged departure so the reason the
+                // title was left alone stays visible to them.
+                Ok(false) => {
+                    tracing::info!(
+                        subscription_id = %subscription.id,
+                        title_id = %title_id,
+                        "personal list owner may not change a departed title; recorded without acting"
+                    );
+                    if let Err(error) = actions
+                        .record_departure(subscription, &title_id, ListOnLeave::Log)
+                        .await
+                    {
+                        tracing::warn!(
+                            subscription_id = %subscription.id,
+                            title_id = %title_id,
+                            error = %error,
+                            "could not record a list departure"
+                        );
+                    }
+                    report.not_permitted += 1;
+                    handled.push(row.item_key);
+                    continue;
+                }
+                // The permission could not be read; the departure stays owed.
+                Err(_) => {
+                    report.failed += 1;
+                    continue;
+                }
+            }
+        }
         let result = match on_leave {
             ListOnLeave::Keep => Ok(()),
             ListOnLeave::Log => {
@@ -91,8 +143,16 @@ pub async fn handle_departures(
                     .record_departure(subscription, &title_id, on_leave)
                     .await
             }
-            ListOnLeave::Unmonitor => actions.set_title_monitored(&title_id, false).await,
-            ListOnLeave::Tag => actions.tag_title(&title_id, LEFT_LIST_TAG).await,
+            ListOnLeave::Unmonitor => {
+                actions
+                    .set_departed_title_monitored(subscription, &title_id, false)
+                    .await
+            }
+            ListOnLeave::Tag => {
+                actions
+                    .tag_departed_title(subscription, &title_id, LEFT_LIST_TAG)
+                    .await
+            }
         };
         if result.is_ok()
             && matches!(on_leave, ListOnLeave::Unmonitor | ListOnLeave::Tag)
@@ -126,12 +186,31 @@ pub async fn handle_departures(
         }
     }
 
+    if unrouted > 0 {
+        tracing::warn!(
+            subscription_id = %subscription.id,
+            departures = unrouted,
+            "personal list departures have no library route for their kind; they stay owed"
+        );
+    }
     if !handled.is_empty() {
         memberships
             .set_left_handled(&subscription.id, &handled)
             .await?;
     }
     Ok(report)
+}
+
+/// Whether a departure waits for the list to route its kind again before it
+/// can run: a personal list's `Unmonitor` or `Tag` checks the owner's
+/// permission for the routed library, so without a route it stays owed.
+fn waits_for_route(subscription: &ListSubscription, row: &ListMembership) -> bool {
+    subscription.is_personal()
+        && matches!(
+            subscription.on_leave,
+            ListOnLeave::Unmonitor | ListOnLeave::Tag
+        )
+        && subscription.route_for(row.kind.clone()).is_none()
 }
 
 /// Whether a title whose on-leave action failed is still in the library. A
@@ -144,6 +223,9 @@ async fn title_still_exists(actions: &dyn ListActions, title_id: &str) -> bool {
 /// The title a departed row's on-leave action would touch: only a title this
 /// list added, and only when the list's on-leave action is not `Keep`.
 fn acting_title<'a>(subscription: &ListSubscription, row: &'a ListMembership) -> Option<&'a str> {
+    if row.series_movie.is_some() {
+        return None;
+    }
     match (&row.title_id, row.added_by_list, subscription.on_leave) {
         (Some(title_id), true, on_leave) if on_leave != ListOnLeave::Keep => Some(title_id),
         _ => None,
@@ -161,7 +243,9 @@ pub fn awaits_leave_action(subscription: &ListSubscription, row: &ListMembership
 /// it awaits its action and no other enabled list still wants the title.
 /// Such a list must be processed again even when its provider reports no
 /// change. A departure another list still holds back does not count, so it
-/// never forces the list to be read again while that stays true.
+/// never forces the list to be read again while that stays true; nor does one
+/// waiting for its kind to be routed again, which the next scheduled sync
+/// picks up once the route exists.
 pub async fn has_runnable_leave_action(
     subscription: &ListSubscription,
     rows: &[ListMembership],
@@ -170,7 +254,7 @@ pub async fn has_runnable_leave_action(
 ) -> AppResult<bool> {
     let waiting = rows
         .iter()
-        .filter(|row| awaits_leave_action(subscription, row))
+        .filter(|row| awaits_leave_action(subscription, row) && !waits_for_route(subscription, row))
         .cloned()
         .collect::<Vec<_>>();
     if waiting.is_empty() {

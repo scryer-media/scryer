@@ -1,3 +1,6 @@
+pub(crate) const SCENE_SUBTITLE_PENDING_WARNING: &str =
+    "Video imported; archive or subtitle processing needs attention. Sources are preserved.";
+
 #[expect(
     clippy::too_many_arguments,
     reason = "completed import orchestration carries durable evidence and retry context explicitly"
@@ -41,20 +44,171 @@ async fn run_import(
         CompletedImportTargetResolution::Finished(result) => return Ok(*result),
     };
 
-    drop(preparation_permit.take());
-    let result = dispatch_completed_import_target(
+    let mut workspace_reference = crate::archive_extractor::ArchiveWorkspaceReference::default();
+    workspace_reference.track(target.extracted_dir.as_deref());
+    let source_hold = target.archive_preservation_acquired
+        || target.extracted_dir.is_some()
+        || target.archive_processing_pending;
+    if source_hold {
+        app.services
+            .workflow
+            .imports
+            .set_archive_processing_pending(import_id, true)
+            .await?;
+    }
+
+    let subtitle_roots = std::iter::once(PathBuf::from(&completed.dest_dir))
+        .chain(target.extracted_dir.iter().cloned())
+        .collect::<Vec<_>>();
+    let subtitle_videos = target
+        .video_files
+        .iter()
+        .map(|video| (video.path().to_path_buf(), video.parse_path().into_owned()))
+        .collect::<Vec<_>>();
+    let subtitle_plan = sidecars::SceneSubtitlePlan::discover_for_import(
         app,
-        actor,
+        &target.title,
         import_id,
-        completed,
-        release_evidence,
-        started_at,
-        &target,
+        &subtitle_videos,
+        &subtitle_roots,
     )
     .await;
+    let mut subtitle_failed = subtitle_plan.is_err() || target.archive_processing_pending;
+    let subtitle_plan = match subtitle_plan {
+        Ok(plan) => plan,
+        Err(AppError::Canceled(message)) => return Err(AppError::Canceled(message)),
+        Err(_) => {
+            tracing::warn!(
+                import_id,
+                "scene subtitle discovery failed; preserving sources and continuing video import"
+            );
+            sidecars::SceneSubtitlePlan::default()
+        }
+    };
+    drop(preparation_permit.take());
+    // From here a video may be placed from the workspace, so its subtitles
+    // stay with it whatever the outcome.
+    workspace_reference.mark_video_imported();
+    let mut subtitle_deliveries = Vec::new();
+    let (mut result, source_cleanups) =
+        collect_deferred_import_source_cleanup(dispatch_completed_import_target(
+            app,
+            actor,
+            import_id,
+            completed,
+            release_evidence,
+            started_at,
+            &target,
+            &mut subtitle_deliveries,
+        ))
+        .await;
+
+    // Delivery uses the original names captured before a move import. A
+    // failure retains extracted subtitles for inspection and a safe retry.
+    let mut delivered_sources = Vec::new();
+    for (source, destination) in &subtitle_deliveries {
+        match subtitle_plan
+            .deliver(app, &target.title.id, source, destination)
+            .await
+        {
+            Ok(()) => delivered_sources.push(source.as_path()),
+            Err(_) => {
+                subtitle_failed = true;
+                tracing::warn!(
+                    import_id,
+                    "scene subtitle delivery failed; imported video and subtitle sources preserved"
+                );
+            }
+        }
+    }
+    let mut subtitles_pending =
+        subtitle_failed || subtitle_plan.has_pending_sources(delivered_sources.into_iter());
+    let subtitles_outstanding = subtitles_pending;
+    if !subtitles_pending
+        && result
+            .as_ref()
+            .is_ok_and(|result| result.decision == ImportDecision::Imported)
+        && complete_deferred_import_source_cleanup(app, source_cleanups)
+            .await
+            .is_err()
+    {
+        subtitles_pending = true;
+        tracing::warn!(
+            import_id,
+            "verified source cleanup could not finish; import remains successful and sources retained"
+        );
+    }
+    if source_hold
+        && !subtitles_pending
+        && result
+            .as_ref()
+            .is_ok_and(|result| result.decision == ImportDecision::Imported)
+        && app
+            .services
+            .workflow
+            .imports
+            .set_archive_processing_pending(import_id, false)
+            .await
+            .is_err()
+    {
+        subtitles_pending = true;
+        tracing::warn!(
+            import_id,
+            "could not release archive preservation hold; sources retained"
+        );
+    }
+
+    if subtitles_pending {
+        workspace_reference.retain();
+        if source_hold {
+            let reason = if target.archive_processing_pending {
+                HeldSourcesReason::ArchiveExtractionFailed
+            } else if subtitles_outstanding {
+                HeldSourcesReason::SubtitlesPending
+            } else {
+                HeldSourcesReason::SourceCleanupIncomplete
+            };
+            if app
+                .services
+                .workflow
+                .imports
+                .record_archive_hold_reason(import_id, reason.as_str())
+                .await
+                .is_err()
+            {
+                tracing::warn!(import_id, "could not record why sources are held");
+            }
+        }
+        if let Ok(result) = &mut result
+            && result.decision == ImportDecision::Imported
+        {
+            result.error_message = Some(SCENE_SUBTITLE_PENDING_WARNING.into());
+            // Keep the placed video successful while persisting the cleanup hold.
+            if app
+                .update_import_status_and_notify(
+                    import_id,
+                    ImportStatus::Completed,
+                    serde_json::to_string(result).ok(),
+                )
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    import_id,
+                    "could not persist scene subtitle warning; source cleanup remains held"
+                );
+            }
+        }
+    }
 
     // Clean up extracted archive directory if we created one
-    if let Some(ref dir) = target.extracted_dir {
+    if result
+        .as_ref()
+        .is_ok_and(|result| result.decision == ImportDecision::Imported)
+        && !subtitles_pending
+        && let Some(ref dir) = target.extracted_dir
+    {
+        workspace_reference.retain();
         crate::archive_extractor::cleanup_extracted_dir(dir).await;
     }
 
@@ -203,6 +357,8 @@ struct CompletedImportTarget {
     is_series: bool,
     video_files: Vec<ImportVideoFile>,
     extracted_dir: Option<PathBuf>,
+    archive_processing_pending: bool,
+    archive_preservation_acquired: bool,
     series_movie_link_id: Option<String>,
 }
 
@@ -264,7 +420,7 @@ enum TitlelessArchiveRelocation {
 }
 
 async fn relocate_titleless_archive_workspace_for_title(
-    title: &scryer_domain::Title,
+    title_name: &str,
     destination: crate::archive_extractor::ArchiveExtractionDestination,
     extracted_dir: PathBuf,
 ) -> AppResult<TitlelessArchiveRelocation> {
@@ -282,28 +438,29 @@ async fn relocate_titleless_archive_workspace_for_title(
             ))
         })?;
 
-    let mut target = target_parent.join(
+    let target = target_parent.join(
         extracted_dir
             .file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new(".scryer-ax-relocated")),
     );
-    if target.exists() {
-        target = target_parent.join(format!(
-            ".scryer-ax-{:016x}",
-            uuid::Uuid::new_v4().as_u128() as u64
-        ));
-    }
-
-    match tokio::fs::rename(&extracted_dir, &target).await {
+    // Keep the name recorded by the ownership marker and never replace an
+    // existing directory. Unsupported filesystems can extract under the title.
+    let Some(result) = crate::fs_safety::exclusive_rename(&extracted_dir, &target).await else {
+        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
+        return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
+    };
+    match result {
         Ok(()) => Ok(TitlelessArchiveRelocation::Ready(target)),
         Err(error) => {
-            crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
-            if crate::fs_safety::is_cross_device_error(&error) {
+            crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
+            if crate::fs_safety::is_cross_device_error(&error)
+                || error.kind() == std::io::ErrorKind::AlreadyExists
+            {
                 return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
             }
             Err(AppError::Validation(format!(
                 "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {error}",
-                title.name,
+                title_name,
                 extracted_dir.display(),
                 target.display()
             )))
@@ -428,6 +585,26 @@ async fn archive_password_candidates(
 ) -> crate::import::archive_passwords::ArchivePasswordCandidates {
     let mut candidates = crate::import::archive_passwords::ArchivePasswordCandidates::default();
     candidates.push_operator(operator_password);
+    if let Some(id) = completed
+        .download_id
+        .as_deref()
+        .and_then(scryer_domain::download_identity::DownloadId::parse)
+    {
+        match app
+            .services
+            .workflow
+            .download_submissions
+            .password_candidates(&id)
+            .await
+        {
+            Ok(values) => {
+                for value in values.iter() {
+                    candidates.push_response_header(value);
+                }
+            }
+            Err(_) => tracing::warn!("stored download password candidates could not be loaded"),
+        }
+    }
     if let (Some(title_id), Some(source_title)) = (
         release_evidence.title_id(),
         release_evidence.submission_source_title(),
@@ -480,6 +657,13 @@ async fn try_match_titleless_archive_from_inner_video(
         .available()
         .cloned();
 
+    // Fence source cleanup before any set can produce pending subtitles,
+    // including cancellation or a later set failing before target resolution.
+    app.services
+        .workflow
+        .imports
+        .set_archive_processing_pending(import_id, true)
+        .await?;
     mark_import_extracting(app, import_id).await?;
     let Some(extracted_dir) = ({
         let _archive_extraction_permit = app
@@ -500,16 +684,30 @@ async fn try_match_titleless_archive_from_inner_video(
         return Ok(None);
     };
 
+    let mut workspace_reference = crate::archive_extractor::ArchiveWorkspaceReference::default();
+    workspace_reference.track(Some(&extracted_dir));
     let is_series = matches!(facet, MediaFacet::Series | MediaFacet::Anime);
-    let video_files = match find_video_files(&extracted_dir, is_series) {
+    let video_files = match (|| {
+        let mut files = find_video_files(&extracted_dir, is_series)?;
+        let replaced = crate::archive_extractor::replaced_archive_sources(&extracted_dir)?;
+        files.extend(
+            find_video_files(dest_dir, is_series)?
+                .into_iter()
+                .filter(|path| {
+                    path.canonicalize()
+                        .is_ok_and(|path| !replaced.contains(&path))
+                }),
+        );
+        Ok::<_, AppError>(files)
+    })() {
         Ok(video_files) => video_files,
         Err(error) => {
-            crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+            crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
             return Err(error);
         }
     };
     if video_files.is_empty() {
-        crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
         return Ok(None);
     }
 
@@ -537,13 +735,16 @@ async fn try_match_titleless_archive_from_inner_video(
                 match archive_extraction_destination_for_title(app, import_id, &title).await {
                     Ok(destination) => destination,
                     Err(error) => {
-                        crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+                        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
                         return Err(error);
                     }
                 };
-            let relocation =
-                relocate_titleless_archive_workspace_for_title(&title, destination, extracted_dir)
-                    .await?;
+            let relocation = relocate_titleless_archive_workspace_for_title(
+                &title.name,
+                destination,
+                extracted_dir,
+            )
+            .await?;
             let extracted_dir = match relocation {
                 TitlelessArchiveRelocation::Ready(extracted_dir) => extracted_dir,
                 TitlelessArchiveRelocation::ReextractUnderMatchedTitle => {
@@ -574,6 +775,7 @@ async fn try_match_titleless_archive_from_inner_video(
                     })?
                 }
             };
+            workspace_reference.retain();
             return Ok(Some(TitlelessArchiveMatch {
                 title,
                 extracted_dir,
@@ -581,7 +783,7 @@ async fn try_match_titleless_archive_from_inner_video(
         }
     }
 
-    crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+    crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
     Ok(None)
 }
 
@@ -604,6 +806,9 @@ async fn resolve_completed_import_target(
     let mut title = None;
     let dest_dir = Path::new(&completed.dest_dir);
     let mut extracted_dir: Option<PathBuf> = None;
+    let mut archive_processing_pending = false;
+    let mut archive_preservation_acquired = extracted_dir.is_some();
+    let mut workspace_reference = crate::archive_extractor::ArchiveWorkspaceReference::default();
     // One srrdb session for this whole `run_import` call: the setting is read
     // at most once, results are reused between the titleless probe below and
     // the final file list, and one outage stops the rest of this import.
@@ -671,6 +876,7 @@ async fn resolve_completed_import_target(
         if let Some(archive_match) = archive_match? {
             title = Some(archive_match.title);
             extracted_dir = Some(archive_match.extracted_dir);
+            workspace_reference.track(extracted_dir.as_deref());
         }
     }
 
@@ -777,14 +983,32 @@ async fn resolve_completed_import_target(
     // 3. FIND VIDEO FILES (extract archives first if needed)
     let is_series = matches!(title.facet, MediaFacet::Series | MediaFacet::Anime);
     if extracted_dir.is_none() {
-        let extraction_destination = if archive_extraction_would_be_needed_best_effort(
+        let loose_video_available =
+            find_video_files(dest_dir, is_series).is_ok_and(|files| !files.is_empty());
+        let archive_provider = app
+            .services
+            .integrations
+            .archive_extractor_plugin_provider
+            .available()
+            .cloned();
+        let needs_archives = archive_extraction_would_be_needed_best_effort(
             dest_dir,
             automatic_scan_sample_rule(&title.facet),
-        ) {
-            Some(archive_extraction_destination_for_title(app, import_id, &title).await?)
-        } else {
-            None
-        };
+        );
+        if needs_archives {
+            archive_preservation_acquired = true;
+            app.services
+                .workflow
+                .imports
+                .set_archive_processing_pending(import_id, true)
+                .await?;
+        }
+        let extraction_destination =
+            if needs_archives && !(loose_video_available && archive_provider.is_none()) {
+                Some(archive_extraction_destination_for_title(app, import_id, &title).await?)
+            } else {
+                None
+            };
         let passwords = if extraction_destination.is_some() {
             archive_password_candidates(app, completed, release_evidence, archive_password).await
         } else {
@@ -811,29 +1035,31 @@ async fn resolve_completed_import_target(
             None
         };
         drop(preparation_permit.take());
-        let extraction = {
-            let _archive_extraction_permit = app
-                .runtime
-                .imports
-                .execution_coordinator
-                .acquire_archive_extraction()
-                .await;
+        let extraction = async {
+            let acquire = app.runtime.imports.execution_coordinator.acquire_archive_extraction();
+            let cancellation = extraction_stream.as_ref().map(|stream| stream.cancellation_token());
+            let _archive_extraction_permit = if let Some(token) = &cancellation {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => return Err(AppError::Canceled("queued archive extraction was cancelled".into())),
+                    permit = acquire => permit,
+                }
+            } else { acquire.await };
             if let Some(stream) = &extraction_stream {
                 stream.mark_extracting().await;
+            }
+            if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(AppError::Canceled("queued archive extraction was cancelled".into()));
             }
             crate::archive_extractor::extract_archives_if_needed(
                 dest_dir,
                 automatic_scan_sample_rule(&title.facet),
                 extraction_destination,
                 &passwords,
-                app.services
-                    .integrations
-                    .archive_extractor_plugin_provider
-                    .available()
-                    .cloned(),
+                archive_provider,
             )
             .await
-        };
+        }.await;
         if let Some(stream) = extraction_stream {
             stream.finish().await;
         }
@@ -844,18 +1070,41 @@ async fn resolve_completed_import_target(
                 .acquire_preparation()
                 .await,
         );
-        extracted_dir = extraction?;
+        extracted_dir = match extraction {
+            Ok(dir) => dir,
+            Err(AppError::Canceled(message)) => return Err(AppError::Canceled(message)),
+            Err(_) if loose_video_available => {
+                archive_processing_pending = true;
+                tracing::warn!(
+                    import_id,
+                    "adjacent archive processing failed; continuing loose video import and preserving download"
+                );
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        workspace_reference.track(extracted_dir.as_deref());
     }
     let effective_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
-    let video_files = match if is_series {
-        find_video_files(effective_dir, true)
-    } else {
-        find_video_files(effective_dir, false)
-    } {
+    let video_files = match (|| {
+        let mut files = find_video_files(effective_dir, is_series)?;
+        if extracted_dir.is_some() {
+            let replaced = crate::archive_extractor::replaced_archive_sources(effective_dir)?;
+            files.extend(
+                find_video_files(dest_dir, is_series)?
+                    .into_iter()
+                    .filter(|path| {
+                        path.canonicalize()
+                            .is_ok_and(|path| !replaced.contains(&path))
+                    }),
+            );
+        }
+        Ok::<_, AppError>(files)
+    })() {
         Ok(video_files) => video_files,
         Err(error) => {
             if let Some(ref dir) = extracted_dir {
-                crate::archive_extractor::cleanup_extracted_dir(dir).await;
+                crate::archive_extractor::abandon_extracted_dir(dir).await;
             }
             return Err(error);
         }
@@ -878,14 +1127,28 @@ async fn resolve_completed_import_target(
         .await;
 
     if video_files.is_empty() {
+        // A download whose only payload is executables is a bad grab, not a
+        // download awaiting review; everything else keeps the no-video path.
+        let unwanted_executable =
+            unwanted_executable_in_download(dest_dir, extracted_dir.as_deref());
         if let Some(ref dir) = extracted_dir {
-            crate::archive_extractor::cleanup_extracted_dir(dir).await;
+            crate::archive_extractor::abandon_extracted_dir(dir).await;
         }
+        let (skip_reason, error_message) = match unwanted_executable {
+            Some(executable) => (
+                ImportSkipReason::UnwantedExecutables,
+                unwanted_executable_message(&executable),
+            ),
+            None => (
+                ImportSkipReason::NoVideoFiles,
+                format!("no video files found in {}", completed.dest_dir),
+            ),
+        };
         let result = ImportResult {
             decision: ImportDecision::Skipped,
-            skip_reason: Some(ImportSkipReason::NoVideoFiles),
+            skip_reason: Some(skip_reason),
             title_id: Some(title.id.clone()),
-            error_message: Some(format!("no video files found in {}", completed.dest_dir)),
+            error_message: Some(error_message),
             release_burned: false,
             ..base_completed_import_result(import_id, completed, release_evidence, started_at)
         };
@@ -923,17 +1186,24 @@ async fn resolve_completed_import_target(
         _ => None,
     };
 
+    workspace_reference.retain();
     Ok(CompletedImportTargetResolution::Ready(Box::new(
         CompletedImportTarget {
             title,
             is_series,
             video_files,
             extracted_dir,
+            archive_processing_pending,
+            archive_preservation_acquired,
             series_movie_link_id,
         },
     )))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dispatch returns exact current source and destination mappings for sidecar delivery"
+)]
 async fn dispatch_completed_import_target(
     app: &AppUseCase,
     actor: &User,
@@ -942,6 +1212,7 @@ async fn dispatch_completed_import_target(
     release_evidence: &ReleaseEvidence,
     started_at: chrono::DateTime<Utc>,
     target: &CompletedImportTarget,
+    subtitle_deliveries: &mut Vec<(PathBuf, PathBuf)>,
 ) -> AppResult<ImportResult> {
     // The target title is settled and nothing has been written yet: the last
     // point an import can be refused cleanly while an operation owns the title
@@ -962,7 +1233,7 @@ async fn dispatch_completed_import_target(
     } else {
         crate::post_download_gate::RuntimeSampleValidationMode::EnforceAutomatic
     };
-    if let Some(ref series_movie_link_id) = target.series_movie_link_id {
+    let result = if let Some(ref series_movie_link_id) = target.series_movie_link_id {
         Box::pin(import_series_movie_download(
             app,
             actor,
@@ -991,6 +1262,7 @@ async fn dispatch_completed_import_target(
             source_root,
             &target.video_files,
             started_at,
+            subtitle_deliveries,
         ))
         .await
     } else {
@@ -1006,7 +1278,18 @@ async fn dispatch_completed_import_target(
             runtime_sample_mode,
         ))
         .await
+    };
+    if (target.series_movie_link_id.is_some() || !target.is_series)
+        && let Ok(result) = &result
+        && result.decision == ImportDecision::Imported
+        && let Some(destination) = result.dest_path.as_deref()
+    {
+        subtitle_deliveries.push((
+            stored_path_to_path_buf(&result.source_path),
+            stored_path_to_path_buf(destination),
+        ));
     }
+    result
 }
 
 /// Did an operator choose this file, rather than the acquisition loop?
@@ -1563,10 +1846,20 @@ async fn import_movie_download(
         .filter(|file| file.role.is_primary())
         .collect::<Vec<_>>();
     let quality_profile = resolve_import_quality_profile(app, title).await?;
-    let existing_score = existing_files
-        .iter()
-        .max_by_key(|file| file.acquisition_score.unwrap_or(0))
-        .and_then(|file| file.acquisition_score);
+    let scoring_context = app
+        .resolve_canonical_scoring_context(title, &quality_profile)
+        .await;
+    let title_scope = crate::SubmissionScope::Title;
+    // A movie is one member: its own runtime, and nothing to reinterpret.
+    let scope_size_basis = crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes);
+    let existing_score = app
+        .current_incumbent_score_for_import_scope(
+            title,
+            &title_scope,
+            &scoring_context,
+            scope_size_basis.total_runtime_minutes,
+        )
+        .await;
     let runtime_sample_validation = manual_aware_runtime_sample_validation(
         title
             .runtime_minutes
@@ -1806,16 +2099,11 @@ async fn import_movie_download(
     // `decide_import` made it unrepresentable — a *refused* admission here fell
     // straight through to the first-import insert below, writing a second
     // primary file for the movie it had just refused.
-    let scoring_context = app
-        .resolve_canonical_scoring_context(title, &quality_profile)
-        .await;
-    let title_scope = crate::SubmissionScope::Title;
     let decision_input = crate::import_decide::ImportDecisionInput {
         title,
         scoring_context: &scoring_context,
         scope: &title_scope,
-        // A movie is one member: its own runtime, and nothing to reinterpret.
-        scope_size_basis: crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
+        scope_size_basis,
         // The announced half of the evidence: the parse as it came off the
         // release name. `prepared.parsed` already carries the probe's findings,
         // so passing it would make both scoring passes identical.
@@ -1914,7 +2202,7 @@ async fn import_movie_download(
                     "movie",
                     "imported",
                     Some("upgrade"),
-                    None,
+                    Some(&outcome.new_file_id),
                     &[],
                 )
                 .await?;
@@ -2445,10 +2733,22 @@ async fn import_series_movie_download(
     }
     let manual_replacement = operator_initiated_import(runtime_sample_mode);
     let quality_profile = resolve_import_quality_profile(app, title).await?;
-    let existing_score = series_movie_link_files
-        .iter()
-        .max_by_key(|file| file.acquisition_score.unwrap_or(0))
-        .and_then(|file| file.acquisition_score);
+    let scoring_context = app
+        .resolve_canonical_scoring_context(title, &quality_profile)
+        .await;
+    let link_scope = crate::SubmissionScope::SeriesMovie {
+        series_movie_link_id: series_movie_link_id.to_string(),
+    };
+    // The linked movie is one member; see the title path above.
+    let scope_size_basis = crate::quality_profile::CoverageSizeBasis::single(movie.runtime_minutes);
+    let existing_score = app
+        .current_incumbent_score_for_import_scope(
+            title,
+            &link_scope,
+            &scoring_context,
+            scope_size_basis.total_runtime_minutes,
+        )
+        .await;
     // No fallback to the owning series runtime: a 24-minute parent episode
     // expectation would put every normal-length linked film outside the band.
     // An unknown movie runtime means the band cannot run (permissive); the
@@ -2611,18 +2911,11 @@ async fn import_series_movie_download(
     // **The one import decision** (design §3). A linked movie is a scope like
     // any other; hand-rolling its comparison is what let it disagree with the
     // grab that fetched the file.
-    let scoring_context = app
-        .resolve_canonical_scoring_context(title, &quality_profile)
-        .await;
-    let link_scope = crate::SubmissionScope::SeriesMovie {
-        series_movie_link_id: series_movie_link_id.to_string(),
-    };
     let decision_input = crate::import_decide::ImportDecisionInput {
         title,
         scoring_context: &scoring_context,
         scope: &link_scope,
-        // The linked movie is one member; see the title path above.
-        scope_size_basis: crate::quality_profile::CoverageSizeBasis::single(movie.runtime_minutes),
+        scope_size_basis,
         // The announced half of the evidence; see the title path above.
         parsed: &parsed,
         accepted: prepared.accepted.as_ref(),
@@ -2724,7 +3017,7 @@ async fn import_series_movie_download(
                         "movie",
                         "imported",
                         Some("upgrade"),
-                        None,
+                        Some(&outcome.new_file_id),
                         &[],
                     )
                     .await?;
@@ -3303,6 +3596,57 @@ async fn mark_wanted_completed_for_series_movie_link(
 
 #[cfg(test)]
 mod archive_relocation_tests {
+    #[cfg(all(
+        feature = "runtime-archives",
+        any(target_os = "linux", target_os = "macos")
+    ))]
+    #[tokio::test]
+    async fn relocation_preserves_ownership_and_never_replaces_existing_directory() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let source =
+            crate::archive_extractor::create_test_archive_workspace(&root.path().join("source"));
+        let destination = root.path().join("title");
+        std::fs::write(source.join("out/episode.mkv"), b"video").unwrap();
+        let outcome = relocate_titleless_archive_workspace_for_title(
+            "Fixture",
+            crate::archive_extractor::ArchiveExtractionDestination::new(
+                &destination,
+                "fixture-import",
+            ),
+            source.clone(),
+        )
+        .await
+        .unwrap();
+        let TitlelessArchiveRelocation::Ready(moved) = outcome else {
+            panic!("exclusive move should succeed")
+        };
+        assert!(!source.exists());
+        assert!(crate::archive_extractor::is_archive_workspace_output(
+            &moved.join("out/episode.mkv"),
+            &destination.join("episode.mkv")
+        ));
+
+        // Even an empty destination directory belongs to someone else.
+        std::fs::create_dir_all(&source).unwrap();
+        let outcome = relocate_titleless_archive_workspace_for_title(
+            "Fixture",
+            crate::archive_extractor::ArchiveExtractionDestination::new(
+                source.parent().unwrap(),
+                "fixture-import",
+            ),
+            moved.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            TitlelessArchiveRelocation::ReextractUnderMatchedTitle
+        ));
+        assert!(source.is_dir());
+        assert!(!moved.exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn cross_device_rename_error_is_detected() {

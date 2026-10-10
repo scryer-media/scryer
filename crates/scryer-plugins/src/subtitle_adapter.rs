@@ -52,18 +52,38 @@ pub struct WasmSubtitleClient {
     provider_name: String,
     config_name: String,
     config_json: String,
+    settings: std::collections::BTreeMap<String, String>,
     host_bindings: HashMap<PluginHostBindingId, String>,
     missing_host_bindings: Vec<PluginHostBindingId>,
     archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 }
 
 impl WasmSubtitleClient {
-    pub fn new_with_archive_provider(
+    #[cfg(test)]
+    fn new_with_archive_provider(
         wasm_bytes: Vec<u8>,
         descriptor: PluginDescriptor,
         config: SubtitleProviderConfig,
         host_bindings: HashMap<PluginHostBindingId, String>,
         archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
+    ) -> Result<Self, AppError> {
+        Self::new_with_plugin_settings(
+            wasm_bytes,
+            descriptor,
+            config,
+            host_bindings,
+            archive_provider,
+            Default::default(),
+        )
+    }
+
+    pub(crate) fn new_with_plugin_settings(
+        wasm_bytes: Vec<u8>,
+        descriptor: PluginDescriptor,
+        config: SubtitleProviderConfig,
+        host_bindings: HashMap<PluginHostBindingId, String>,
+        archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
+        settings: std::collections::BTreeMap<String, String>,
     ) -> Result<Self, AppError> {
         let missing_host_bindings = missing_host_bindings(&descriptor, &host_bindings);
         let spec = build_subtitle_spec(
@@ -73,6 +93,7 @@ impl WasmSubtitleClient {
             &host_bindings,
             None,
             archive_provider.clone(),
+            &settings,
         )?;
         // Classify from the artifact, not the descriptor: a subtitle descriptor
         // is identical whether the artifact is a stale pre-component build or a
@@ -89,6 +110,7 @@ impl WasmSubtitleClient {
             provider_name: config.provider_type,
             config_name: config.name,
             config_json: config.config_json,
+            settings,
             host_bindings,
             missing_host_bindings,
             archive_provider,
@@ -317,6 +339,7 @@ impl SubtitleProviderClient for WasmSubtitleClient {
             &self.host_bindings,
             Some((request.input_path.as_path(), GUEST_INPUT_ROOT)),
             self.archive_provider.clone(),
+            &self.settings,
         )?;
         let generate_request = SubtitlePluginGenerateRequest {
             media_kind: match request.media_kind.as_str() {
@@ -375,6 +398,7 @@ fn build_subtitle_spec(
     host_bindings: &HashMap<PluginHostBindingId, String>,
     allowed_path: Option<(&Path, &str)>,
     archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
+    settings: &std::collections::BTreeMap<String, String>,
 ) -> AppResult<PluginInstanceSpec> {
     let allowed_hosts = allowed_hosts_for_descriptor(descriptor, None, Some(config_json));
     let timeout = SUBTITLE_PLUGIN_TIMEOUT;
@@ -401,6 +425,7 @@ fn build_subtitle_spec(
         }
     }
 
+    crate::loader::bind_plugin_settings(&mut config, settings);
     let mut preopens = Vec::new();
     if let Some((host_path, guest_root)) = allowed_path {
         preopens.push(PreopenSpec::read_only(host_path.to_path_buf(), guest_root));
@@ -1147,6 +1172,7 @@ mod component_routing_tests {
 
     fn subtitle_descriptor() -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: "fixture-subtitle".to_string(),
             name: "Fixture Subtitle".to_string(),
             version: "1.0.0".to_string(),

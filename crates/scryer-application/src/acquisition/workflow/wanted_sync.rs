@@ -187,11 +187,8 @@ impl AppUseCase {
         // that was not the number the gate compares against (D10 says it is the
         // re-derived bar, and `admission_subject_for_scope` re-derives it over
         // the file's full span).
-        let files = LandedBarFile::group(
-            rows.into_iter()
-                .filter(|file| file.scan_status != "review_required")
-                .collect(),
-        );
+        // A file awaiting review counts, as it does for the grab gate.
+        let files = LandedBarFile::group(rows);
 
         // One catalog read per title, shared by the runtime basis and by
         // collection membership. Resolving members with

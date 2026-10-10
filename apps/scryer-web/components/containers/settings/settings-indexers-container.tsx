@@ -391,6 +391,7 @@ export function SettingsIndexersContainer({
     } catch (error) {
       setGlobalStatus(
         userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
+        { level: "ERROR" },
       );
     }
   }, [client, settingsIndexerFilter, setGlobalStatus, t]);
@@ -405,6 +406,7 @@ export function SettingsIndexersContainer({
     } catch (error) {
       setGlobalStatus(
         userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
+        { level: "ERROR" },
       );
     }
   }, [client, setGlobalStatus, t]);
@@ -438,6 +440,7 @@ export function SettingsIndexersContainer({
       } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
+          { level: "ERROR" },
         );
       } finally {
         setIndexerRoutingLoading(false);
@@ -513,7 +516,7 @@ export function SettingsIndexersContainer({
           ...previous,
           [scope]: indexerRoutingEntriesToMap(data?.updateIndexerRouting),
         }));
-        setGlobalStatus(t("settings.qualitySettingsSaved"));
+        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
       } catch (error) {
         setIndexerRoutingByScope((previous) => ({
           ...previous,
@@ -521,6 +524,7 @@ export function SettingsIndexersContainer({
         }));
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingIndexerRoutingScopes((previous) => {
@@ -563,6 +567,7 @@ export function SettingsIndexersContainer({
       } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
+          { level: "ERROR" },
         );
       }
     };
@@ -591,6 +596,7 @@ export function SettingsIndexersContainer({
     ]).catch((error: unknown) => {
       setGlobalStatus(
         userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
+        { level: "ERROR" },
       );
     });
   }, [
@@ -800,7 +806,7 @@ export function SettingsIndexersContainer({
             payload.seedingProfileId,
           );
         }
-        setGlobalStatus(t("status.indexerUpdated"));
+        setGlobalStatus(t("status.indexerUpdated"), { level: "SUCCESS" });
       } else {
         const { data, error } = await client
           .mutation(createIndexerMutation, {
@@ -827,7 +833,7 @@ export function SettingsIndexersContainer({
             payload.seedingProfileId,
           );
         }
-        setGlobalStatus(t("status.indexerCreated"));
+        setGlobalStatus(t("status.indexerCreated"), { level: "SUCCESS" });
       }
       resetIndexerDraft();
       setIsEditorOpen(false);
@@ -840,6 +846,7 @@ export function SettingsIndexersContainer({
     } catch (error) {
       setGlobalStatus(
         userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+        { level: "ERROR" },
       );
     } finally {
       setMutatingIndexerId(null);
@@ -1023,6 +1030,7 @@ export function SettingsIndexersContainer({
           t("status.indexerDownloadClientMappingSaved", {
             name: indexerName,
           }),
+          { level: "SUCCESS" },
         );
         await Promise.all([
           refreshIndexers(),
@@ -1038,6 +1046,7 @@ export function SettingsIndexersContainer({
         );
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingIndexerMappingIds((previous) =>
@@ -1092,6 +1101,7 @@ export function SettingsIndexersContainer({
         );
         setGlobalStatus(
           t("status.indexerSeedingProfileSaved", { name: indexerName }),
+          { level: "SUCCESS" },
         );
       } catch (error) {
         setSettingsIndexers((previous) =>
@@ -1104,6 +1114,7 @@ export function SettingsIndexersContainer({
         // The backend rejects non-torrent indexers by name; keep that wording.
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingIndexerSeedingProfileIds((previous) =>
@@ -1135,7 +1146,7 @@ export function SettingsIndexersContainer({
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.indexerUpdated"));
+        setGlobalStatus(t("status.indexerUpdated"), { level: "SUCCESS" });
         await refreshIndexers();
       } catch (error) {
         setSettingsIndexers((previous) =>
@@ -1147,6 +1158,7 @@ export function SettingsIndexersContainer({
         );
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingIndexerProxyIds((previous) =>
@@ -1178,11 +1190,12 @@ export function SettingsIndexersContainer({
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.indexerUpdated"));
+        setGlobalStatus(t("status.indexerUpdated"), { level: "SUCCESS" });
         await refreshIndexers();
       } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingIndexerId(null);
@@ -1221,12 +1234,13 @@ export function SettingsIndexersContainer({
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.indexerUpdated"));
+        setGlobalStatus(t("status.indexerUpdated"), { level: "SUCCESS" });
         await refreshIndexers();
         return true;
       } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+          { level: "ERROR" },
         );
         return false;
       } finally {
@@ -1254,6 +1268,7 @@ export function SettingsIndexersContainer({
       } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingIndexerId(null);
@@ -1275,7 +1290,7 @@ export function SettingsIndexersContainer({
         })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.indexerDeleted", { name: indexer.name }));
+      setGlobalStatus(t("status.indexerDeleted", { name: indexer.name }), { level: "SUCCESS" });
       await refreshIndexers();
       if (editingIndexerId === indexer.id) {
         resetIndexerDraft();
@@ -1286,6 +1301,7 @@ export function SettingsIndexersContainer({
     } catch (error) {
       setGlobalStatus(
         userFacingGraphQlErrorMessage(error, t("status.failedToDelete")),
+        { level: "ERROR" },
       );
     } finally {
       setMutatingIndexerId(null);

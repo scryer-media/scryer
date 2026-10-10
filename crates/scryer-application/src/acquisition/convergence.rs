@@ -1221,6 +1221,59 @@ impl AppUseCase {
     /// scope is not a convergence unit or when nothing fired. Best-effort: a
     /// failed write is logged, never propagated, so it can never break the
     /// acquisition path.
+    /// Uncovered indexers whose latest background search for this scope ended
+    /// contained and is not yet due, with the instant each becomes due. They
+    /// are never covered, but asking them before then repeats the same capped
+    /// answer, so the gates leave them out. A failed read holds nothing.
+    pub(crate) async fn contained_indexer_holds(
+        &self,
+        coverage_scope_key: &str,
+        indexer_ids: &[String],
+        now: DateTime<Utc>,
+    ) -> std::collections::HashMap<String, DateTime<Utc>> {
+        match self
+            .services
+            .integrations
+            .indexer_client
+            .contained_search_holds(coverage_scope_key, indexer_ids, now)
+            .await
+        {
+            Ok(holds) => holds,
+            Err(error) => {
+                tracing::warn!(
+                    scope_key = coverage_scope_key,
+                    error = %error,
+                    "failed to read contained indexer holds; treating every uncovered indexer as due"
+                );
+                std::collections::HashMap::new()
+            }
+        }
+    }
+
+    /// Ties a background search session to the convergence scope it searched
+    /// for, so the gates can later see which of its indexers ended contained.
+    /// Best-effort: a failed write only means the scope is asked again.
+    pub(crate) async fn link_search_session_coverage_scope(
+        &self,
+        search_session_id: &str,
+        coverage_scope_key: &str,
+    ) {
+        if let Err(error) = self
+            .services
+            .integrations
+            .indexer_client
+            .link_search_session_coverage_scope(search_session_id, coverage_scope_key)
+            .await
+        {
+            tracing::warn!(
+                scope_key = coverage_scope_key,
+                search_session_id,
+                error = %error,
+                "failed to link search session to its convergence scope"
+            );
+        }
+    }
+
     pub(crate) async fn record_search_coverage(
         &self,
         title: &Title,

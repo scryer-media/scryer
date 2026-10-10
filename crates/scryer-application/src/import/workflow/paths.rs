@@ -502,6 +502,7 @@ async fn ensure_import_title_folder_available(
     title: &Title,
     folder_path: &Path,
 ) -> AppResult<()> {
+    crate::folder_ownership::ensure_title_folder_is_not_a_library_root(app, title).await?;
     crate::folder_ownership::ensure_folder_available_to_title(app, title, folder_path).await
 }
 
@@ -510,6 +511,7 @@ async fn persist_title_folder_path_if_missing(
     title: &Title,
     folder_path: &Path,
 ) -> AppResult<()> {
+    crate::folder_ownership::ensure_title_folder_is_not_a_library_root(app, title).await?;
     let mut title = title.clone();
     crate::folder_ownership::claim_title_folder_if_missing(app, &mut title, folder_path).await
 }
@@ -598,6 +600,94 @@ pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Ve
         .filter(|path| is_video_file(path))
         .filter(|path| !filter_samples || !is_sample_file(path))
         .collect())
+}
+
+/// Every regular file of a completed download source, which may be a single
+/// file. Read only to classify a download that produced no video.
+pub(crate) fn find_download_files(dir: &Path) -> AppResult<Vec<PathBuf>> {
+    let metadata = std::fs::metadata(dir).map_err(|error| AppError::ImportSourceInspection {
+        path: dir.display().to_string(),
+        message: error.to_string(),
+    })?;
+    if metadata.is_file() {
+        return Ok(vec![dir.to_path_buf()]);
+    }
+    if !metadata.is_dir() {
+        return Err(AppError::UnsupportedImportSource {
+            path: dir.display().to_string(),
+        });
+    }
+    crate::filesystem_walk::FilesystemWalker::new()
+        .skip_unreadable_subdirectories()
+        .walk(dir)
+        .map(|walked| {
+            walked
+                .into_iter()
+                .flat_map(|entry| entry.files.into_iter())
+                .collect()
+        })
+        .map_err(|error| AppError::ImportSourceInspection {
+            path: dir.display().to_string(),
+            message: error.to_string(),
+        })
+}
+
+/// The executable that a completed download with no video delivered instead,
+/// when executables (plus plain helpers) are all it holds. `None` for an
+/// empty source, an ambiguous one, or one that could not be read: those keep
+/// the no-video review path. The largest executable is named.
+///
+/// When archives were extracted, the archive volumes they replaced are not
+/// counted: what they held is in `extracted_dir`.
+pub(crate) fn unwanted_executable_in_download(
+    dest_dir: &Path,
+    extracted_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    let files = (|| {
+        let Some(extracted_dir) = extracted_dir else {
+            return find_download_files(dest_dir);
+        };
+        // The workspace root holds only host bookkeeping dotfiles; what the
+        // archives held lives in its output directories.
+        let mut files: Vec<PathBuf> = find_download_files(extracted_dir)?
+            .into_iter()
+            .filter(|path| {
+                path.parent() != Some(extracted_dir)
+                    || !path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with('.'))
+            })
+            .collect();
+        let replaced = crate::archive_extractor::replaced_archive_sources(extracted_dir)?;
+        files.extend(find_download_files(dest_dir)?.into_iter().filter(|path| {
+            !path.starts_with(extracted_dir)
+                && path
+                    .canonicalize()
+                    .is_ok_and(|path| !replaced.contains(&path))
+        }));
+        Ok::<_, AppError>(files)
+    })()
+    .ok()?;
+    match scryer_domain::classify_no_video_download(files.iter().map(PathBuf::as_path)) {
+        scryer_domain::NoVideoDownloadContents::UnwantedExecutables(executables) => {
+            let executables: Vec<PathBuf> =
+                executables.into_iter().map(Path::to_path_buf).collect();
+            pick_largest_file(&executables).ok()
+        }
+        scryer_domain::NoVideoDownloadContents::Empty
+        | scryer_domain::NoVideoDownloadContents::Other => None,
+    }
+}
+
+/// The import and download status text for a download that delivered an
+/// executable instead of video.
+pub(crate) fn unwanted_executable_message(executable: &Path) -> String {
+    let name = executable
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| executable.display().to_string());
+    format!("unwanted executable '{name}' — no video files")
 }
 
 /// The release-name claims a completed download makes about its own identity,

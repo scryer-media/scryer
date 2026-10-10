@@ -1,17 +1,16 @@
-//! GraphQL types for public lists: the provider catalog, followed lists,
-//! their memberships and sync history, previews, exclusions, and members'
-//! list policies. Personal lists have no type here.
+//! GraphQL list types, including credential-free personal account projections.
 
 use super::{
-    ExternalIdInput, ExternalIdPayload, MediaFacetValue, PluginConfigFieldOptionPayload,
+    Date, ExternalIdInput, ExternalIdPayload, MediaFacetValue, PluginConfigFieldOptionPayload,
     PluginConfigFieldTypeValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
+use scryer_application::lists::accounts::ListAccountPollStatus;
 use scryer_application::lists::catalog::{ListAuthBadge, ListNoteTone, ListSourceParamType};
 use scryer_domain::{
     ListExclusionScope, ListMembershipState, ListMode, ListOnLeave, ListPolicy, ListScope,
-    ListSyncRunOutcome, ListSyncState,
+    ListSyncRunOutcome, ListSyncState, UserListAccountStatus,
 };
 
 /// Which side of the privacy boundary a list sits on.
@@ -252,6 +251,16 @@ impl ListMembershipStateValue {
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(name = "ListFilterKind", rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ListFilterKindValue {
+    /// Existing specials monitoring policy for new Series or Anime titles.
+    MonitorSpecials,
+    /// Existing Anime filler policy: DOWNLOAD_ALL or SKIP_FILLER in values.
+    FillerPolicy,
+    /// Existing Anime recap policy: DOWNLOAD_ALL or SKIP_RECAP in values.
+    RecapPolicy,
+    /// Per-facet rating minimums, matching all sources or at least one source.
+    Ratings,
+    /// Exclude titles matching selected canonical genre or theme keys in a facet.
+    ExcludeCanonicalTags,
     /// The provider's rating is at least `value` on `scale`.
     RatingAtLeast,
     /// Released between `from` and `to`, either end open.
@@ -455,7 +464,7 @@ pub struct ListUrlPatternPayload {
     pub captures: Vec<ListUrlPatternCapturePayload>,
 }
 
-/// A provider public lists can be followed from.
+/// A provider public or personal lists can be followed from.
 #[derive(SimpleObject, Clone)]
 pub struct ListProviderPayload {
     /// Provider key, such as `tmdb` or `imdb`.
@@ -619,9 +628,35 @@ pub struct ListRouteInput {
     pub tags: Vec<String>,
 }
 
+/// A minimum rating from one attributed rating source.
+#[derive(SimpleObject, Clone)]
+pub struct ListRatingMinimumPayload {
+    /// Canonical identifier of the rating source.
+    pub source: String,
+    /// Inclusive minimum on the named source's native rating scale.
+    pub value: f64,
+}
+
+/// A minimum rating to require from one supported rating source.
+#[derive(InputObject, Clone)]
+pub struct ListRatingMinimumInput {
+    /// Supported rating source identifier; registered aliases are normalized.
+    pub source: String,
+    /// Inclusive minimum on the named source's native rating scale.
+    pub value: f64,
+}
+
 /// One list filter. Only the fields its kind uses are set.
 #[derive(SimpleObject, Clone)]
 pub struct ListFilterPayload {
+    /// Movie, Series, or Anime scope for ratings and canonical exclusions.
+    pub facet: Option<MediaFacetValue>,
+    /// Whether any rating minimum may pass; false requires every minimum.
+    pub match_any: bool,
+    /// Attributed minimum ratings; an empty group imposes no restriction.
+    pub minimums: Vec<ListRatingMinimumPayload>,
+    /// Legacy genre labels without an unambiguous canonical match, retained for correction.
+    pub unresolved_labels: Vec<String>,
     /// The filter's kind.
     pub kind: ListFilterKindValue,
     /// Rating scale, for `RATING_AT_LEAST`.
@@ -639,6 +674,17 @@ pub struct ListFilterPayload {
 /// One list filter, as entered. Fields its kind does not use are ignored.
 #[derive(InputObject, Clone)]
 pub struct ListFilterInput {
+    /// Required Movie, Series, or Anime scope for ratings and canonical exclusions.
+    pub facet: Option<MediaFacetValue>,
+    /// Whether any rating minimum may pass; defaults to requiring every minimum.
+    #[graphql(default)]
+    pub match_any: bool,
+    #[graphql(default)]
+    /// Attributed minimum ratings; an empty group imposes no restriction.
+    pub minimums: Vec<ListRatingMinimumInput>,
+    /// Legacy genre labels without an unambiguous canonical match, retained for correction.
+    #[graphql(default)]
+    pub unresolved_labels: Vec<String>,
     /// The filter's kind.
     pub kind: ListFilterKindValue,
     /// Rating scale, required for `RATING_AT_LEAST`.
@@ -692,12 +738,12 @@ pub struct ListCountsPayload {
     pub unresolved: i32,
 }
 
-/// A followed public list.
+/// A followed public list or a personal list owned by the current member.
 #[derive(SimpleObject, Clone)]
 pub struct ListSubscriptionPayload {
     /// ID of the followed list.
     pub id: ID,
-    /// Always `PUBLIC` here.
+    /// `PUBLIC` for an instance list or `PERSONAL` for the current member's list.
     pub scope: ListScopeValue,
     /// Display name.
     pub name: String,
@@ -734,6 +780,8 @@ pub struct ListSubscriptionPayload {
 /// One title on a followed list.
 #[derive(SimpleObject, Clone)]
 pub struct ListMembershipPayload {
+    /// Movie entry within the parent library title, when hydrated.
+    pub series_movie_link_id: Option<ID>,
     /// The provider's own key for the title.
     pub item_key: String,
     /// Position on the list, or null.
@@ -791,6 +839,18 @@ pub struct ListSyncRunPayload {
 /// One title the next sync would act on.
 #[derive(SimpleObject, Clone)]
 pub struct ListPreviewItemPayload {
+    /// Canonical identity of the listed title, independent of its destination.
+    pub canonical_smg_id: Option<i64>,
+    /// Parent series for an associated movie, or null for a standalone title.
+    pub series_movie_parent_smg_id: Option<i64>,
+    /// Provider-attributed ratings for the preview flyout.
+    pub external_ratings: Vec<super::DiscoveryExternalRatingPayload>,
+    /// Canonical genre and theme display names.
+    pub genres_and_themes: Vec<String>,
+    /// Original language, when known.
+    pub original_language: Option<String>,
+    /// Release or first-air date, when known.
+    pub release_date: Option<Date>,
     /// The provider's own key for the title.
     pub item_key: String,
     /// The title as the list names it, or its key when the list gives no name.
@@ -886,6 +946,8 @@ pub struct MemberListPolicyPayload {
 /// A list source to preview.
 #[derive(InputObject, Clone)]
 pub struct ListSourceInput {
+    /// Linked account owned by the caller, required for personal source previews.
+    pub credential_id: Option<ID>,
     /// Provider key; with `sourceType`, names the source directly.
     pub provider: Option<String>,
     /// Source type within the provider.
@@ -897,10 +959,12 @@ pub struct ListSourceInput {
     pub url: Option<String>,
 }
 
-/// A public list to follow.
+/// A public or owner-linked personal list to follow.
 #[derive(InputObject, Clone)]
 pub struct SubscribeListInput {
-    /// Must be `PUBLIC`.
+    /// Linked account owned by the caller, required when scope is PERSONAL.
+    pub credential_id: Option<ID>,
+    /// `PERSONAL` requires an account owned by the caller.
     pub scope: ListScopeValue,
     /// Provider key; with `sourceType`, names the source directly.
     pub provider: Option<String>,
@@ -930,7 +994,7 @@ pub struct SubscribeListInput {
     pub on_leave: ListOnLeaveValue,
 }
 
-/// Changes to a followed public list. Omitted fields stay as they are.
+/// Changes to a followed public list or an owned personal list. Omitted fields stay as they are.
 #[derive(InputObject, Clone)]
 pub struct UpdateListSubscriptionInput {
     /// New display name.
@@ -965,4 +1029,339 @@ pub struct AddListExclusionInput {
     pub scope: ListExclusionScopeValue,
     /// The public list, for a `LIST` exclusion.
     pub subscription_id: Option<ID>,
+}
+
+/// One list owned by the linked provider account.
+#[derive(SimpleObject)]
+pub struct ListAccountSourcePayload {
+    /// The provider's list identifier.
+    pub id: String,
+    /// Display name of the list.
+    pub name: String,
+    /// Media kinds the list contains.
+    pub kinds: Vec<MediaFacetValue>,
+    /// Source type to use when following this list.
+    pub source_type: String,
+    /// Provider parameters to use when following this list.
+    pub params: Vec<ListParamPayload>,
+}
+/// A personal status collection offered by a provider account.
+#[derive(SimpleObject)]
+pub struct ListAccountStatusPayload {
+    /// The provider's status identifier.
+    pub key: String,
+    /// Display name of the status.
+    pub label: String,
+    /// Media kinds the status contains.
+    pub kinds: Vec<MediaFacetValue>,
+    /// Source type to use when following this status.
+    pub source_type: String,
+    /// Provider parameters to use when following this status.
+    pub params: Vec<ListParamPayload>,
+}
+/// Health of a linked list account.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum UserListAccountStatusValue {
+    /// The account works.
+    Active,
+    /// The provider grant expired; the member must reconnect.
+    Expired,
+    /// The provider grant was revoked; the member must reconnect.
+    Revoked,
+}
+
+impl UserListAccountStatusValue {
+    pub fn from_domain(value: UserListAccountStatus) -> Self {
+        match value {
+            UserListAccountStatus::Active => Self::Active,
+            UserListAccountStatus::Expired => Self::Expired,
+            UserListAccountStatus::Revoked => Self::Revoked,
+        }
+    }
+}
+
+/// The answer to one poll of an account-link session.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ListAccountPollStatusValue {
+    /// The member has not finished authorizing yet; poll again.
+    Pending,
+    /// The account is linked and returned with this answer.
+    Linked,
+    /// Another request for the same link is checking the provider; poll again.
+    Busy,
+    /// The provider or this instance could not answer just now; poll again more slowly.
+    Unavailable,
+    /// The provider asked for fewer requests; poll again later.
+    RateLimited,
+}
+
+impl ListAccountPollStatusValue {
+    pub fn from_application(value: ListAccountPollStatus) -> Self {
+        match value {
+            ListAccountPollStatus::Pending => Self::Pending,
+            ListAccountPollStatus::Linked => Self::Linked,
+            ListAccountPollStatus::Busy => Self::Busy,
+            ListAccountPollStatus::Unavailable => Self::Unavailable,
+            ListAccountPollStatus::RateLimited => Self::RateLimited,
+        }
+    }
+}
+
+/// A linked account visible only to its owner, without credentials.
+#[derive(SimpleObject)]
+pub struct ListAccountPayload {
+    /// Local account identifier.
+    pub id: ID,
+    /// Provider identifier.
+    pub provider: String,
+    /// Stable account identity returned by the provider.
+    pub external_user_id: String,
+    /// Provider username.
+    pub username: String,
+    /// Optional provider display name.
+    pub display_name: Option<String>,
+    /// Account health; anything other than ACTIVE needs a reconnect.
+    pub status: UserListAccountStatusValue,
+    /// Safe explanation of an account problem.
+    pub error_message: Option<String>,
+    /// When this account was first linked.
+    pub linked_at: DateTime<Utc>,
+    /// When a list last used this account.
+    pub last_used_at: Option<DateTime<Utc>>,
+    /// Lists owned by this account, populated by the account detail query.
+    pub owned_lists: Vec<ListAccountSourcePayload>,
+    /// Personal status collections, populated by the account detail query.
+    pub statuses: Vec<ListAccountStatusPayload>,
+}
+impl ListAccountPayload {
+    pub fn from_view(view: scryer_application::lists::accounts::ListAccountView) -> Self {
+        let account = view.account;
+        let provider = account.provider.as_str();
+        let source = match provider {
+            "trakt" => "my_list",
+            "anilist" => "custom_list",
+            "tmdb" => "account_list",
+            "plex" => "watchlist",
+            _ => "list",
+        };
+        let param = if matches!(provider, "anilist" | "trakt") {
+            "list"
+        } else {
+            "list_id"
+        };
+        let owned_lists = view
+            .sources
+            .owned_lists
+            .into_iter()
+            .map(|list| ListAccountSourcePayload {
+                params: if provider == "plex" {
+                    Vec::new()
+                } else {
+                    vec![ListParamPayload {
+                        key: param.into(),
+                        value: list.id.clone(),
+                    }]
+                },
+                id: list.id,
+                name: list.name,
+                kinds: list
+                    .kinds
+                    .into_iter()
+                    .map(|kind| {
+                        MediaFacetValue::from_domain(scryer_application::lists::catalog::facet_of(
+                            kind,
+                        ))
+                    })
+                    .collect(),
+                source_type: source.into(),
+            })
+            .collect();
+        let statuses = view
+            .sources
+            .statuses
+            .into_iter()
+            .map(|status| {
+                let (source_type, params) = if provider == "anilist" {
+                    (
+                        "status".into(),
+                        vec![ListParamPayload {
+                            key: "status".into(),
+                            value: status.key.clone(),
+                        }],
+                    )
+                } else {
+                    (status.key.clone(), Vec::new())
+                };
+                ListAccountStatusPayload {
+                    key: status.key,
+                    label: status.label,
+                    kinds: status
+                        .kinds
+                        .into_iter()
+                        .map(|kind| {
+                            MediaFacetValue::from_domain(
+                                scryer_application::lists::catalog::facet_of(kind),
+                            )
+                        })
+                        .collect(),
+                    source_type,
+                    params,
+                }
+            })
+            .collect();
+        Self {
+            id: account.id.into(),
+            provider: account.provider,
+            external_user_id: account.external_user_id,
+            username: account.username,
+            display_name: account.display_name,
+            status: UserListAccountStatusValue::from_domain(account.status),
+            error_message: account.error_message,
+            linked_at: account.linked_at,
+            last_used_at: account.last_used_at,
+            owned_lists,
+            statuses,
+        }
+    }
+}
+/// A short-lived account-link session bound to the current member.
+#[derive(SimpleObject)]
+pub struct ListAccountLinkPayload {
+    /// Opaque local session identifier.
+    pub session_id: ID,
+    /// State that must match the callback before completion.
+    pub state: String,
+    /// Provider authorization URL to open.
+    pub authorize_url: String,
+    /// Exact origin allowed to send the authorization result.
+    pub authorization_origin: String,
+    /// Session expiry time.
+    pub expires_at: DateTime<Utc>,
+    /// Whether this provider completes by polling.
+    pub poll_required: bool,
+}
+impl From<scryer_application::lists::accounts::ListAccountLink> for ListAccountLinkPayload {
+    fn from(link: scryer_application::lists::accounts::ListAccountLink) -> Self {
+        Self {
+            session_id: link.session_id.into(),
+            state: link.state,
+            authorize_url: link.authorize_url,
+            authorization_origin: link.authorization_origin,
+            expires_at: link.expires_at,
+            poll_required: link.poll_required,
+        }
+    }
+}
+/// The result of polling a personal account-link session.
+#[derive(SimpleObject)]
+pub struct ListAccountPollPayload {
+    /// Whether the link completed, is still pending, or should be polled again later.
+    pub status: ListAccountPollStatusValue,
+    /// The linked account when authorization completed.
+    pub account: Option<ListAccountPayload>,
+}
+/// Write-only provider application settings, with secret presence only.
+#[derive(SimpleObject)]
+pub struct ListProviderAppPayload {
+    /// Provider identifier.
+    pub provider: String,
+    /// Configured OAuth application client identifier.
+    pub client_id: Option<String>,
+    /// Configured callback URL on this instance.
+    pub redirect_uri: Option<String>,
+    /// Whether a secret is configured; its value is never returned.
+    pub client_secret_set: bool,
+    /// Whether the operator's application overrides the default linking flow.
+    pub enabled: bool,
+}
+impl From<scryer_application::lists::provider_apps::ListProviderAppView>
+    for ListProviderAppPayload
+{
+    fn from(app: scryer_application::lists::provider_apps::ListProviderAppView) -> Self {
+        Self {
+            provider: app.provider,
+            client_id: app.client_id,
+            redirect_uri: app.redirect_uri,
+            client_secret_set: app.client_secret_set,
+            enabled: app.enabled,
+        }
+    }
+}
+
+#[cfg(test)]
+mod account_projection_tests {
+    use super::*;
+    use scryer_application::lists::accounts::ListAccountView;
+    fn project(provider: &str, sources: serde_json::Value) -> ListAccountPayload {
+        let now = Utc::now();
+        ListAccountPayload::from_view(ListAccountView {
+            account: scryer_domain::UserListAccount {
+                id: "account".into(),
+                user_id: "owner".into(),
+                provider: provider.into(),
+                external_user_id: "provider-member".into(),
+                username: "member".into(),
+                display_name: None,
+                credential: Default::default(),
+                status: scryer_domain::UserListAccountStatus::Active,
+                error_message: None,
+                linked_at: now,
+                last_used_at: None,
+                last_refresh_at: None,
+                updated_at: now,
+            },
+            sources: serde_json::from_value(sources).unwrap(),
+        })
+    }
+    #[test]
+    fn owned_list_parameters_match_completed_provider_descriptors() {
+        // Trakt's my_list and AniList's custom_list both declare `list`;
+        // TMDb's account_list declares `list_id`.
+        for (provider, source, param, id, kind) in [
+            ("trakt", "my_list", "list", "42", "movie"),
+            ("anilist", "custom_list", "list", "Weekend anime", "anime"),
+            ("tmdb", "account_list", "list_id", "42", "movie"),
+        ] {
+            let payload = project(
+                provider,
+                serde_json::json!({"external_user_id":"provider-member","username":"member","owned_lists":[{"id":id,"name":"Fixture list","kinds":[kind]}]}),
+            );
+            let list = &payload.owned_lists[0];
+            assert_eq!(list.source_type, source);
+            assert_eq!(list.params.len(), 1);
+            assert_eq!(list.params[0].key, param);
+            assert_eq!(list.params[0].value, id);
+        }
+    }
+    #[test]
+    fn provider_statuses_preserve_native_source_shapes() {
+        for (provider, key, source, param) in [
+            ("anilist", "planning", "status", Some("status")),
+            ("mal", "status:plan_to_watch", "status:plan_to_watch", None),
+            ("simkl", "plantowatch", "plantowatch", None),
+        ] {
+            let payload = project(
+                provider,
+                serde_json::json!({"external_user_id":"provider-member","username":"member","statuses":[{"key":key,"label":"Plan to watch","kinds":["anime"]}]}),
+            );
+            let status = &payload.statuses[0];
+            assert_eq!(status.source_type, source);
+            if let Some(param) = param {
+                assert_eq!(status.params[0].key, param);
+                assert_eq!(status.params[0].value, key);
+            } else {
+                assert!(status.params.is_empty());
+            }
+        }
+        // Plex verifies an account but offers its watchlist through its
+        // parameterless personal manifest item, not an invented owned list.
+        let plex = project(
+            "plex",
+            serde_json::json!({"external_user_id":"provider-member","username":"member"}),
+        );
+        assert!(plex.owned_lists.is_empty());
+        assert!(plex.statuses.is_empty());
+    }
 }

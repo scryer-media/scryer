@@ -1,8 +1,9 @@
+import * as React from "react";
 import { RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   Table,
   TableBody,
@@ -11,20 +12,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ActionTooltip } from "@/components/ui/tooltip";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { ListProviderManifest, ListSubscription } from "@/lib/types/lists";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
+  type ListSort,
+  type ListSortKey,
   listKindLabelKey,
   listModeLabelKey,
   listSyncStateLabelKey,
   listSyncStateTone,
+  shownListSyncState,
+  sortListSubscriptions,
 } from "@/lib/utils/lists";
 
 import { ListCoverageBar } from "./list-coverage-bar";
 import { ProviderTile } from "./provider-tile";
+import { SortableHead } from "./sortable-head";
 
 type ListTableProps = {
   subscriptions: ListSubscription[];
@@ -48,27 +53,44 @@ export function ListTable({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const providerByType = new Map(providers.map((provider) => [provider.providerType, provider]));
+  // Until a column is picked the lists keep the order they were loaded in.
+  const [sort, setSort] = React.useState<ListSort | null>(null);
+  const sorted = React.useMemo(() => sortListSubscriptions(subscriptions, sort), [subscriptions, sort]);
+  const sortableHead = (key: ListSortKey, label: string) => {
+    const active = sort?.key === key;
+    return (
+      <SortableHead
+        id={`lists-table-sort-${key}`}
+        label={label}
+        active={active}
+        descending={active && sort.descending}
+        onSort={() => setSort({ key, descending: active ? !sort.descending : false })}
+      />
+    );
+  };
 
   return (
     <Table id="lists-table" wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]">
       <TableHeader>
         <TableRow>
-          <TableHead>{t("lists.table.list")}</TableHead>
+          {sortableHead("name", t("lists.table.list"))}
           <TableHead className="hidden md:table-cell">{t("lists.table.coverage")}</TableHead>
           <TableHead className="hidden sm:table-cell">{t("lists.table.mode")}</TableHead>
-          <TableHead>{t("lists.table.lastSync")}</TableHead>
+          {canManageLists ? <TableHead className="w-[1%] text-center">{t("label.enabled")}</TableHead> : null}
+          {sortableHead("sync", t("lists.table.lastSync"))}
           {canManageLists ? <TableHead className="w-[1%] text-right">{t("label.actions")}</TableHead> : null}
         </TableRow>
       </TableHeader>
       <TableBody>
-        {subscriptions.map((subscription) => {
+        {sorted.map((subscription) => {
           const provider = providerByType.get(subscription.source.provider) ?? null;
           const busy = busyIds.has(subscription.id);
-          const state = subscription.enabled ? subscription.sync.state : "OFF";
+          const state = shownListSyncState(subscription);
           return (
             <TableRow
               key={subscription.id}
               id={`list-row-${subscription.id}`}
+              data-ui="list-subscription-row"
               className="cursor-pointer hover:bg-[var(--scry-hover)]"
               onClick={() => onOpen(subscription)}
             >
@@ -87,7 +109,8 @@ export function ListTable({
                       {subscription.name}
                     </button>
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--scry-muted)]">
-                      <span className="truncate">{provider?.name ?? subscription.source.provider}</span>
+                      {/* The logo names the provider on screen; this names it to a screen reader. */}
+                      <span className="sr-only">{provider?.name ?? subscription.source.provider}</span>
                       {subscription.kinds.map((kind) => (
                         <Badge key={kind} tone="outline" className="px-1.5 py-0 text-[10.5px]">
                           {t(listKindLabelKey(kind))}
@@ -97,21 +120,27 @@ export function ListTable({
                   </div>
                 </div>
               </TableCell>
-              <TableCell className="hidden min-w-[160px] md:table-cell">
-                <ListCoverageBar counts={subscription.counts} />
-                <p className="mt-1 text-[11.5px] text-[var(--scry-muted)]">
-                  {t("lists.table.coverageSummary", {
-                    inLibrary: subscription.counts.inLibrary,
-                    total: subscription.counts.total,
-                  })}
-                </p>
+              <TableCell className="hidden w-36 md:table-cell">
+                <ListCoverageBar counts={subscription.counts} legend="hover" />
               </TableCell>
               <TableCell className="hidden sm:table-cell">
                 <span className="text-[13px] text-[var(--scry-ink2)]">{t(listModeLabelKey(subscription.mode))}</span>
               </TableCell>
+              {canManageLists ? (
+                <TableCell className="text-center" onClick={(event) => event.stopPropagation()}>
+                  <Checkbox
+                    id={`list-enabled-${subscription.id}`}
+                    size="large"
+                    checked={subscription.enabled}
+                    disabled={busy}
+                    aria-label={`${t("label.enabled")}: ${subscription.name}`}
+                    onCheckedChange={(checked) => onSetEnabled(subscription, checked === true)}
+                  />
+                </TableCell>
+              ) : null}
               <TableCell>
                 <div className="flex flex-col items-start gap-1">
-                  <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state))}</Badge>
+                  <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state, subscription.sync.lastAt))}</Badge>
                   <span className="text-[11.5px] text-[var(--scry-muted)]">
                     {subscription.sync.lastAt
                       ? formatUiDateTime(subscription.sync.lastAt, dateTimeFormat)
@@ -127,26 +156,15 @@ export function ListTable({
               {canManageLists ? (
                 <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
                   <div className="flex items-center justify-end gap-2">
-                    <ActionTooltip content={t("lists.action.syncNow")}>
-                      <Button
-                        id={`list-sync-${subscription.id}`}
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("lists.action.syncNow")}
-                        disabled={busy || !subscription.enabled}
-                        onClick={() => onSyncNow(subscription)}
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                      </Button>
-                    </ActionTooltip>
-                    <Switch
-                      id={`list-enabled-${subscription.id}`}
-                      aria-label={t("lists.action.enabled", { name: subscription.name })}
-                      checked={subscription.enabled}
-                      disabled={busy}
-                      onCheckedChange={(checked) => onSetEnabled(subscription, checked)}
-                    />
+                    <IconButton
+                      id={`list-sync-${subscription.id}`}
+                      label={t("lists.action.syncNow")}
+                      tone="accent"
+                      disabled={busy || !subscription.enabled}
+                      onClick={() => onSyncNow(subscription)}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                    </IconButton>
                   </div>
                 </TableCell>
               ) : null}

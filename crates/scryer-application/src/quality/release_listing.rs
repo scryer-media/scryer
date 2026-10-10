@@ -24,8 +24,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::helpers::{ReleasePasswordClassification, classify_release_password};
-
 /// Serialization format version written into every persisted snapshot.
 const SNAPSHOT_FORMAT_VERSION: u64 = 1;
 
@@ -172,12 +170,9 @@ impl ReleaseListingSnapshot {
 
     /// Best-effort snapshot for a pending release that has no persisted one.
     /// A pending row keeps only its publish time and its normalized
-    /// `source_password`. Normalization keeps a real password but turns the
-    /// indexer's protection flags ("1", "true", "protected", "0", "no", ...)
-    /// into `None`, and the `extra.password_protected` flag is never stored.
-    /// So `is_password_protected` is `Some(true)` only when a real password
-    /// survived and is otherwise unknown, not an authoritative "not
-    /// protected"; every other listing fact is unknown too.
+    /// `source_password`. This is a literal secret; indexer protection flags
+    /// have already been handled at the provider boundary. A nonblank value
+    /// implies protection, including values such as `1` and `false`.
     pub(crate) fn capture_from_pending_release(
         release: &crate::PendingRelease,
         now: DateTime<Utc>,
@@ -186,16 +181,7 @@ impl ReleaseListingSnapshot {
             published_at: parseable_published_at(release.published_at.as_deref()),
             thumbs_up: None,
             thumbs_down: None,
-            is_password_protected: match classify_release_password(
-                release.source_password.as_deref(),
-            ) {
-                ReleasePasswordClassification::Real(_) => Some(true),
-                // A flag here came from a writer that skipped normalization;
-                // it is still not the grab-time answer, so stay unknown.
-                ReleasePasswordClassification::ProtectedFlag
-                | ReleasePasswordClassification::UnprotectedFlag
-                | ReleasePasswordClassification::Empty => None,
-            },
+            is_password_protected: password_protection_hint(release.source_password.as_deref()),
             indexer_languages: Vec::new(),
             extra: BTreeMap::new(),
             captured_at: now,
@@ -300,17 +286,10 @@ pub(crate) fn captured_at_of(json: Option<&str>) -> DateTime<Utc> {
         .captured_at
 }
 
-/// The deleted grab-path derivation of `is_password_protected` from an
-/// indexer password field: a real password or a "protected" flag means
-/// protected, an explicit "not protected" flag means not, empty means unknown.
+/// Password hints carry literal secrets. Boolean protection flags live in
+/// their own explicitly typed indexer field.
 fn password_protection_hint(raw: Option<&str>) -> Option<bool> {
-    match classify_release_password(raw) {
-        ReleasePasswordClassification::Real(_) | ReleasePasswordClassification::ProtectedFlag => {
-            Some(true)
-        }
-        ReleasePasswordClassification::UnprotectedFlag => Some(false),
-        ReleasePasswordClassification::Empty => None,
-    }
+    raw.filter(|value| !value.trim().is_empty()).map(|_| true)
 }
 
 fn parseable_published_at(raw: Option<&str>) -> Option<String> {
@@ -1062,7 +1041,7 @@ mod tests {
         result.password_hint = Some("0".to_string());
         assert_eq!(
             ReleaseListingSnapshot::capture_from_search_result(&result, now).is_password_protected,
-            Some(false)
+            Some(true)
         );
 
         result.password_hint = None;
@@ -1222,12 +1201,12 @@ mod tests {
     }
 
     #[test]
-    fn pending_release_protection_flag_is_unknown() {
+    fn pending_release_literal_passwords_imply_protection() {
         for flag in ["1", "true", "protected", "0", "no"] {
             let release = pending_release(Some(flag));
             let snapshot =
                 ReleaseListingSnapshot::capture_from_pending_release(&release, at(2024, 1, 1));
-            assert_eq!(snapshot.is_password_protected, None, "{flag}");
+            assert_eq!(snapshot.is_password_protected, Some(true), "{flag}");
         }
         let snapshot = ReleaseListingSnapshot::capture_from_pending_release(
             &pending_release(None),

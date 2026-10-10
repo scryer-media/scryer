@@ -413,20 +413,19 @@ impl AppUseCase {
             }
         }
 
-        let monitor_specials = if title.facet == MediaFacet::Anime {
-            // Per-title tag overrides global setting
-            if let Some(per_title) = extract_tag_bool(&title.tags, "scryer:monitor-specials:") {
-                per_title
-            } else {
-                self.resolve_library_bool_setting(
-                    "anime.monitor_specials",
-                    Some(&title.library_id),
-                    Some(title.facet.as_str()),
-                    false,
-                )
-                .await
-                .unwrap_or(false)
-            }
+        let monitor_specials = if title.facet != MediaFacet::Movie
+            && let Some(per_title) = extract_tag_bool(&title.tags, "scryer:monitor-specials:")
+        {
+            per_title
+        } else if title.facet == MediaFacet::Anime {
+            self.resolve_library_bool_setting(
+                "anime.monitor_specials",
+                Some(&title.library_id),
+                Some(title.facet.as_str()),
+                false,
+            )
+            .await
+            .unwrap_or(false)
         } else {
             false
         };
@@ -659,88 +658,72 @@ impl AppUseCase {
                 anime_media_type,
             );
 
-            // If episode already exists, update language-sensitive fields instead of skipping.
+            // An existing episode follows upstream on every refresh: text, ids,
+            // air date and numbering are rewritten, clearing included, when
+            // they differ. Nothing is renamed or moved on disk.
             if let Some(existing) = existing_episode_lookup
                 .get(&(season_number_key.clone(), episode_number_key.clone()))
                 .cloned()
             {
                 refreshed_episode_ids.insert(existing.id.clone());
-                let new_title = if ep.name.is_empty() {
-                    None
-                } else {
-                    Some(ep.name.clone())
-                };
-                let new_overview = if ep.overview.trim().is_empty() {
-                    None
-                } else {
-                    Some(ep.overview.clone())
-                };
-                // Only update if the new data differs from existing
-                let title_changed = new_title.as_deref() != existing.title.as_deref();
-                let overview_changed = new_overview.as_deref() != existing.overview.as_deref();
-                let new_tvdb_id = if ep.tvdb_id > 0 {
-                    Some(ep.tvdb_id.to_string())
-                } else {
-                    None
-                };
-                // A TMDB-primary series' episodes carry TMDB ids instead. Like
-                // the TVDB id, a present id is refreshed and an absent one
-                // leaves the stored value alone.
+                let new_title = (!ep.name.trim().is_empty()).then(|| ep.name.clone());
+                let new_overview = (!ep.overview.trim().is_empty()).then(|| ep.overview.clone());
+                let new_tvdb_id = (ep.tvdb_id > 0).then(|| ep.tvdb_id.to_string());
+                // A TMDB-primary series' episodes carry TMDB ids instead.
                 let new_tmdb_id = ep.tmdb_id.filter(|id| *id > 0).map(|id| id.to_string());
+                let new_absolute_number =
+                    (!ep.absolute_number.trim().is_empty()).then(|| ep.absolute_number.clone());
                 let new_image_url = normalize_episode_image_url(&ep.image_url);
-                let tvdb_id_changed = new_tvdb_id.as_deref() != existing.tvdb_id.as_deref();
-                let tmdb_id_changed = new_tmdb_id.is_some() && new_tmdb_id != existing.tmdb_id;
+                let title_changed =
+                    new_title.as_deref() != stored_episode_text(existing.title.as_deref());
+                let overview_changed =
+                    new_overview.as_deref() != stored_episode_text(existing.overview.as_deref());
+                let tvdb_id_changed =
+                    new_tvdb_id.as_deref() != stored_episode_text(existing.tvdb_id.as_deref());
+                let tmdb_id_changed =
+                    new_tmdb_id.as_deref() != stored_episode_text(existing.tmdb_id.as_deref());
+                let air_date_changed =
+                    air_date.as_deref() != stored_episode_text(existing.air_date.as_deref());
+                let absolute_changed = new_absolute_number.as_deref()
+                    != stored_episode_text(existing.absolute_number.as_deref());
                 let image_url_changed = new_image_url.as_deref() != existing.image_url.as_deref();
                 // SMG recomputes the contiguous scale as TVDB's absolute order
                 // changes, so every hydration refreshes it, clearing included.
                 let new_contiguous_absolute_number = ep.contiguous_absolute_number;
                 let contiguous_changed =
                     new_contiguous_absolute_number != existing.contiguous_absolute_number;
-                // Upcoming episodes are often announced without a date and
-                // dated (or rescheduled) later; the acquisition walk only
-                // targets dated episodes, so the refresh must carry the date
-                // forward. An absent upstream date leaves the stored one alone.
-                let air_date_changed =
-                    air_date.is_some() && air_date.as_deref() != existing.air_date.as_deref();
-                if (title_changed
-                    || overview_changed
-                    || tvdb_id_changed
-                    || tmdb_id_changed
-                    || image_url_changed
-                    || contiguous_changed
-                    || air_date_changed)
+                // The show's skip policy applies when an episode becomes
+                // filler or recap. Only that flip unmonitors it, so an operator
+                // who re-monitors a flagged episode keeps that choice.
+                let unmonitor_for_skip_policy = existing.monitored
+                    && ((skip_filler && ep.is_filler && !existing.is_filler)
+                        || (skip_recap && ep.is_recap && !existing.is_recap));
+                let update = EpisodeUpdate {
+                    episode_label: title_changed.then(|| new_title.clone()),
+                    title: title_changed.then_some(new_title),
+                    air_date: air_date_changed.then(|| air_date.clone()),
+                    overview: overview_changed.then_some(new_overview),
+                    tvdb_id: tvdb_id_changed.then_some(new_tvdb_id),
+                    tmdb_id: tmdb_id_changed.then_some(new_tmdb_id),
+                    is_filler: (ep.is_filler != existing.is_filler).then_some(ep.is_filler),
+                    is_recap: (ep.is_recap != existing.is_recap).then_some(ep.is_recap),
+                    image_url: if image_url_changed {
+                        new_image_url.clone()
+                    } else {
+                        None
+                    },
+                    clear_image_url: image_url_changed && new_image_url.is_none(),
+                    absolute_number: absolute_changed.then_some(new_absolute_number),
+                    contiguous_absolute_number: contiguous_changed
+                        .then_some(new_contiguous_absolute_number),
+                    ..Default::default()
+                };
+                if update.has_changes()
                     && let Err(err) = self
                         .services
                         .catalog
                         .shows
-                        .update_episode(
-                            &existing.id,
-                            EpisodeUpdate {
-                                episode_label: if title_changed {
-                                    new_title.clone()
-                                } else {
-                                    None
-                                },
-                                title: if title_changed { new_title } else { None },
-                                air_date: if air_date_changed {
-                                    air_date.clone()
-                                } else {
-                                    None
-                                },
-                                overview: if overview_changed { new_overview } else { None },
-                                tvdb_id: if tvdb_id_changed { new_tvdb_id } else { None },
-                                tmdb_id: if tmdb_id_changed { new_tmdb_id } else { None },
-                                image_url: if image_url_changed {
-                                    new_image_url.clone()
-                                } else {
-                                    None
-                                },
-                                clear_image_url: image_url_changed && new_image_url.is_none(),
-                                contiguous_absolute_number: contiguous_changed
-                                    .then_some(new_contiguous_absolute_number),
-                                ..Default::default()
-                            },
-                        )
+                        .update_episode(&existing.id, update)
                         .await
                 {
                     warn!(
@@ -748,6 +731,16 @@ impl AppUseCase {
                         episode_id = %existing.id,
                         error = %err,
                         "failed to refresh episode metadata"
+                    );
+                }
+                if unmonitor_for_skip_policy
+                    && let Err(err) = self.persist_episode_monitoring(&existing.id, false).await
+                {
+                    warn!(
+                        title_id = %title.id,
+                        episode_id = %existing.id,
+                        error = %err,
+                        "failed to unmonitor episode under the skip policy"
                     );
                 }
                 continue;
@@ -1589,6 +1582,12 @@ mod calendar_episode_visibility_tests {
         assert!(calendar_episode_is_visible(Some("1"), false));
         assert!(calendar_episode_is_visible(None, false));
     }
+}
+
+/// A stored empty string and an absent value mean the same thing to an episode
+/// refresh, so moving between them is not a change.
+fn stored_episode_text(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.trim().is_empty())
 }
 
 fn normalize_episode_image_url(raw: &str) -> Option<String> {

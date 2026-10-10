@@ -1,0 +1,6 @@
+query ListMovieTargets($movieIds: [Int!]!) {
+  listMovieTargets(movieIds: $movieIds) {
+    movie_id
+    parents { title_id tvdb_id name }
+  }
+}

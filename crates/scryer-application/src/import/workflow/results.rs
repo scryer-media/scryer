@@ -121,6 +121,28 @@ pub async fn retry_failed_import(
         ));
     }
 
+    let previous_password_failure = current
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<ImportResult>(json).ok())
+        .is_some_and(|result| result.skip_reason == Some(ImportSkipReason::PasswordRequired));
+    if password.is_some_and(str::is_empty) || (previous_password_failure && password.is_none()) {
+        return Err(AppError::ArchivePasswordRequired {
+            message: "Enter a new archive password before retrying this import".into(),
+        });
+    }
+    if let Some(password) = password {
+        let repository = &app.services.workflow.download_submissions;
+        let previous = repository.password_candidates(&download_id).await?;
+        let mut candidates = crate::DownloadPasswordCandidates::default();
+        candidates.push(password);
+        candidates.extend(previous.iter().map(String::as_str));
+        // Commit the replacement before scheduling work, without adding it to plugin settings.
+        repository
+            .set_password_candidates(&download_id, &candidates)
+            .await?;
+    }
+
     // Finish reconciliation even if the requesting browser disconnects.
     let app = app.clone();
     let actor = actor.clone();
@@ -747,6 +769,7 @@ async fn reconcile_terminal_download_cleanup(
             torrent_data_removal_allowed
         }
         TrackedDownloadState::Failed if failure_origin == TerminalFailureOrigin::ImportGate => true,
+        TrackedDownloadState::Failed if client_type == "nzbget" => true,
         TrackedDownloadState::Failed => {
             observed_can_remove == Some(true) && torrent_data_removal_allowed
         }
@@ -773,6 +796,53 @@ async fn reconcile_terminal_download_cleanup(
         let record = refused_record.as_ref().or(record);
         let mut intent_record: Option<crate::DownloadCleanupRecord> = None;
         let mut payload_disposition = None;
+        // A retained, unreadable or unavailable NZBGet state is not a host
+        // payload failure. It retries without spending the give-up budget below,
+        // so it can never fall through to entry removal (a HistoryDelete) with
+        // the payload unverified. This is the attempt's only NZBGet cleanup
+        // read: payload removal and the native-deletion check both use it.
+        let nzbget_payload = if client_type == "nzbget" && remove_data {
+            match revalidate_nzbget_cleanup_state(
+                app,
+                canonical_download_id,
+                client_id,
+                download_client_item_id,
+            )
+            .await
+            {
+                Ok(payload) => Some(payload),
+                Err(error) => {
+                    if nzbget_retention_log_due(record) {
+                        tracing::warn!(
+                            client_id,
+                            download_client_item_id,
+                            state = state.as_str(),
+                            error = %error,
+                            "NZBGet state does not authorize payload cleanup yet; retaining payload and history"
+                        );
+                    } else {
+                        tracing::debug!(
+                            client_id,
+                            download_client_item_id,
+                            state = state.as_str(),
+                            error = %error,
+                            "NZBGet state does not authorize payload cleanup yet; retaining payload and history"
+                        );
+                    }
+                    let seeding = seeding_report.map(|report| SeedingGateReport {
+                        action: Some(SeedingReleaseAction::Kept),
+                        ..report
+                    });
+                    return TerminalDownloadCleanup {
+                        outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+                        seeding,
+                        payload: None,
+                    };
+                }
+            }
+        } else {
+            None
+        };
         let payload_cleanup_checkpoint = if host_managed_payload {
             match remove_host_payload_before_entry_cleanup(
                 app,
@@ -781,6 +851,9 @@ async fn reconcile_terminal_download_cleanup(
                 client_type,
                 download_client_item_id,
                 record,
+                nzbget_payload
+                    .as_ref()
+                    .map(|payload| payload.download.clone()),
             )
             .await
             {
@@ -874,7 +947,25 @@ async fn reconcile_terminal_download_cleanup(
             });
         let client_remove_data = remove_data
             && !payload_already_removed
-            && (!host_managed_payload || client_type == "sabnzbd");
+            && (!host_managed_payload
+                || (client_type == "sabnzbd"
+                    && payload_disposition == Some(HostPayloadDisposition::Removed)));
+        if let Some(payload) = nzbget_payload.as_ref() {
+            if let Err(error) = verify_nzbget_entry_cleanup(payload).await {
+                if nzbget_retention_log_due(record) {
+                    tracing::warn!(client_id, download_client_item_id, error = %error,
+                        "retaining NZBGet history because native deletion could bypass payload preservation");
+                } else {
+                    tracing::debug!(client_id, download_client_item_id, error = %error,
+                        "retaining NZBGet history because native deletion could bypass payload preservation");
+                }
+                return TerminalDownloadCleanup {
+                    outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+                    seeding: seeding_report,
+                    payload: payload_disposition,
+                };
+            }
+        }
         if (client_remove_data || !remove_data)
             && !host_managed_payload
             && let Some(record) = record
@@ -1572,6 +1663,94 @@ fn client_refused_payload_deletion(checkpoint: Option<&serde_json::Value>) -> bo
     })
 }
 
+fn verify_nzbget_cleanup_identity(
+    download: &scryer_domain::CompletedDownload,
+    download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    item_id: &str,
+) -> AppResult<()> {
+    if download.download_client_item_id != item_id
+        || download
+            .download_id
+            .as_deref()
+            .and_then(scryer_domain::download_identity::DownloadId::from_wire)
+            .is_some_and(|id| Some(&id) != download_id)
+    {
+        return Err(AppError::Validation(
+            "NZBGet cleanup identity changed".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// NZBGet's current terminal metadata for this exact job, or an error while the
+/// job is retained (non-terminal, warning, password hold, unreadable state),
+/// absent, or re-identified. Cleanup must not proceed past an error here.
+async fn revalidate_nzbget_cleanup_state(
+    app: &AppUseCase,
+    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    client_id: &str,
+    item_id: &str,
+) -> AppResult<crate::DownloadCleanupPayload> {
+    let payload = app
+        .services
+        .integrations
+        .download_client
+        .get_cleanup_payload_for_source(client_id.trim(), "nzbget", item_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound("NZBGet terminal cleanup metadata is unavailable".into())
+        })?;
+    verify_nzbget_cleanup_identity(&payload.download, canonical_download_id, item_id)?;
+    Ok(payload)
+}
+
+/// Retained NZBGet cleanup retries every few minutes indefinitely: warn on the
+/// first attempt and then once per twelve, mirroring "terminal cleanup remains
+/// pending". Calls outside a durable claim (manual import) always warn.
+fn nzbget_retention_log_due(record: Option<&crate::DownloadCleanupRecord>) -> bool {
+    record.is_none_or(|record| record.attempts <= 1 || record.attempts.is_multiple_of(12))
+}
+
+// NZBGet has no entry-only switch for the failed-history states that delete
+// DestDir. The metadata comes from this attempt's single revalidated read
+// (identity already checked there), even on checkpoint recovery, and the
+// filesystem is inspected now: a recreated directory must never be deleted by
+// an otherwise entry-only retry.
+async fn verify_nzbget_entry_cleanup(payload: &crate::DownloadCleanupPayload) -> AppResult<()> {
+    for path in &payload.native_delete_paths {
+        let path = std::path::Path::new(path);
+        if !path.is_absolute()
+            || path.parent().is_none()
+            || path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(AppError::Validation(
+                "NZBGet native deletion path is unverified".into(),
+            ));
+        }
+        match tokio::fs::symlink_metadata(path).await {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A missing mount or parent is not evidence that its data is gone.
+                if !tokio::fs::metadata(path.parent().expect("validated parent"))
+                    .await
+                    .is_ok_and(|metadata| metadata.is_dir())
+                {
+                    return Err(AppError::Validation(
+                        "NZBGet native deletion parent is unavailable".into(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(AppError::Validation(
+                    "NZBGet history removal would delete retained or unverified data".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Host-side payload deletion for clients that cannot delete their own data
 /// (NZBGet, entry-only torrent plugins) or whose deletion Scryer mirrors
 /// (SABnzbd). Deletion is inventory-and-verify, never a recursive wipe:
@@ -1597,6 +1776,7 @@ async fn remove_host_payload_before_entry_cleanup(
     client_type: &str,
     download_client_item_id: &str,
     record: Option<&crate::DownloadCleanupRecord>,
+    revalidated_nzbget_download: Option<scryer_domain::CompletedDownload>,
 ) -> AppResult<HostPayloadCleanupReport> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
@@ -1604,6 +1784,23 @@ async fn remove_host_payload_before_entry_cleanup(
             "download client payload cleanup requires a configured client id".to_string(),
         ));
     }
+
+    // A cleanup claim/checkpoint can outlive a client retry. Revalidate NZBGet's
+    // current terminal state before any filesystem step, including recovery.
+    let current_nzbget_download = match (client_type == "nzbget", revalidated_nzbget_download) {
+        (true, Some(download)) => Some(download),
+        (true, None) => Some(
+            revalidate_nzbget_cleanup_state(
+                app,
+                canonical_download_id,
+                client_id,
+                download_client_item_id,
+            )
+            .await?
+            .download,
+        ),
+        (false, _) => None,
+    };
 
     let saved = record
         .and_then(|record| record.payload_checkpoint.as_deref())
@@ -1642,19 +1839,25 @@ async fn remove_host_payload_before_entry_cleanup(
             serde_json::from_value::<scryer_domain::CompletedDownload>(completed).ok()
         }) {
         completed
+    } else if let Some(completed) = current_nzbget_download {
+        completed
     } else {
         app
         .services
         .integrations
         .download_client
-        .get_completed_download_for_source(client_id, client_type, download_client_item_id)
+        .get_cleanup_payload_for_source(client_id, client_type, download_client_item_id)
         .await?
+        .map(|payload| payload.download)
         .ok_or_else(|| {
             AppError::NotFound(format!(
                 "download client completed download {download_client_item_id} is unavailable for payload cleanup"
             ))
         })?
     };
+    if client_type == "nzbget" {
+        verify_nzbget_cleanup_identity(&completed, canonical_download_id, download_client_item_id)?;
+    }
     let authoritative_completed = completed.clone();
     let config = app
         .services
@@ -1867,7 +2070,7 @@ async fn remove_host_payload_before_entry_cleanup(
         }
     };
 
-    let disposition = match tokio::fs::symlink_metadata(&target).await {
+    let mut disposition = match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
             // A single-file job: the client's path and name are not proof.
             // Require Scryer's persisted import result for this canonical job.
@@ -2014,11 +2217,14 @@ async fn remove_host_payload_before_entry_cleanup(
                         "terminal download payload partially retained: unrecognised or changed files were left in place");
                     HostPayloadDisposition::PartiallyRetained
                 }
-            } else if !imported_here.is_empty() {
+            } else if !imported_here.is_empty()
+                || (client_type == "sabnzbd"
+                    && imported_sources.iter().any(|(source, _)| source == &target))
+            {
                 // Not provably the job's own directory (a shared completed
                 // folder, or a client-renamed duplicate). Remove only the files
                 // Scryer itself imported from it, verified by size, and leave
-                // the directory and everything else alone.
+                // everything else alone; remove directories only when empty.
                 persist_plan(serde_json::json!({
                     "completed": authoritative_completed, "payload_removed": false,
                     "target": target,
@@ -2048,13 +2254,35 @@ async fn remove_host_payload_before_entry_cleanup(
                             crate::fs_safety::remove_file_safely_if_exists(source).await?;
                             removed += 1;
                         }
-                        Ok(_) => {}
+                        Ok(_) => continue,
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                         Err(error) => {
                             return Err(AppError::Repository(format!(
                                 "failed to inspect imported source {}: {error}",
                                 source.display()
                             )));
+                        }
+                    }
+                    if matches!(client_type, "sabnzbd" | "nzbget") {
+                        // Prune only this imported source's empty ancestors,
+                        // stopping before the job boundary or any retained entry.
+                        for directory in source.ancestors().skip(1) {
+                            if directory == target || !directory.starts_with(&target) {
+                                break;
+                            }
+                            if !payload_file_location_is_verified(
+                                &target,
+                                &canonical_target,
+                                directory,
+                                &protected_roots,
+                            ) || !tokio::fs::symlink_metadata(directory).await.is_ok_and(
+                                |metadata| metadata.is_dir() && !metadata.file_type().is_symlink(),
+                            ) {
+                                break;
+                            }
+                            if tokio::fs::remove_dir(directory).await.is_err() {
+                                break;
+                            }
                         }
                     }
                 }
@@ -2091,6 +2319,31 @@ async fn remove_host_payload_before_entry_cleanup(
             )));
         }
     };
+    if client_type == "sabnzbd"
+        && canonical_download_id.is_some()
+        && disposition == HostPayloadDisposition::Removed
+        && let Some(source_title) = record.and_then(|record| record.source_title.as_deref())
+    {
+        let parent_target = target.clone();
+        let parent_roots = roots.clone();
+        let parent_protected = protected_roots.clone();
+        let source_title = source_title.to_owned();
+        let parent_removed = tokio::task::spawn_blocking(move || {
+            remove_empty_sab_job_parents(
+                &parent_target,
+                &source_title,
+                &parent_roots,
+                &parent_protected,
+            )
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("empty job folder cleanup task panicked: {error}"))
+        })??;
+        if parent_removed == Some(false) {
+            disposition = HostPayloadDisposition::PartiallyRetained;
+        }
+    }
     persist_plan(serde_json::json!({
         "completed": authoritative_completed, "payload_removed": true,
         "target": target, "disposition": disposition,
@@ -2101,6 +2354,82 @@ async fn remove_host_payload_before_entry_cleanup(
         disposition,
         filesystem_checkpoint: checkpoint,
     })
+}
+
+fn remove_empty_sab_job_parents(
+    target: &std::path::Path,
+    source_title: &str,
+    output_roots: &[std::path::PathBuf],
+    protected_roots: &[String],
+) -> AppResult<Option<bool>> {
+    let parents: Vec<_> = target
+        .ancestors()
+        .skip(1)
+        .take(PAYLOAD_INVENTORY_MAX_DEPTH)
+        .collect();
+    let Some(index) = parents.iter().position(|parent| {
+        parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| payload_directory_name_matches_release(name, source_title))
+    }) else {
+        return Ok(None);
+    };
+    let job = parents[index];
+    if output_roots.iter().any(|root| root.starts_with(job)) {
+        return Ok(Some(false));
+    }
+    // Check ancestors up to the explicitly configured output root. System
+    // aliases above that root (such as /var on macOS) do not change ownership.
+    let boundary = crate::fs_safety::most_specific_containing_root(job, output_roots);
+    for parent in job.ancestors() {
+        match std::fs::symlink_metadata(parent) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && parent == job => {
+                return Ok(Some(true));
+            }
+            _ => return Ok(Some(false)),
+        }
+        if boundary.as_deref() == Some(parent) {
+            break;
+        }
+    }
+    let canonical = canonical_payload_directory(job)?;
+    if protected_roots.iter().any(|root| {
+        crate::catalog_workflow::library_root_paths_overlap(&canonical.to_string_lossy(), root)
+    }) {
+        return Ok(Some(false));
+    }
+    for directory in &parents[..=index] {
+        if *directory != job
+            && !payload_file_location_is_verified(job, &canonical, directory, protected_roots)
+        {
+            return Ok(Some(false));
+        }
+        if std::fs::symlink_metadata(directory)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Ok(Some(false));
+        }
+        match std::fs::remove_dir(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                return Ok(Some(false));
+            }
+            Err(error) => {
+                // The payload is already gone; failing here would rerun the
+                // same prune on every retry and never settle the cleanup row.
+                tracing::warn!(
+                    path = %directory.display(),
+                    error = %error,
+                    "failed to remove empty SAB job folder; retaining it"
+                );
+                return Ok(Some(false));
+            }
+        }
+    }
+    Ok(Some(true))
 }
 
 fn host_payload_cleanup_checkpoint(
@@ -2292,15 +2621,22 @@ async fn skip_reason_for_import_check_rejection(
     Ok(skip_reason_for_import_check_code(code))
 }
 
-async fn finalize_import_source_cleanup(
-    app: &AppUseCase,
-    import_mode: scryer_domain::ImportMode,
+/// The guard a move import must hand to source removal, or `None` when the
+/// source was renamed into place and nothing is left at its path.
+fn move_import_source_cleanup_guard(
     file_result: &scryer_domain::ImportFileResult,
-    final_dest_path: &Path,
-    completed: Option<&scryer_domain::CompletedDownload>,
-) -> AppResult<scryer_domain::ImportStrategy> {
-    if import_mode != scryer_domain::ImportMode::Move {
-        return Ok(file_result.strategy);
+) -> AppResult<Option<scryer_domain::ImportSourceCleanupGuard>> {
+    // Archive extraction output renamed into place: the move already happened.
+    // Only that rename sets this disposition, and it never comes with a guard
+    // or a copy to verify, so either one means the result cannot be trusted.
+    if file_result.source_disposition == scryer_domain::ImportSourceDisposition::RenamedIntoPlace {
+        if file_result.source_cleanup.is_some() || file_result.verification.is_some() {
+            return Err(AppError::Repository(format!(
+                "move import of {} reported a rename together with a source cleanup or copy verification",
+                file_result.source_path.display()
+            )));
+        }
+        return Ok(None);
     }
 
     // FR-044, at the application-level gate as well as inside the copy. The
@@ -2318,12 +2654,85 @@ async fn finalize_import_source_cleanup(
         )));
     }
 
-    let guard = file_result.source_cleanup.clone().ok_or_else(|| {
+    file_result.source_cleanup.clone().map(Some).ok_or_else(|| {
         AppError::Repository(format!(
             "move import did not return a source cleanup guard for {}",
             file_result.source_path.display()
         ))
-    })?;
+    })
+}
+
+pub(crate) struct DeferredImportSourceCleanup {
+    guard: scryer_domain::ImportSourceCleanupGuard,
+    destination: PathBuf,
+    completed: Option<CompletedDownload>,
+}
+
+tokio::task_local! {
+    static DEFERRED_IMPORT_SOURCE_CLEANUP: std::cell::RefCell<Vec<DeferredImportSourceCleanup>>;
+}
+
+async fn collect_deferred_import_source_cleanup<T>(
+    operation: impl std::future::Future<Output = T>,
+) -> (T, Vec<DeferredImportSourceCleanup>) {
+    DEFERRED_IMPORT_SOURCE_CLEANUP
+        .scope(std::cell::RefCell::new(Vec::new()), async {
+            let result = operation.await;
+            let cleanups = DEFERRED_IMPORT_SOURCE_CLEANUP.with(|pending| pending.take());
+            (result, cleanups)
+        })
+        .await
+}
+
+pub(crate) fn defer_import_source_cleanup(
+    guard: &scryer_domain::ImportSourceCleanupGuard,
+    destination: &Path,
+    completed: Option<&CompletedDownload>,
+) -> bool {
+    DEFERRED_IMPORT_SOURCE_CLEANUP
+        .try_with(|pending| {
+            pending.borrow_mut().push(DeferredImportSourceCleanup {
+                guard: guard.clone(),
+                destination: destination.to_path_buf(),
+                completed: completed.cloned(),
+            });
+        })
+        .is_ok()
+}
+
+async fn complete_deferred_import_source_cleanup(
+    app: &AppUseCase,
+    pending: Vec<DeferredImportSourceCleanup>,
+) -> AppResult<()> {
+    for cleanup in pending {
+        finalize_deferred_import_source_cleanup(
+            app,
+            Some(cleanup.guard),
+            &cleanup.destination,
+            cleanup.completed.as_ref(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn finalize_import_source_cleanup(
+    app: &AppUseCase,
+    import_mode: scryer_domain::ImportMode,
+    file_result: &scryer_domain::ImportFileResult,
+    final_dest_path: &Path,
+    completed: Option<&scryer_domain::CompletedDownload>,
+) -> AppResult<scryer_domain::ImportStrategy> {
+    if import_mode != scryer_domain::ImportMode::Move {
+        return Ok(file_result.strategy);
+    }
+
+    let Some(guard) = move_import_source_cleanup_guard(file_result)? else {
+        return Ok(scryer_domain::ImportStrategy::Move);
+    };
+    if defer_import_source_cleanup(&guard, final_dest_path, completed) {
+        return Ok(scryer_domain::ImportStrategy::Move);
+    }
 
     if let Some(verification) = file_result.verification.as_ref() {
         // FR-043: the applied depth is recorded wherever the import surface can
@@ -2363,6 +2772,9 @@ async fn finalize_deferred_import_source_cleanup(
     let Some(guard) = source_cleanup else {
         return Ok(());
     };
+    if defer_import_source_cleanup(&guard, final_dest_path, completed) {
+        return Ok(());
+    }
     let execution_context = crate::ImportFileExecutionContext::new(
         completed.map_or("", |item| item.client_id.as_str()),
         completed.map_or("", |item| item.client_type.as_str()),
@@ -2401,6 +2813,9 @@ pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> boo
         // execution failure. Its message quotes operator-authored rule names
         // and rule source, so the message allowlist must not be consulted.
         _ if result.skip_reason == Some(ImportSkipReason::PostDownloadRuleBlocked) => false,
+        // Unwanted executables are a verdict on the download's contents, and
+        // the message quotes a file name from the download.
+        _ if result.skip_reason == Some(ImportSkipReason::UnwantedExecutables) => false,
         _ => {
             matches!(
                 result.skip_reason,
@@ -2427,5 +2842,230 @@ fn completed_import_status_for_result(
         ImportStatus::Pending
     } else {
         fallback_status
+    }
+}
+
+#[cfg(test)]
+mod move_import_source_cleanup_gate_tests {
+    use super::move_import_source_cleanup_guard;
+    use scryer_domain::{
+        ImportContentProof, ImportDestinationDisposition, ImportFileIdentity, ImportFileResult,
+        ImportSourceCleanupGuard, ImportSourceDisposition, ImportSourceIdentity,
+        ImportSourceIdentityKind, ImportStrategy,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn sab_cleanup_empty_parent_preserves_output_library_and_recycle_roots() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let job = root_path.join("Fixture.Release");
+        std::fs::create_dir(&job).unwrap();
+        let leaf = job.join("missing.mkv");
+        assert_eq!(
+            super::remove_empty_sab_job_parents(
+                &leaf,
+                "Fixture.Release",
+                std::slice::from_ref(&job),
+                &[]
+            )
+            .unwrap(),
+            Some(false)
+        );
+        for protected in [
+            job.clone(),
+            job.join("library"),
+            job.join(".scryer-recycle"),
+        ] {
+            assert_eq!(
+                super::remove_empty_sab_job_parents(
+                    &leaf,
+                    "Fixture.Release",
+                    std::slice::from_ref(&root_path),
+                    &[protected.display().to_string()]
+                )
+                .unwrap(),
+                Some(false)
+            );
+            assert!(job.is_dir());
+        }
+        assert_eq!(
+            super::remove_empty_sab_job_parents(
+                &leaf,
+                "Other.Release",
+                std::slice::from_ref(&root_path),
+                &[]
+            )
+            .unwrap(),
+            None
+        );
+        assert!(job.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sab_cleanup_empty_parent_never_follows_a_job_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let real = root_path.join("unrelated");
+        std::fs::create_dir(&real).unwrap();
+        let job = root_path.join("Fixture.Release");
+        std::os::unix::fs::symlink(&real, &job).unwrap();
+        assert_eq!(
+            super::remove_empty_sab_job_parents(
+                &job.join("missing.mkv"),
+                "Fixture.Release",
+                std::slice::from_ref(&root_path),
+                &[]
+            )
+            .unwrap(),
+            Some(false)
+        );
+        assert!(real.is_dir());
+        assert!(job.is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sab_cleanup_empty_parent_retains_job_when_removal_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        if std::env::var("USER").as_deref() == Ok("root") {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let locked = root_path.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let job = locked.join("Fixture.Release");
+        std::fs::create_dir(&job).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = super::remove_empty_sab_job_parents(
+            &job.join("missing.mkv"),
+            "Fixture.Release",
+            std::slice::from_ref(&root_path),
+            &[],
+        );
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(result.unwrap(), Some(false));
+        assert!(job.is_dir());
+    }
+
+    fn proof() -> ImportContentProof {
+        ImportContentProof {
+            size_bytes: 23,
+            sample_bytes: 23,
+            sample_blake3: "synthetic".to_string(),
+        }
+    }
+
+    fn guard() -> ImportSourceCleanupGuard {
+        ImportSourceCleanupGuard {
+            source_path: PathBuf::from("/downloads/Synthetic.Show.S01E01.mkv"),
+            dest_path: PathBuf::from("/library/Synthetic Show/Season 01/S01E01.mkv"),
+            size_bytes: 23,
+            source_identity: ImportSourceIdentity {
+                file: ImportFileIdentity {
+                    len: 23,
+                    modified: None,
+                    #[cfg(unix)]
+                    dev: 1,
+                    #[cfg(unix)]
+                    ino: 2,
+                },
+                kind: ImportSourceIdentityKind::Regular,
+            },
+            source_proof: proof(),
+            dest_proof: proof(),
+        }
+    }
+
+    #[tokio::test]
+    async fn source_removal_is_deferred_until_the_sidecar_workflow_releases_it() {
+        let cleanup = guard();
+        assert!(!super::defer_import_source_cleanup(
+            &cleanup,
+            &cleanup.dest_path,
+            None
+        ));
+        let (_, pending) = super::collect_deferred_import_source_cleanup(async {
+            assert!(super::defer_import_source_cleanup(
+                &cleanup,
+                &cleanup.dest_path,
+                None
+            ));
+        })
+        .await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].guard.source_path, cleanup.source_path);
+        assert_eq!(pending[0].destination, cleanup.dest_path);
+        // Abandoning this collection performs no removal; the workflow can
+        // retain sources when subtitle delivery fails or gets cancelled.
+        drop(pending);
+        assert!(!super::defer_import_source_cleanup(
+            &cleanup,
+            &cleanup.dest_path,
+            None
+        ));
+    }
+
+    fn result(
+        source_disposition: ImportSourceDisposition,
+        source_cleanup: Option<ImportSourceCleanupGuard>,
+    ) -> ImportFileResult {
+        ImportFileResult {
+            strategy: ImportStrategy::Move,
+            source_path: PathBuf::from("/downloads/Synthetic.Show.S01E01.mkv"),
+            dest_path: PathBuf::from("/library/Synthetic Show/Season 01/S01E01.mkv"),
+            size_bytes: 23,
+            destination_disposition: ImportDestinationDisposition::Created,
+            source_disposition,
+            source_cleanup,
+            verification: None,
+        }
+    }
+
+    #[test]
+    fn a_renamed_source_needs_no_cleanup_guard() {
+        let guard = move_import_source_cleanup_guard(&result(
+            ImportSourceDisposition::RenamedIntoPlace,
+            None,
+        ))
+        .expect("a rename completes the move");
+        assert!(guard.is_none(), "nothing is left at the source to remove");
+    }
+
+    #[test]
+    fn a_retained_source_without_a_guard_is_still_refused() {
+        let error =
+            move_import_source_cleanup_guard(&result(ImportSourceDisposition::Retained, None))
+                .expect_err("a retained source must come with its guard");
+        assert!(
+            error
+                .to_string()
+                .contains("did not return a source cleanup guard"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_retained_source_hands_its_guard_to_removal() {
+        let returned = move_import_source_cleanup_guard(&result(
+            ImportSourceDisposition::Retained,
+            Some(guard()),
+        ))
+        .expect("guarded move");
+        assert_eq!(
+            returned.map(|guard| guard.source_path),
+            Some(PathBuf::from("/downloads/Synthetic.Show.S01E01.mkv"))
+        );
+    }
+
+    #[test]
+    fn a_rename_that_also_carries_a_guard_is_refused() {
+        move_import_source_cleanup_guard(&result(
+            ImportSourceDisposition::RenamedIntoPlace,
+            Some(guard()),
+        ))
+        .expect_err("a rename never builds a guard, so this result is inconsistent");
     }
 }

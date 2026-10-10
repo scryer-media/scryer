@@ -55,6 +55,34 @@ fn held_row(subscription_id: &str, request_id: &str) -> scryer_domain::ListMembe
 }
 
 #[tokio::test]
+async fn rejecting_a_series_movie_excludes_only_the_movie_not_its_parent() {
+    let store = MemoryListStore::with_subscriptions(vec![subscription("public-a")]);
+    let mut request = rejected_request(
+        "movie-request",
+        MediaRequestOrigin::PublicList {
+            subscription_id: "public-a".into(),
+        },
+    );
+    request.facet = MediaFacet::Anime;
+    request.identity_fingerprint = "list-movie:fixture".into();
+    request.requested_monitor_selection = Some(scryer_domain::MonitorSelection {
+        seasons: vec![],
+        series_movies: vec![scryer_domain::MonitorSelectionMovie {
+            name: "Selected film".into(),
+            external_ids: vec![tmdb("movie-id")],
+        }],
+    });
+    remember_rejected_request(&store, &store, &store, &request, "reviewer-one", at(5))
+        .await
+        .unwrap();
+    let exclusions = store.exclusions.lock().unwrap();
+    assert_eq!(exclusions.len(), 1);
+    assert_eq!(exclusions[0].kind, MediaFacet::Movie);
+    assert_eq!(exclusions[0].external_ids, vec![tmdb("movie-id")]);
+    assert_eq!(exclusions[0].display_title, "Selected film");
+}
+
+#[tokio::test]
 async fn rejecting_a_public_list_request_excludes_it_from_that_list() {
     let store = MemoryListStore::with_subscriptions(vec![subscription("public-a")]);
     store.insert_rows(vec![held_row("public-a", "request-1")]);

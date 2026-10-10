@@ -72,6 +72,10 @@ impl ListSubscriptionRepository for NullListStore {
     async fn list_sync_runs(&self, _: &str, _: usize) -> AppResult<Vec<ListSyncRun>> {
         Ok(Vec::new())
     }
+
+    async fn delete_sync_runs_older_than(&self, _: DateTime<Utc>) -> AppResult<u32> {
+        Ok(0)
+    }
 }
 
 #[async_trait]

@@ -11,9 +11,9 @@ use scryer_application::{
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     DomainEvent, DomainEventActorKind, DomainEventFilter, DomainEventStream, DomainEventType,
-    DownloadQueueCommandAction, DownloadQueueDeleteStatus, Id, ImportRecord, ImportStatus,
-    ImportTransferPhase, ImportType, MediaFacet, MediaFileDeletedReason, NewDomainEvent,
-    TitleHistoryEventType,
+    DownloadQueueCommandAction, DownloadQueueDeleteStatus, Id, ImportRecord, ImportSkipReason,
+    ImportStatus, ImportTransferPhase, ImportType, MediaFacet, MediaFileDeletedReason,
+    NewDomainEvent, TitleHistoryEventType,
 };
 use scryer_infrastructure_sql::domain_event_payload::{
     decode_domain_event_payload, derive_domain_event_projections, encode_domain_event_payload,
@@ -36,8 +36,8 @@ const APPEND_DOMAIN_EVENT_INSERT_SQL: &str = "INSERT INTO domain_events (
             event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
             title_id, facet, correlation_id, causation_id, schema_version,
             stream_kind, stream_id, event_type, payload_json, import_status,
-            media_file_delete_reason, download_id
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+            media_file_delete_reason, download_id, import_skip_reason
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 pub const DOWNLOAD_SUBMISSION_COLUMNS: &str = "id, title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, info_hash, release_size_bytes, release_listing_json, request_signature, purpose, episode_id, collection_id, series_movie_link_id";
 pub const IMPORT_COLUMNS: &str = "id, source_client_id, source_system, source_ref, import_type, status, payload_json, result_json, download_id, import_transfer_phase, import_transfer_bytes, import_transfer_total_bytes, import_transfer_started_at, import_transfer_updated_at, started_at, finished_at, created_at, updated_at";
 pub const DOWNLOAD_QUEUE_COMMAND_COLUMNS: &str = "id, action, canonical_download_id, client_id, client_type, download_client_item_id, is_history, status, error_text, requested_by_user_id, started_at, finished_at, created_at, updated_at";
@@ -123,6 +123,7 @@ async fn append_domain_events_with_replay(
                         SqlArg::OptText(projections.import_status),
                         SqlArg::OptText(projections.media_file_delete_reason),
                         SqlArg::OptText(projections.download_id),
+                        SqlArg::OptText(projections.import_skip_reason),
                     ],
                 )
                 .await?;
@@ -183,6 +184,7 @@ pub async fn append_domain_event_tx(
             SqlArg::OptText(projections.import_status),
             SqlArg::OptText(projections.media_file_delete_reason),
             SqlArg::OptText(projections.download_id),
+            SqlArg::OptText(projections.import_skip_reason),
         ],
     )
     .await?;
@@ -1158,6 +1160,10 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
     )
 }
 
+/// Keeps a post-download rule's refusal out of a status filter; binds the
+/// rule-blocked skip reason.
+const NOT_RULE_REJECTION_SQL: &str = "(import_skip_reason IS NULL OR import_skip_reason <> {})";
+
 pub fn build_title_history_filter_sql(
     _datastore: &StoreDatastore,
     event_types: Option<&[TitleHistoryEventType]>,
@@ -1229,19 +1235,46 @@ pub fn build_title_history_filter_sql(
                             DomainEventType::ImportCompleted.as_str().into(),
                         ));
                     }
+                    // A rule's refusal is its own history type, so it is
+                    // excluded from the failed and skipped filters it would
+                    // otherwise fall under by status.
                     TitleHistoryEventType::ImportFailed => {
-                        parts.push("(event_type = {} AND import_status = {})".to_string());
+                        parts.push(format!(
+                            "(event_type = {{}} AND import_status = {{}} AND {NOT_RULE_REJECTION_SQL})"
+                        ));
                         args.push(SqlArg::Text(
                             DomainEventType::ImportRejected.as_str().into(),
                         ));
                         args.push(SqlArg::Text(ImportStatus::Failed.as_str().into()));
+                        args.push(SqlArg::Text(
+                            ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
+                        ));
                     }
                     TitleHistoryEventType::ImportSkipped => {
-                        parts.push("(event_type = {} AND import_status = {})".to_string());
+                        parts.push(format!(
+                            "(event_type = {{}} AND import_status = {{}} AND {NOT_RULE_REJECTION_SQL})"
+                        ));
                         args.push(SqlArg::Text(
                             DomainEventType::ImportRejected.as_str().into(),
                         ));
                         args.push(SqlArg::Text(ImportStatus::Skipped.as_str().into()));
+                        args.push(SqlArg::Text(
+                            ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
+                        ));
+                    }
+                    TitleHistoryEventType::ImportRejectedByRule => {
+                        parts.push(
+                            "(event_type = {} AND import_status IN ({}, {}) AND import_skip_reason = {})"
+                                .to_string(),
+                        );
+                        args.push(SqlArg::Text(
+                            DomainEventType::ImportRejected.as_str().into(),
+                        ));
+                        args.push(SqlArg::Text(ImportStatus::Failed.as_str().into()));
+                        args.push(SqlArg::Text(ImportStatus::Skipped.as_str().into()));
+                        args.push(SqlArg::Text(
+                            ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
+                        ));
                     }
                     TitleHistoryEventType::FileUpgraded => {
                         parts.push("event_type = {}".to_string());
@@ -1611,6 +1644,10 @@ pub fn domain_event_from_row(row: &SqlRow) -> AppResult<DomainEvent> {
 pub fn stream_from_parts(kind: &str, identifier: Option<String>) -> AppResult<DomainEventStream> {
     match kind {
         "global" => Ok(DomainEventStream::Global),
+        "user" => identifier
+            .filter(|id| !id.is_empty())
+            .map(|user_id| DomainEventStream::User { user_id })
+            .ok_or_else(|| AppError::Repository("domain event missing user stream id".into())),
         "title" => identifier
             .map(|title_id| DomainEventStream::Title { title_id })
             .ok_or_else(|| AppError::Repository("domain event missing title stream id".into())),
@@ -1753,6 +1790,7 @@ pub fn import_artifact_from_row(row: &SqlRow) -> AppResult<ImportArtifact> {
         source_ref: row.text("source_ref")?,
         import_id: row.opt_text("import_id")?,
         relative_path: row.opt_text("relative_path")?,
+        workspace_relative_path: row.opt_text("workspace_relative_path")?,
         normalized_file_name: row.text("normalized_file_name")?,
         media_kind: row.text("media_kind")?,
         title_id: row.opt_text("title_id")?,

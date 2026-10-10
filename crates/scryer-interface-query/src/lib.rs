@@ -558,10 +558,24 @@ pub fn from_interactive_release_search_snapshot(
                 .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
             rate_limited: indexer.rate_limited,
+            skip_reason: indexer.skip_reason.map(|reason| {
+                use scryer_application::InteractiveIndexerSkipReason as Reason;
+                match reason {
+                    Reason::IndexerDisabled => {
+                        InteractiveReleaseSearchSkipReasonValue::IndexerDisabled
+                    }
+                    Reason::TemporarilyDisabled => {
+                        InteractiveReleaseSearchSkipReasonValue::TemporarilyDisabled
+                    }
+                    Reason::BackedOff => InteractiveReleaseSearchSkipReasonValue::BackedOff,
+                    Reason::NoTextSearch => InteractiveReleaseSearchSkipReasonValue::NoTextSearch,
+                }
+            }),
+            skipped_until: indexer.skipped_until,
         })
         .collect();
-    // Parity with the one-shot `searchReleases` resolver's limit handling.
-    let safe_limit = snapshot.limit.unwrap_or(50).clamp(1, 200) as usize;
+    // A title search's limit is already capped; a raw query lists everything.
+    let safe_limit = snapshot.limit.map_or(usize::MAX, |limit| limit as usize);
     InteractiveReleaseSearchPayload {
         id: snapshot.id.into(),
         state,
@@ -1376,6 +1390,10 @@ impl CatalogQueries {
         library_ids: Option<Vec<ID>>,
         #[graphql(desc = "Restrict requests to one status; omitted includes all statuses.")]
         status: Option<MediaRequestStatusValue>,
+        #[graphql(
+            desc = "Restrict requests to those this user is a requester on; omitted includes every requester."
+        )]
+        requester_user_id: Option<ID>,
     ) -> GqlResult<Vec<MediaRequestPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -1386,6 +1404,7 @@ impl CatalogQueries {
                     facet: facet.map(MediaFacetValue::into_domain),
                     library_ids: optional_ids_to_strings(library_ids),
                     status: status.map(MediaRequestStatusValue::into_domain),
+                    requester_user_id: requester_user_id.map(String::from),
                 },
             )
             .await
@@ -1415,6 +1434,7 @@ impl CatalogQueries {
                     facet: facet.map(MediaFacetValue::into_domain),
                     library_ids: optional_ids_to_strings(library_ids),
                     status: status.map(MediaRequestStatusValue::into_domain),
+                    requester_user_id: None,
                 },
             )
             .await
@@ -2644,24 +2664,39 @@ impl JobAndDownloadQueries {
         Ok(runs.into_iter().map(from_job_run).collect())
     }
 
-    /// List recent runs for one job key; the limit defaults to 10 and values below 1 become 1.
+    /// List recent runs for one job key, or for one scheduled script when the key is
+    /// `CUSTOM_JOB`; the limit defaults to 10 and values below 1 become 1.
     async fn job_runs(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Job key whose runs should be listed.")] job_key: JobKeyValue,
+        #[graphql(
+            desc = "Scheduled script whose runs should be listed; required with `CUSTOM_JOB` and rejected with any other key."
+        )]
+        custom_job_id: Option<ID>,
         #[graphql(desc = "Maximum runs to return; defaults to 10 and values below 1 become 1.")]
         limit: Option<i32>,
     ) -> GqlResult<Vec<JobRunPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let runs = app
-            .list_job_runs(
-                &actor,
-                job_key.into_application(),
-                limit.unwrap_or(10).max(1) as usize,
-            )
-            .await
-            .map_err(to_gql_error)?;
+        let limit = limit.unwrap_or(10).max(1) as usize;
+        let runs = match (job_key, custom_job_id) {
+            (JobKeyValue::CustomJob, Some(custom_job_id)) => {
+                app.list_custom_job_runs(&actor, custom_job_id.as_str(), limit)
+                    .await
+            }
+            (JobKeyValue::CustomJob, None) => Err(AppError::Validation(
+                "customJobId is required for CUSTOM_JOB".to_string(),
+            )),
+            (_, Some(_)) => Err(AppError::Validation(
+                "customJobId is only accepted with CUSTOM_JOB".to_string(),
+            )),
+            (job_key, None) => {
+                app.list_job_runs(&actor, job_key.into_application(), limit)
+                    .await
+            }
+        }
+        .map_err(to_gql_error)?;
         Ok(runs.into_iter().map(from_job_run).collect())
     }
 
@@ -4041,22 +4076,66 @@ impl AcquisitionQueries {
 
     // ── Post-Processing Scripts ──────────────────────────────────────────
 
-    /// List post-processing scripts visible to the caller.
+    /// List post-processing scripts visible to the caller, optionally only those with one trigger.
     async fn post_processing_scripts(
         &self,
         ctx: &Context<'_>,
+        #[graphql(
+            desc = "Only return scripts started by this trigger; null returns every script."
+        )]
+        trigger: Option<ScriptTriggerValue>,
     ) -> GqlResult<Vec<PostProcessingScriptPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
-        let scripts = app
-            .list_post_processing_scripts(&actor)
-            .await
-            .map_err(to_gql_error)?;
+        let scripts = match trigger {
+            Some(trigger) => {
+                app.list_post_processing_scripts_by_trigger(&actor, trigger.into())
+                    .await
+            }
+            None => app.list_post_processing_scripts(&actor).await,
+        }
+        .map_err(to_gql_error)?;
         Ok(scripts
             .into_iter()
             .map(crate::mappers::from_pp_script)
             .collect())
+    }
+
+    /// Check a script schedule before saving it and preview its next three fire times.
+    async fn validate_script_schedule(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Schedule to check.")] schedule: ScriptScheduleInput,
+    ) -> GqlResult<ScriptScheduleValidationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        // Refuse before looking at the input so an unauthorized caller learns
+        // nothing about the schedule it sent.
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        require_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+
+        let schedule = match schedule.into_domain() {
+            Ok(schedule) => schedule,
+            Err(field) => {
+                return Ok(ScriptScheduleValidationPayload {
+                    valid: false,
+                    error: Some(format!("schedule is missing {field} for its kind")),
+                    description: None,
+                    next_runs: Vec::new(),
+                });
+            }
+        };
+        let validation = app
+            .validate_script_schedule(&actor, &schedule)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(ScriptScheduleValidationPayload {
+            valid: validation.valid,
+            error: validation.error,
+            description: validation.description,
+            next_runs: validation.next_runs,
+        })
     }
 
     /// List runs for one post-processing script; the limit defaults to 50 and is clamped to 1 through 500.
@@ -4084,7 +4163,37 @@ impl AcquisitionQueries {
             .collect())
     }
 
+    /// Interpreters operator scripts are launched with; null fields use the default command.
+    async fn script_interpreter_settings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<ScriptInterpreterSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .get_script_interpreter_settings(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_script_interpreter_config(settings))
+    }
+
     // ── Plugins ──────────────────────────────────────────────────────────
+
+    /// Read the installed plugin's settings declaration and redacted values.
+    async fn installed_plugin_settings(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Installed plugin ID whose settings are returned.")] plugin_id: ID,
+    ) -> GqlResult<async_graphql::Json<async_graphql::Value>> {
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let settings = app_from_ctx(ctx)?
+            .installed_plugin_settings(&actor, plugin_id.as_str())
+            .await
+            .map_err(to_gql_error)?;
+        async_graphql::Value::from_json(settings)
+            .map(async_graphql::Json)
+            .map_err(|_| async_graphql::Error::new("unable to serialize plugin settings"))
+    }
 
     /// List available registry plugins visible to the caller.
     async fn plugins(&self, ctx: &Context<'_>) -> GqlResult<Vec<RegistryPluginPayload>> {

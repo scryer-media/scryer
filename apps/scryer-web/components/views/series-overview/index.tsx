@@ -25,6 +25,7 @@ import { TitlePosterSlot } from "@/components/title-poster-slot";
 import {
   SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID,
   SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID,
+  seriesOverviewSeriesMovieRowId,
 } from "@/lib/utils/dom-ids";
 import {
   queueExistingMutation,
@@ -175,6 +176,7 @@ type Props = {
   completedDownloads?: DownloadQueueItem[];
   manualImport?: ManualImportLauncher;
   initialEpisodeId?: string | null;
+  initialSeriesMovieLinkId?: string | null;
   seasonSearchResultsByCollection?: Record<string, Release[]>;
   seasonSearchLoadingByCollection?: Record<string, boolean>;
   onRunSeasonSearch?: (collection: TitleCollection) => Promise<void> | void;
@@ -250,6 +252,7 @@ function SeriesOverviewViewImpl({
   completedDownloads,
   manualImport,
   initialEpisodeId,
+  initialSeriesMovieLinkId,
   seasonSearchResultsByCollection,
   seasonSearchLoadingByCollection,
   onRunSeasonSearch,
@@ -449,13 +452,40 @@ function SeriesOverviewViewImpl({
     setHistoryEpisodeScope({
       episodeId: episode.id,
       episodeLabel:
-        episode.title ?? episode.episodeLabel ?? episode.episodeNumber ?? episode.id,
+        episode.title?.trim()
+        || episode.episodeLabel?.trim()
+        || episode.episodeNumber
+        || episode.id,
     });
     setHistoryOpen(true);
   }, []);
 
   const defaultExpandedRef = React.useRef(false);
   const lastDeepLinkedEpisodeIdRef = React.useRef<string | null>(null);
+  const lastDeepLinkedMovieRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    lastDeepLinkedMovieRef.current = null;
+  }, [initialSeriesMovieLinkId, title?.id]);
+
+  React.useEffect(() => {
+    if (!initialSeriesMovieLinkId) return;
+    if (lastDeepLinkedMovieRef.current === initialSeriesMovieLinkId) return;
+    const item = timelineItems.find((entry) => entry.kind === "seriesMovie"
+      && entry.link.id === initialSeriesMovieLinkId);
+    if (!item) return;
+    if (!expandedKeys.has(item.key)) {
+      setExpandedKeys((current) => new Set(current).add(item.key));
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const element = document.getElementById(seriesOverviewSeriesMovieRowId(initialSeriesMovieLinkId));
+      if (!element) return;
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      lastDeepLinkedMovieRef.current = initialSeriesMovieLinkId;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expandedKeys, initialSeriesMovieLinkId, timelineItems]);
 
   React.useEffect(() => {
     defaultExpandedRef.current = false;
@@ -508,7 +538,7 @@ function SeriesOverviewViewImpl({
   }, [expandedKeys, initialEpisodeId, episodesByCollection]);
 
   React.useEffect(() => {
-    if (initialEpisodeId || defaultExpandedRef.current || !latestKey) {
+    if (initialEpisodeId || initialSeriesMovieLinkId || defaultExpandedRef.current || !latestKey) {
       return;
     }
 
@@ -516,7 +546,7 @@ function SeriesOverviewViewImpl({
     const nextExpanded = new Set<string>();
     nextExpanded.add(latestKey);
     setExpandedKeys(nextExpanded);
-  }, [initialEpisodeId, latestKey]);
+  }, [initialEpisodeId, initialSeriesMovieLinkId, latestKey]);
 
   // Seasons hydrate lazily: fetch a collection's episodes once its section is
   // expanded (default latest-season expansion included) and nothing is cached
@@ -723,7 +753,7 @@ function SeriesOverviewViewImpl({
         .then(async (payload) => {
           assertNoReplaceConflict(payload, "A download is already in progress for this episode.");
           const queuedMessage = t("status.queuedLatest", { name: title.name });
-          setGlobalStatus(queuedMessage);
+          setGlobalStatus(queuedMessage, { level: "SUCCESS" });
           await onTitleChanged?.();
         })
         .catch((error: unknown) => {
@@ -765,7 +795,7 @@ function SeriesOverviewViewImpl({
           data?.queueExistingTitleDownload,
           "A download is already in progress for this episode.",
         );
-        setGlobalStatus(t("status.queuedLatest", { name: title.name }));
+        setGlobalStatus(t("status.queuedLatest", { name: title.name }), { level: "SUCCESS" });
         await onTitleChanged?.();
       } catch (error: unknown) {
         setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
@@ -915,6 +945,7 @@ function SeriesOverviewViewImpl({
           );
           setGlobalStatus(
             t("status.queuedLatest", { name: link.movie.title }),
+            { level: "SUCCESS" },
           );
           await onTitleChanged?.();
         })
@@ -959,7 +990,7 @@ function SeriesOverviewViewImpl({
           data?.queueExistingTitleDownload,
           "A download is already in progress for this series movie.",
         );
-        setGlobalStatus(t("status.queueSuccess", { name: release.title }));
+        setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
         await onTitleChanged?.();
       } catch (error: unknown) {
         setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });

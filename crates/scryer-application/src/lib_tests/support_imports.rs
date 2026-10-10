@@ -146,6 +146,7 @@ impl FileImporter for CopyingFileImporter {
             dest_path: dest.to_path_buf(),
             size_bytes,
             destination_disposition: scryer_domain::ImportDestinationDisposition::Created,
+            source_disposition: scryer_domain::ImportSourceDisposition::Retained,
             source_cleanup: None,
             verification: None,
         })
@@ -253,6 +254,11 @@ pub(crate) struct MockMediaFileRepo {
     /// Title-wide and episode-scoped file reads, for read-budget tests.
     pub(super) title_file_reads: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) scoped_file_reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// Each file's title-wide role, as `media_files.role` holds it. Episode
+    /// elections change only the per-link role (`role` on the link rows in
+    /// `store`), the way the real store changes only `file_episode_map`, so
+    /// an election's losing file keeps this role.
+    pub(super) title_roles: Arc<Mutex<std::collections::HashMap<String, crate::MediaFileRole>>>,
 }
 
 impl MockMediaFileRepo {
@@ -392,6 +398,7 @@ impl MediaFileRepository for MockMediaFileRepo {
             .lock()
             .await
             .push(mock_media_file(id.clone(), input));
+        self.title_roles.lock().await.insert(id.clone(), input.role);
         Ok(id)
     }
 
@@ -449,19 +456,41 @@ impl MediaFileRepository for MockMediaFileRepo {
         file.episode_id = associations.episode_ids.first().cloned();
         file.series_movie_link_ids = associations.series_movie_link_ids.clone();
         files.push(file);
+        self.title_roles.lock().await.insert(id.clone(), input.role);
         Ok(crate::ClaimedMediaFile {
             media_file_id: id,
             disposition: crate::MediaFileCatalogDisposition::Created,
         })
     }
 
+    /// Like the store, a new link row starts Additional (the column default);
+    /// it never inherits the file's title role. An existing link is left alone.
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
         let mut list = self.store.lock().await;
-        let entry = list
+        if list
+            .iter()
+            .any(|entry| entry.id == file_id && entry.episode_id.as_deref() == Some(episode_id))
+        {
+            return Ok(());
+        }
+        if let Some(entry) = list
             .iter_mut()
+            .find(|entry| entry.id == file_id && entry.episode_id.is_none())
+        {
+            entry.episode_id = Some(episode_id.to_string());
+            entry.role = crate::MediaFileRole::Additional;
+            return Ok(());
+        }
+        let template = list
+            .iter()
             .find(|entry| entry.id == file_id)
+            .cloned()
             .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
-        entry.episode_id = Some(episode_id.to_string());
+        list.push(TitleMediaFile {
+            episode_id: Some(episode_id.to_string()),
+            role: crate::MediaFileRole::Additional,
+            ..template
+        });
         Ok(())
     }
 
@@ -512,9 +541,11 @@ impl MediaFileRepository for MockMediaFileRepo {
                     .as_ref()
                     .is_some_and(|episode_id| wanted.contains(episode_id))
         });
+        // New link rows start Additional, as the store's column default does.
         for episode_id in wanted.iter().filter(|id| !current.contains(id)) {
             list.push(TitleMediaFile {
                 episode_id: Some(episode_id.clone()),
+                role: crate::MediaFileRole::Additional,
                 ..template.clone()
             });
         }
@@ -677,7 +708,11 @@ impl MediaFileRepository for MockMediaFileRepo {
         // spanning two episodes comes back **once** with both ids. Modelling it
         // as one row per link here would let a test pass against a span the
         // product never sees.
-        let mut spans: Vec<(TitleMediaFile, Vec<String>)> = Vec::new();
+        let title_roles = self.title_roles.lock().await.clone();
+        // Each link row carries its own episode role, as the real
+        // file-episode table does, so the Primary episodes are collected per
+        // link rather than copied from the file's first row.
+        let mut spans: Vec<(TitleMediaFile, Vec<String>, Vec<String>)> = Vec::new();
         for entry in self.store.lock().await.iter() {
             if entry.title_id != title_id {
                 continue;
@@ -685,29 +720,35 @@ impl MediaFileRepository for MockMediaFileRepo {
             let Some(episode_id) = entry.episode_id.clone() else {
                 continue;
             };
-            match spans.iter_mut().find(|(file, _)| file.id == entry.id) {
-                Some((_, episode_ids)) => {
-                    if !episode_ids.contains(&episode_id) {
-                        episode_ids.push(episode_id);
-                    }
+            let span = match spans
+                .iter_mut()
+                .position(|(file, _, _)| file.id == entry.id)
+            {
+                Some(index) => &mut spans[index],
+                None => {
+                    spans.push((entry.clone(), Vec::new(), Vec::new()));
+                    spans.last_mut().expect("span just pushed")
                 }
-                None => spans.push((entry.clone(), vec![episode_id])),
+            };
+            if !span.1.contains(&episode_id) {
+                span.1.push(episode_id.clone());
+            }
+            if entry.role.is_primary() && !span.2.contains(&episode_id) {
+                span.2.push(episode_id);
             }
         }
         Ok(spans
             .into_iter()
-            .filter(|(_, episode_ids)| {
+            .filter(|(_, episode_ids, _)| {
                 episode_ids
                     .iter()
                     .any(|episode_id| requested.contains(episode_id.as_str()))
             })
-            .map(|(media_file, episode_ids)| {
-                let title_role = media_file.role;
-                let primary_episode_ids = if media_file.role.is_primary() {
-                    episode_ids.clone()
-                } else {
-                    Vec::new()
-                };
+            .map(|(media_file, episode_ids, primary_episode_ids)| {
+                let title_role = title_roles
+                    .get(&media_file.id)
+                    .copied()
+                    .unwrap_or(media_file.role);
                 EpisodeScopedMediaFile {
                     media_file,
                     title_role,
@@ -1036,6 +1077,11 @@ impl MediaFileRepository for MockMediaFileRepo {
                 "media files for title {title_id}"
             )));
         }
+        let mut title_roles = self.title_roles.lock().await;
+        title_roles.insert(primary_file_id.to_string(), crate::MediaFileRole::Primary);
+        for file_id in additional_ids {
+            title_roles.insert(file_id.to_string(), crate::MediaFileRole::Additional);
+        }
         Ok(())
     }
 
@@ -1069,6 +1115,40 @@ impl MediaFileRepository for MockMediaFileRepo {
             )));
         }
         Ok(())
+    }
+
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool> {
+        let mut list = self.store.lock().await;
+        let eligible = episode_ids.iter().all(|episode_id| {
+            let linked = list
+                .iter()
+                .filter(|entry| entry.episode_id.as_deref() == Some(episode_id.as_str()))
+                .collect::<Vec<_>>();
+            matches!(
+                linked.as_slice(),
+                [entry] if entry.id == file_id
+                    && entry.title_id == title_id
+                    && !entry.role.is_primary()
+            )
+        });
+        if !eligible || episode_ids.is_empty() {
+            return Ok(false);
+        }
+        for entry in list.iter_mut().filter(|entry| {
+            entry.id == file_id
+                && entry
+                    .episode_id
+                    .as_ref()
+                    .is_some_and(|episode_id| episode_ids.contains(episode_id))
+        }) {
+            entry.role = crate::MediaFileRole::Primary;
+        }
+        Ok(true)
     }
 
     async fn mark_scan_failed(&self, file_id: &str, _error: &str) -> AppResult<()> {
@@ -1108,11 +1188,12 @@ impl MediaFileRepository for MockMediaFileRepo {
             return Err(AppError::Repository(error));
         }
         let mut list = self.store.lock().await;
-        let position = list
-            .iter()
-            .position(|entry| entry.id == file_id)
-            .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
-        list.remove(position);
+        if !list.iter().any(|entry| entry.id == file_id) {
+            return Err(AppError::NotFound(format!("media file {}", file_id)));
+        }
+        // One row per episode link: removing the file removes every link, as
+        // the store's cascade does.
+        list.retain(|entry| entry.id != file_id);
         Ok(())
     }
 
@@ -1250,10 +1331,148 @@ pub(super) struct TrackingImportRepo {
     pub(super) identities: ImportIdentities,
     pub(super) manual_import_selection: Arc<Mutex<Option<crate::ManualImportSelection>>>,
     pub(super) manual_import_selection_consume_calls: Arc<std::sync::atomic::AtomicUsize>,
+    /// Roots of further unconsumed manual-import selections.
+    pub(super) open_selection_roots: Arc<Mutex<Vec<String>>>,
+    /// Makes the next hold release fail before it changes anything.
+    pub(super) release_holds_fail: Arc<std::sync::atomic::AtomicBool>,
+}
+
+fn tracking_payload_has_hold(record: &ImportRecord) -> bool {
+    serde_json::from_str::<serde_json::Value>(&record.payload_json)
+        .is_ok_and(|payload| payload["archive_processing_pending"] == true)
 }
 
 #[async_trait]
 impl ImportRepository for TrackingImportRepo {
+    async fn set_archive_processing_pending(
+        &self,
+        import_id: &str,
+        pending: bool,
+    ) -> AppResult<()> {
+        let mut records = self.records.lock().await;
+        let record = records
+            .iter_mut()
+            .find(|record| record.id == import_id)
+            .ok_or_else(|| AppError::NotFound(format!("import record {import_id}")))?;
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(object) = payload.as_object_mut() {
+            if pending {
+                object.insert("archive_processing_pending".into(), true.into());
+                object.remove(crate::ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY);
+            } else {
+                object.remove("archive_processing_pending");
+                object.remove(crate::ARCHIVE_HOLD_REASON_PAYLOAD_KEY);
+            }
+        }
+        record.payload_json = payload.to_string();
+        Ok(())
+    }
+
+    async fn record_archive_hold_reason(&self, import_id: &str, reason: &str) -> AppResult<()> {
+        let mut records = self.records.lock().await;
+        let Some(record) = records.iter_mut().find(|record| record.id == import_id) else {
+            return Ok(());
+        };
+        if !tracking_payload_has_hold(record) {
+            return Ok(());
+        }
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        payload[crate::ARCHIVE_HOLD_REASON_PAYLOAD_KEY] = reason.into();
+        record.payload_json = payload.to_string();
+        Ok(())
+    }
+
+    async fn release_archive_holds(
+        &self,
+        source: &ClientJobLocator,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        import_ids: &[String],
+    ) -> AppResult<()> {
+        if self
+            .release_holds_fail
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository("hold release failed".into()));
+        }
+        let canonical_ids = self.canonical_ids.lock().await;
+        let mut records = self.records.lock().await;
+        let of_download = |record: &ImportRecord| {
+            (canonical_download_id.is_some()
+                && canonical_ids.get(&record.id) == canonical_download_id)
+                || (record.source_client_id.as_deref().unwrap_or("") == source.client_id_or_empty()
+                    && record.source_system == source.client_type
+                    && record.source_ref == source.item_id)
+        };
+        for record in records.iter().filter(|record| of_download(record)) {
+            if record.status.is_active() {
+                return Err(AppError::Validation(
+                    "this download is still being imported".into(),
+                ));
+            }
+            let listed = import_ids.contains(&record.id);
+            if listed && record.status != ImportStatus::Completed {
+                return Err(AppError::Validation("the import changed".into()));
+            }
+            if !listed && tracking_payload_has_hold(record) {
+                return Err(AppError::Validation(
+                    "another import of this download holds its sources".into(),
+                ));
+            }
+        }
+        if import_ids.iter().any(|id| {
+            !records
+                .iter()
+                .any(|record| &record.id == id && of_download(record))
+        }) {
+            return Err(AppError::Validation("the import changed".into()));
+        }
+        for record in records
+            .iter_mut()
+            .filter(|record| import_ids.contains(&record.id))
+        {
+            if !tracking_payload_has_hold(record) {
+                continue;
+            }
+            let mut payload: serde_json::Value = serde_json::from_str(&record.payload_json)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(object) = payload.as_object_mut() {
+                object.remove("archive_processing_pending");
+                object.remove(crate::ARCHIVE_HOLD_REASON_PAYLOAD_KEY);
+                object.insert(crate::ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY.into(), true.into());
+            }
+            record.payload_json = payload.to_string();
+        }
+        Ok(())
+    }
+
+    async fn open_manual_selection_roots(&self) -> AppResult<Vec<String>> {
+        let mut roots = self.open_selection_roots.lock().await.clone();
+        if self
+            .manual_import_selection_consume_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 0
+            && let Some(selection) = self.manual_import_selection.lock().await.as_ref()
+        {
+            roots.push(selection.trusted_source_root.clone());
+            roots.extend(selection.archive_workspace_root.clone());
+        }
+        Ok(roots)
+    }
+
+    async fn archive_processing_pending_for_download(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<bool> {
+        let canonical_ids = self.canonical_ids.lock().await;
+        Ok(self.records.lock().await.iter().any(|record| {
+            canonical_ids.get(&record.id) == Some(download_id)
+                && serde_json::from_str::<serde_json::Value>(&record.payload_json)
+                    .is_ok_and(|payload| payload["archive_processing_pending"] == true)
+        }))
+    }
+
     async fn queue_import_request_with_identity_for_download(
         &self,
         source: ClientJobLocator,

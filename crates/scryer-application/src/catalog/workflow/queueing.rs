@@ -655,7 +655,7 @@ impl AppUseCase {
                         source_password.clone(),
                     )
                     .await;
-                tracing::info!(
+                tracing::debug!(
                     title_id = %title.id,
                     download_client_item_id = %grab.job_id,
                     stage = "release_attempt_recorded",
@@ -727,7 +727,7 @@ impl AppUseCase {
                 grab.client_id.as_deref(),
             )
             .await;
-        tracing::info!(
+        tracing::debug!(
             title_id = %title.id,
             download_client_item_id = %grab.job_id,
             stage = "release_facts_resolved",
@@ -748,7 +748,7 @@ impl AppUseCase {
             }),
         ))
         .await?;
-        tracing::info!(
+        tracing::debug!(
             title_id = %title.id,
             download_client_item_id = %grab.job_id,
             stage = "grab_event_appended",

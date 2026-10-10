@@ -44,7 +44,7 @@ use crate::queries::{
         replace_title_search_projection_tx,
     },
 };
-use crate::title_images::normalized_base_path_from_env;
+use crate::title_images::normalized_base_path;
 
 const TITLE_INSERT_SQL: &str = "INSERT INTO titles (
     id, library_id, name, facet, monitored, tags, external_ids, root_folder_id, created_by, created_at,
@@ -1365,7 +1365,7 @@ impl TitleRepository for TitleStore {
         }
 
         let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
-        let base_path = normalized_base_path_from_env();
+        let base_path = normalized_base_path();
         let mut matches = rows
             .iter()
             .map(|row| {
@@ -1445,10 +1445,16 @@ impl TitleRepository for TitleStore {
         let placeholders = std::iter::repeat_n("{}", keys.len())
             .collect::<Vec<_>>()
             .join(", ");
+        // One indexed SELECT per key column. ORed into one predicate, SQLite
+        // narrows on term_kind alone and reads every name and alias row.
         let sql = format!(
-            "SELECT DISTINCT title_id FROM title_search_terms \
+            "SELECT title_id FROM title_search_terms \
              WHERE term_kind IN ('name', 'alias', 'tagged_alias') \
-             AND (literal_term IN ({placeholders}) OR stripped_year_key IN ({placeholders}))"
+             AND literal_term IN ({placeholders}) \
+             UNION \
+             SELECT title_id FROM title_search_terms \
+             WHERE term_kind IN ('name', 'alias', 'tagged_alias') \
+             AND stripped_year_key IN ({placeholders})"
         );
         let mut args = keys.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
         args.extend(keys.iter().cloned().map(SqlArg::Text));
@@ -2029,6 +2035,56 @@ impl TitleRepository for TitleStore {
                 .or_insert(row.text("title_id")?);
         }
         Ok(existing)
+    }
+
+    async fn create_or_get_existing_preserving_options(
+        &self,
+        title: Title,
+        selection: MonitorSelection,
+    ) -> AppResult<CreateTitleOutcome> {
+        let external_ids = normalized_external_ids(&title.external_ids);
+        let library_id = title.library_id.clone();
+        let fallback_selection = selection.clone();
+        let result = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "create_title_preserving_existing",
+            move |tx| {
+                let title = title.clone();
+                let selection = selection.clone();
+                Box::pin(async move {
+                    create_or_get_title_preserving_options_tx(tx, &title, &selection).await
+                })
+            },
+        )
+        .await;
+        match result {
+            Err(error) if is_title_external_id_conflict_error(&error) => {
+                match self
+                    .find_existing_title_after_unique_conflict(&library_id, &external_ids)
+                    .await?
+                {
+                    Some(title) => {
+                        SqlRuntime::run_in_transaction(
+                            &self.datastore,
+                            "merge_selected_movie_after_conflict",
+                            move |tx| {
+                                let title = title.clone();
+                                let selection = fallback_selection.clone();
+                                Box::pin(async move {
+                                    create_or_get_title_preserving_options_tx(
+                                        tx, &title, &selection,
+                                    )
+                                    .await
+                                })
+                            },
+                        )
+                        .await
+                    }
+                    None => Err(error),
+                }
+            }
+            result => result,
+        }
     }
 
     async fn create_or_get_existing(&self, title: Title) -> AppResult<CreateTitleOutcome> {
@@ -3140,7 +3196,7 @@ fn decode_runtime_title_rows(
     mode: PersistedTitleReadMode,
     include_external_ids: bool,
 ) -> AppResult<Vec<Title>> {
-    let base_path = normalized_base_path_from_env();
+    let base_path = normalized_base_path();
     rows.iter()
         .map(|row| title_from_projection_row(row, mode, include_external_ids, &base_path))
         .collect()
@@ -3151,7 +3207,7 @@ fn decode_optional_runtime_title_row(
     mode: PersistedTitleReadMode,
     include_external_ids: bool,
 ) -> AppResult<Option<Title>> {
-    let base_path = normalized_base_path_from_env();
+    let base_path = normalized_base_path();
     row.map(|row| title_from_projection_row(row, mode, include_external_ids, &base_path))
         .transpose()
 }
@@ -4807,32 +4863,34 @@ fn title_catalog_external_rating_subquery(sources: &[&str]) -> String {
     )
 }
 
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn title_catalog_movie_media_resolution_expression(alias: &str) -> String {
     format!(
         "CASE
             WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN '4320P'
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN '2160P'
-            WHEN {alias}.video_height >= 1300 THEN '1440P'
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN '1080P'
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN '720P'
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN '480P'
-            WHEN {alias}.video_height >= 300 THEN '360P'
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN '2160P'
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN '1440P'
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN '1080P'
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN '720P'
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN '576P'
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN '480P'
             WHEN TRIM(COALESCE({alias}.quality_id, '')) = '' THEN NULL
             ELSE UPPER(TRIM({alias}.quality_id))
          END"
     )
 }
 
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn title_catalog_movie_media_resolution_rank_expression(alias: &str) -> String {
     format!(
         "CASE
             WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 4320
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN 2160
-            WHEN {alias}.video_height >= 1300 THEN 1440
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN 1080
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN 720
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN 480
-            WHEN {alias}.video_height >= 300 THEN 360
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN 2160
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN 1440
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN 1080
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN 720
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN 576
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN 480
             ELSE CASE UPPER(TRIM(COALESCE({alias}.quality_id, '')))
                 WHEN '4320P' THEN 4320
                 WHEN '2160P' THEN 2160
@@ -4840,6 +4898,7 @@ fn title_catalog_movie_media_resolution_rank_expression(alias: &str) -> String {
                 WHEN '1080P' THEN 1080
                 WHEN '1080I' THEN 1080
                 WHEN '720P' THEN 720
+                WHEN '576P' THEN 576
                 WHEN '480P' THEN 480
                 WHEN '360P' THEN 360
                 ELSE NULL
@@ -4863,23 +4922,25 @@ fn title_catalog_movie_media_hdr_rank_expression(alias: &str) -> String {
 
 /// Ranks a file's quality tier, higher is better; 0 for a tier outside the
 /// known ladder. Mirrors the tiers `normalized_quality_expression` reports.
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn title_catalog_media_quality_rank_expression(alias: &str) -> String {
     format!(
         "CASE
-            WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 8
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN 7
-            WHEN {alias}.video_height >= 1300 THEN 6
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN 5
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN 3
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN 2
-            WHEN {alias}.video_height >= 300 THEN 1
+            WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 9
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN 8
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN 7
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN 6
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN 4
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN 3
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN 2
             ELSE CASE UPPER(TRIM(COALESCE({alias}.quality_id, '')))
-                WHEN '4320P' THEN 8
-                WHEN '2160P' THEN 7
-                WHEN '1440P' THEN 6
-                WHEN '1080P' THEN 5
-                WHEN '1080I' THEN 4
-                WHEN '720P' THEN 3
+                WHEN '4320P' THEN 9
+                WHEN '2160P' THEN 8
+                WHEN '1440P' THEN 7
+                WHEN '1080P' THEN 6
+                WHEN '1080I' THEN 5
+                WHEN '720P' THEN 4
+                WHEN '576P' THEN 3
                 WHEN '480P' THEN 2
                 WHEN '360P' THEN 1
                 ELSE 0
@@ -4910,8 +4971,9 @@ fn title_catalog_media_quality_subquery(dialect: TitleCatalogSqlDialect) -> Stri
                    AND mf.role IN ('primary', 'additional')
                    AND mf.scan_status <> 'review_required'
                    AND (
-                       mf.video_height >= 300
-                       OR mf.video_width >= 854
+                       mf.video_width >= 1000
+                       OR mf.video_height >= 560
+                       OR (mf.video_width > 0 AND mf.video_height > 0)
                        OR TRIM(COALESCE(mf.quality_id, '')) <> ''
                    )
            ) ranked
@@ -5225,6 +5287,91 @@ async fn find_existing_title_for_create_tx(
     Ok(None)
 }
 
+pub(crate) async fn create_or_get_title_preserving_options_tx(
+    tx: &mut SqlTx<'_>,
+    title: &Title,
+    selection: &MonitorSelection,
+) -> AppResult<CreateTitleOutcome> {
+    if let Some(existing) = find_existing_title_for_create_tx(tx, title).await? {
+        // Several movies can be admitted before their shared container hydrates.
+        // Extend only its advanced selection, retaining seasons and siblings.
+        // Existing links (including explicit unmonitored overrides) are untouched.
+        if existing.monitored
+            && existing
+                .tags
+                .iter()
+                .any(|tag| tag == "scryer:monitor-type:advanced")
+        {
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "UPDATE titles SET id = id WHERE id = {}",
+                &[SqlArg::Text(existing.id.clone())],
+            )
+            .await?;
+            let current = load_title_tx_or_not_found(tx, &existing.id, true).await?;
+            if !current.monitored
+                || !current
+                    .tags
+                    .iter()
+                    .any(|tag| tag == "scryer:monitor-type:advanced")
+            {
+                return Ok(CreateTitleOutcome {
+                    title: current,
+                    reused_existing: true,
+                });
+            }
+            let mut merged =
+                load_monitor_selection(SqlExec::Tx(tx), OWNER_KIND_TITLE, &existing.id)
+                    .await?
+                    .unwrap_or_default();
+            let before = merged.clone();
+            for movie in &selection.series_movies {
+                let mut conditions = Vec::new();
+                let mut args = vec![SqlArg::Text(existing.id.clone())];
+                for id in &movie.external_ids {
+                    let column = match id.source.as_str() {
+                        "tvdb" => "tvdb_id",
+                        "tmdb" => "tmdb_id",
+                        "imdb" => "imdb_id",
+                        "mal" => "mal_id",
+                        "anidb" => "anidb_id",
+                        _ => continue,
+                    };
+                    conditions.push(format!("me.{column} = {{}}"));
+                    args.push(SqlArg::Text(id.value.clone()));
+                }
+                if conditions.is_empty() {
+                    return Err(AppError::Validation(
+                        "selected movie has no supported identity".into(),
+                    ));
+                }
+                let present = SqlRuntime::fetch_optional(SqlExec::Tx(tx), &format!(
+                    "SELECT sml.id FROM series_movie_links sml JOIN movie_entities me ON me.id = sml.movie_entity_id WHERE sml.series_title_id = {{}} AND ({}) LIMIT 1",
+                    conditions.join(" OR ")
+                ), &args).await?.is_some();
+                if !present {
+                    merged.series_movies.push(movie.clone());
+                }
+            }
+            let merged = merged.normalized();
+            if merged != before {
+                replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &existing.id, Some(&merged))
+                    .await?;
+            }
+        }
+        return Ok(CreateTitleOutcome {
+            title: existing,
+            reused_existing: true,
+        });
+    }
+    create_title_tx(tx, title).await?;
+    replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &title.id, Some(selection)).await?;
+    Ok(CreateTitleOutcome {
+        title: load_title_tx_or_not_found(tx, &title.id, true).await?,
+        reused_existing: false,
+    })
+}
+
 pub(crate) async fn create_or_get_title_tx(
     tx: &mut SqlTx<'_>,
     title: &Title,
@@ -5408,6 +5555,20 @@ fn apply_reused_title_options_patch(
 ) {
     if let Some(value) = &patch.quality_profile_id {
         set_reused_title_option_tag(&mut title.tags, "scryer:quality-profile:", value.clone());
+    }
+    for (prefix, patch) in [
+        (
+            scryer_domain::SEARCH_LANGUAGES_TAG_PREFIX,
+            &patch.search_languages,
+        ),
+        (
+            scryer_domain::SEARCH_ALIASES_TAG_PREFIX,
+            &patch.search_aliases,
+        ),
+    ] {
+        if let Some(value) = patch {
+            scryer_domain::set_title_search_option(&mut title.tags, prefix, value.clone());
+        }
     }
     if let Some(value) = &patch.monitor_type {
         set_reused_title_option_tag(&mut title.tags, "scryer:monitor-type:", value.clone());

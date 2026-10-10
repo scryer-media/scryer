@@ -10,7 +10,7 @@ use scryer_application::{
 
 use crate::storage::sql::runtime::{SqlArg, SqlRuntime, StoreDatastore};
 
-use super::normalized_base_path_from_env;
+use super::normalized_base_path;
 
 const MEMORY_SOURCE_LIMIT: usize = 10_000;
 const SOURCE_TOUCH_INTERVAL_HOURS: i64 = 24;
@@ -30,10 +30,17 @@ pub struct ImageProxyStore {
 }
 
 impl ImageProxyStore {
+    /// A store whose routes use the base path the server installed at startup.
     pub fn new(datastore: StoreDatastore) -> Self {
+        Self::with_base_path(datastore, &normalized_base_path())
+    }
+
+    /// A store whose routes live under `base_path` (normalized, empty at the
+    /// root).
+    pub fn with_base_path(datastore: StoreDatastore, base_path: &str) -> Self {
         Self {
             datastore,
-            base_path: normalized_base_path_from_env(),
+            base_path: base_path.trim_end_matches('/').to_string(),
             memory: Arc::new(Mutex::new(MemorySources::default())),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -597,6 +604,32 @@ mod tests {
         assert!(approved_upstream_url("https://s4.anilist.co.evil.test/a.jpg").is_none());
         assert!(approved_upstream_url("https://evil-s4.anilist.co/a.jpg").is_none());
         assert!(approved_upstream_url("https://cdn.myanimelist.net.evil.test/a.jpg").is_none());
+    }
+
+    #[tokio::test]
+    async fn proxy_routes_live_under_the_configured_base_path() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("sqlite image proxy test pool");
+        let store = ImageProxyStore::with_base_path(
+            StoreDatastore::Sqlite {
+                pool,
+                writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+            },
+            "/media/",
+        );
+        let route = store.register_image_source(ImageProxyRegistration {
+            upstream_url: Some("https://image.tmdb.org/t/p/w500/poster.jpg".to_string()),
+            owner_type: Some("title".to_string()),
+            owner_id: Some("title-1".to_string()),
+            image_kind: ImageProxyKind::Poster,
+            fallback_class: "portrait".to_string(),
+            default_variant: "w250".to_string(),
+        });
+        assert!(route.starts_with("/media/images/media/"), "{route}");
+        assert!(route.ends_with("/w250"), "{route}");
     }
 
     #[tokio::test]

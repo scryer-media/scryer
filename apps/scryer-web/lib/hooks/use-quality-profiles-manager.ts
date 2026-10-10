@@ -383,10 +383,11 @@ export function useQualityProfilesManager(
 
         applyQualityProfileSettingsPayload(data.deleteQualityProfile);
         setGlobalStatus(t("settings.qualitySettingsSaved"), {
+          level: "SUCCESS",
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
       } finally {
         setQualityProfilesSaving(false);
       }
@@ -416,7 +417,7 @@ export function useQualityProfilesManager(
           options,
         );
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
       } finally {
         setMediaSettingsLoading(false);
         setInitialLoadComplete(true);
@@ -646,11 +647,12 @@ export function useQualityProfilesManager(
           committed.draftEntry.id,
         );
         setGlobalStatus(t("settings.qualitySettingsSaved"), {
+          level: "SUCCESS",
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
         return true;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
         return false;
       } finally {
         setQualityProfilesSaving(false);
@@ -707,11 +709,12 @@ export function useQualityProfilesManager(
         setGlobalQualityProfileId(persisted);
         const message = t("settings.qualitySettingsSaved");
         setGlobalStatus(message, {
+          level: "SUCCESS",
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : t("status.failedToUpdate");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
       } finally {
         setQualityProfilesSaving(false);
       }
@@ -746,11 +749,13 @@ export function useQualityProfilesManager(
 
         applyQualityProfileSettingsPayload(data?.saveQualityProfileSettings);
         setGlobalStatus(t("settings.qualitySettingsSaved"), {
+          level: "SUCCESS",
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setQualityProfilesSaving(false);
@@ -776,7 +781,7 @@ export function useQualityProfilesManager(
           id: normalizedValue || t("label.default"),
         });
         setQualityProfileParseError(message);
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "WARNING" });
         return;
       }
 
@@ -819,11 +824,12 @@ export function useQualityProfilesManager(
         }));
         const message = t("settings.qualitySettingsSaved");
         setGlobalStatus(message, {
+          level: "SUCCESS",
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : t("status.failedToUpdate");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
       } finally {
         setCategoryQualityProfileSaving((previous) => ({
           ...previous,
@@ -876,11 +882,13 @@ export function useQualityProfilesManager(
 
         applyQualityProfileSettingsPayload(data?.saveQualityProfileSettings);
         setGlobalStatus(t("settings.qualitySettingsSaved"), {
+          level: "SUCCESS",
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setCategoryQualityProfileSaving((previous) => ({

@@ -21,6 +21,7 @@ export type SubtitleLanguagePickerProps = {
   singleSelect?: boolean;
   modal?: boolean;
   triggerId?: string;
+  ariaLabel?: string;
   panelId?: string;
   searchInputId?: string;
   optionIdPrefix?: string;
@@ -46,6 +47,7 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
   singleSelect = false,
   modal = false,
   triggerId,
+  ariaLabel,
   panelId,
   searchInputId,
   optionIdPrefix,
@@ -225,7 +227,7 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
             buttonClassName,
           )}
           onKeyDown={handleTriggerKeyDown}
-          aria-label={t("settings.sub.languagePickerAriaLabel")}
+          aria-label={ariaLabel ?? t("settings.sub.languagePickerAriaLabel")}
         >
         {compact ? (
           <span className={cn("min-w-0 flex-1 truncate text-left", value.length === 0 && "text-muted-foreground")}>

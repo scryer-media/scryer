@@ -194,6 +194,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
     } catch (error) {
       setGlobalStatus(
         userFacingGraphQlErrorMessage(error, t("move.planAgainFailed")),
+        { level: "ERROR" },
       );
     } finally {
       setBusy(false);
@@ -214,11 +215,13 @@ function OperationPanel({ operationId, onDismiss }: Props) {
         outcome.done
           ? t(`move.${action}Requested`)
           : (outcome.detail ?? t(`move.${action}NotPossible`)),
+        outcome.done ? undefined : { level: "WARNING" },
       );
       setRefresh((value) => value + 1);
     } catch (error) {
       setGlobalStatus(
         userFacingGraphQlErrorMessage(error, t(`move.${action}Failed`)),
+        { level: "ERROR" },
       );
     } finally {
       setBusy(false);

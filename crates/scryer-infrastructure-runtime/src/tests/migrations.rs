@@ -1,6 +1,72 @@
 use super::*;
 
 #[tokio::test]
+async fn migration_catalog_installs_download_password_storage() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("password-schema.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("registered migrations should initialize");
+    let columns: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_table_info('download_submissions') WHERE name IN ('password_candidates', 'password_retry_state') ORDER BY name",
+    ).fetch_all(&services.pool).await.expect("password schema should be installed");
+    assert_eq!(columns, ["password_candidates", "password_retry_state"]);
+}
+
+/// Deleting a title, collection, episode or media file makes SQLite look up
+/// every referencing child row. Each of those child foreign keys must have an
+/// index the planner can search, or the delete scans the child table once per
+/// deleted parent row.
+#[tokio::test]
+async fn migration_catalog_indexes_every_child_foreign_key_of_catalog_parents() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(directory.path().join("fk-index.db").to_string_lossy())
+        .await
+        .expect("registered migrations should initialize");
+    let foreign_keys: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT m.name, fk.\"from\", fk.\"table\"
+         FROM sqlite_master m, pragma_foreign_key_list(m.name) fk
+         WHERE m.type = 'table'
+           AND fk.\"table\" IN ('titles', 'collections', 'episodes', 'media_files')
+         ORDER BY m.name, fk.\"from\"",
+    )
+    .fetch_all(&services.pool)
+    .await
+    .expect("foreign key list should be readable");
+    assert!(
+        foreign_keys
+            .iter()
+            .any(|(table, column, _)| table == "workflow_operations" && column == "title_id"),
+        "the catalog should expose the workflow operation foreign keys"
+    );
+
+    let mut unindexed = Vec::new();
+    for (table, column, parent) in &foreign_keys {
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN SELECT 1 FROM \"{table}\" WHERE \"{column}\" = ?1"
+        )))
+        .bind("synthetic-parent-id")
+        .fetch_all(&services.pool)
+        .await
+        .expect("query plan should be readable");
+        if !plan
+            .iter()
+            .any(|(_, _, _, detail)| detail.starts_with("SEARCH"))
+        {
+            unindexed.push(format!("{table}.{column} -> {parent}"));
+        }
+    }
+    assert!(
+        unindexed.is_empty(),
+        "child foreign keys without a usable index: {unindexed:?}"
+    );
+}
+
+#[tokio::test]
 async fn migration_validate_mode_rejects_pending_schema() {
     let db = std::env::temp_dir().join(format!(
         "scryer_validate_mode_{}.db",
@@ -5934,4 +6000,657 @@ async fn migration_0244_splits_the_external_id_key_by_entity_kind() {
 
     drop(pool);
     let _ = std::fs::remove_file(db);
+}
+
+/// The title folder repair, applied as part of a real upgrade: folders a
+/// rename recorded as the root or above it are repaired to the folder the
+/// media implies, ambiguous and healthy titles are untouched, no media row
+/// changes, and running the repair again changes nothing.
+#[tokio::test]
+async fn title_folder_repair_upgrade_repairs_root_folders_and_is_idempotent() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_migration_title_folder_repair_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("pre-repair database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(267), true)
+        .await
+        .expect("migrations through 0267 should apply");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let library_id =
+        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Series);
+    let (root_folder_id, root_path): (String, String) = sqlx::query_as(
+        "SELECT id, path FROM library_roots
+          WHERE library_id = ?1
+          ORDER BY is_default DESC, path
+          LIMIT 1",
+    )
+    .bind(&library_id)
+    .fetch_one(&pool)
+    .await
+    .expect("default series root should exist");
+    let root = root_path.trim_end_matches('/').to_string();
+    let above_root = std::path::Path::new(&root)
+        .parent()
+        .map(|parent| parent.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string());
+
+    let titles = [
+        ("at-root", root.clone()),
+        ("above-root", above_root.clone()),
+        ("healthy", format!("{root}/Healthy Fixture")),
+        ("ambiguous", root.clone()),
+    ];
+    for (id, folder) in &titles {
+        sqlx::query(
+            "INSERT INTO titles (
+                id, name, name_normalized, library_id, root_folder_id, facet, created_at,
+                folder_path
+             ) VALUES (?1, ?1, ?1, ?2, ?3, 'series', ?4, ?5)",
+        )
+        .bind(id)
+        .bind(&library_id)
+        .bind(&root_folder_id)
+        .bind(&now)
+        .bind(folder)
+        .execute(&pool)
+        .await
+        .expect("title fixture should insert");
+    }
+    let media = [
+        (
+            "at-root",
+            format!("{root}/Root Fixture/Root Fixture - S01E01.mkv"),
+        ),
+        (
+            "at-root",
+            format!("{root}/Root Fixture/Root Fixture - S01E02.mkv"),
+        ),
+        (
+            "above-root",
+            format!("{root}/Above Fixture/Above Fixture - S01E01.mkv"),
+        ),
+        (
+            "above-root",
+            format!("{root}/Above Fixture/Season 02/Above Fixture - S02E01.mkv"),
+        ),
+        (
+            "healthy",
+            format!("{root}/Healthy Fixture/Season 01/Healthy Fixture - S01E01.mkv"),
+        ),
+        ("ambiguous", format!("{root}/Ambiguous A/e1.mkv")),
+        ("ambiguous", format!("{root}/Ambiguous B/e2.mkv")),
+    ];
+    for (index, (title_id, path)) in media.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO media_files (
+                id, title_id, file_path, size_bytes, scan_status, created_at
+             ) VALUES (?1, ?2, ?3, 100, 'complete', ?4)",
+        )
+        .bind(format!("media-{index}"))
+        .bind(title_id)
+        .bind(path)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("media file fixture should insert");
+    }
+
+    async fn snapshot(pool: &sqlx::SqlitePool) -> Vec<(String, Option<String>, Option<String>)> {
+        sqlx::query_as("SELECT id, folder_path, root_folder_id FROM titles ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("titles should load")
+    }
+    async fn media_snapshot(pool: &sqlx::SqlitePool) -> Vec<(String, String, String)> {
+        sqlx::query_as("SELECT id, title_id, file_path FROM media_files ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("media files should load")
+    }
+    let media_before = media_snapshot(&pool).await;
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("upgrade to head should apply");
+
+    let after = snapshot(&pool).await;
+    let folder_of = |id: &str| {
+        after
+            .iter()
+            .find(|(title_id, _, _)| title_id == id)
+            .and_then(|(_, folder, _)| folder.clone())
+    };
+    assert_eq!(
+        folder_of("at-root"),
+        Some(format!("{root}/Root Fixture")),
+        "a folder recorded as the root is repaired"
+    );
+    assert_eq!(
+        folder_of("above-root"),
+        Some(format!("{root}/Above Fixture")),
+        "a folder recorded above the root is repaired"
+    );
+    assert_eq!(
+        folder_of("healthy"),
+        Some(format!("{root}/Healthy Fixture"))
+    );
+    assert_eq!(
+        folder_of("ambiguous"),
+        Some(root.clone()),
+        "ambiguous media leaves the record for the operator"
+    );
+    assert_eq!(
+        media_snapshot(&pool).await,
+        media_before,
+        "the repair never changes a media row"
+    );
+
+    let mut tx = pool.begin().await.expect("begin repair rerun");
+    scryer_infrastructure_datastore::migrations::repair_root_title_folders::repair_root_title_folders_sqlite(&mut tx)
+        .await
+        .expect("repair reruns");
+    tx.commit().await.expect("commit repair rerun");
+    assert_eq!(
+        snapshot(&pool).await,
+        after,
+        "a second repair changes nothing"
+    );
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::ValidateOnly)
+        .await
+        .expect("the repaired ledger validates");
+
+    drop(pool);
+    let _ = std::fs::remove_file(db);
+}
+
+/// 0278 widens the title search projection's identity from the folded UI form
+/// to (literal spelling, language) and clears the collation stamp, so the next
+/// start reprojects every title under the new identity instead of serving rows
+/// written under the old one.
+#[tokio::test]
+async fn migration_0278_rekeys_search_terms_by_language_and_forces_reprojection() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let db = directory.path().join("search-language-variants.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("0277 database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(277), true)
+        .await
+        .expect("fresh 0277 fixture should apply");
+
+    sqlx::query(
+        "INSERT INTO titles (id, library_id, name, name_normalized, facet, root_folder_id,
+                             metadata_language, tagged_aliases_json, created_at)
+         VALUES ('title-0278', 'series_default_library', 'Over the Atlantic',
+                 'over the atlantic', 'series', 'canonical_root_for_series_default_library',
+                 'eng',
+                 '[{\"name\":\"Över Atlanten\",\"language\":\"swe\"},{\"name\":\"Över Atlanten\",\"language\":\"dan\"}]',
+                 '2026-10-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed title");
+    sqlx::query(
+        "INSERT INTO title_search_terms (title_id, facet, term_kind, raw_term, normalized_term,
+                                         weight, literal_term)
+         VALUES ('title-0278', 'series', 'name', 'Stale Row', 'stale row', 1, 'stale row')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed a term written under the pre-0278 identity");
+    sqlx::query("UPDATE title_search_meta SET collation_version = ?1 WHERE id = 1")
+        .bind(scryer_domain::title_spelling::title_collation_data_version())
+        .execute(&pool)
+        .await
+        .expect("stamp the projection as current");
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0278 upgrade should apply");
+
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master
+          WHERE type = 'index' AND tbl_name = 'title_search_terms'
+            AND name LIKE 'idx_title_search_terms_title_kind_%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("list projection identity indexes");
+    assert_eq!(indexes, ["idx_title_search_terms_title_kind_language"]);
+    let stamp: String =
+        sqlx::query_scalar("SELECT collation_version FROM title_search_meta WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read collation stamp");
+    assert_eq!(stamp, "", "0278 must invalidate the projection stamp");
+
+    scryer_infrastructure_library_search::seed_title_search_projection_if_stale(&pool)
+        .await
+        .expect("startup reprojection");
+
+    let stamp: String =
+        sqlx::query_scalar("SELECT collation_version FROM title_search_meta WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read collation stamp");
+    assert_eq!(
+        stamp,
+        scryer_domain::title_spelling::title_collation_data_version()
+    );
+    let stale: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM title_search_terms WHERE raw_term = 'Stale Row'")
+            .fetch_one(&pool)
+            .await
+            .expect("count stale rows");
+    assert_eq!(stale, 0, "the stale projection must be rebuilt, not kept");
+    let languages: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT language_tag FROM title_search_terms
+          WHERE title_id = 'title-0278' AND term_kind = 'tagged_alias'
+          ORDER BY language_tag",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read tagged alias rows");
+    assert_eq!(
+        languages,
+        [Some("dan".to_string()), Some("swe".to_string())],
+        "one spelling in two languages keeps both provenance rows"
+    );
+
+    let duplicate = sqlx::query(
+        "INSERT INTO title_search_terms (title_id, facet, term_kind, raw_term, normalized_term,
+                                         weight, literal_term, language_tag)
+         SELECT title_id, facet, term_kind, raw_term, normalized_term, weight, literal_term,
+                language_tag
+           FROM title_search_terms
+          WHERE title_id = 'title-0278' AND term_kind = 'tagged_alias' AND language_tag = 'swe'",
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        duplicate.is_err(),
+        "the same spelling in the same language stays unique"
+    );
+
+    drop(pool);
+}
+
+#[tokio::test]
+async fn migration_0278_postgres_rekeys_search_terms_by_language() -> AppResult<()> {
+    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let admin_pool = sqlx::PgPool::connect(&raw_url)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!(
+        "scryer_0278_migration_{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create postgres schema: {error}"))
+        })?;
+    let mut schema_url = url::Url::parse(&raw_url)
+        .map_err(|error| AppError::Validation(format!("invalid postgres URL: {error}")))?;
+    schema_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-csearch_path={schema}"));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(schema_url.as_str())
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to open postgres schema: {error}"))
+        })?;
+
+    let result = async {
+        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(277)).await?;
+        sqlx::query(
+            "INSERT INTO titles (
+                id, library_id, name, name_normalized, facet, root_folder_id,
+                metadata_language, tagged_aliases_json, created_at
+             ) VALUES (
+                'title-0278', 'series_default_library', 'Over the Atlantic',
+                'over the atlantic', 'series', 'canonical_root_for_series_default_library',
+                'eng',
+                '[{\"name\":\"Över Atlanten\",\"language\":\"swe\"},{\"name\":\"Över Atlanten\",\"language\":\"dan\"}]'::jsonb,
+                '2026-10-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        sqlx::query(
+            "INSERT INTO title_search_terms (title_id, facet, term_kind, raw_term,
+                                             normalized_term, weight, literal_term)
+             VALUES ('title-0278', 'series', 'name', 'Stale Row', 'stale row', 1, 'stale row')",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        sqlx::query("UPDATE title_search_meta SET collation_version = $1 WHERE id = 1")
+            .bind(scryer_domain::title_spelling::title_collation_data_version())
+            .execute(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+
+        // Starting the services applies 0278 and runs the startup projection
+        // check, which must see the cleared stamp and reproject.
+        let services = crate::PostgresServices::new_with_mode(
+            schema_url.as_str(),
+            crate::types::MigrationMode::Apply,
+        )
+        .await?;
+        drop(services);
+
+        let indexes: Vec<String> = sqlx::query_scalar(
+            "SELECT indexname FROM pg_indexes
+              WHERE schemaname = current_schema() AND tablename = 'title_search_terms'
+                AND indexname LIKE 'idx_title_search_terms_title_kind_%'",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(indexes, ["idx_title_search_terms_title_kind_language"]);
+        let stamp: String =
+            sqlx::query_scalar("SELECT collation_version FROM title_search_meta WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(
+            stamp,
+            scryer_domain::title_spelling::title_collation_data_version()
+        );
+
+        let stale: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM title_search_terms WHERE raw_term = 'Stale Row'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(stale, 0);
+        let languages: Vec<Option<String>> = sqlx::query_scalar(
+            "SELECT language_tag FROM title_search_terms
+              WHERE title_id = 'title-0278' AND term_kind = 'tagged_alias'
+              ORDER BY language_tag",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(languages, [Some("dan".to_string()), Some("swe".to_string())]);
+        Ok(())
+    }
+    .await;
+
+    drop(pool);
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    drop(admin_pool);
+    cleanup.map_err(|error| {
+        AppError::Repository(format!("failed to drop postgres schema: {error}"))
+    })?;
+    result
+}
+
+/// Learning rows seeded under the pre-0279 shape. Plain literals so the same
+/// statements run on both engines.
+fn migration_0279_seed_statements(postgres: bool) -> Vec<String> {
+    let aliases = if postgres { "'[]'::jsonb" } else { "'[]'" };
+    let mut statements = vec![
+        format!(
+            "INSERT INTO titles (id, library_id, name, name_normalized, facet, root_folder_id,
+                                 metadata_language, tagged_aliases_json, created_at)
+             VALUES ('title-live', 'series_default_library', 'Live Title', 'live title',
+                     'series', 'canonical_root_for_series_default_library', 'eng', {aliases},
+                     '2026-10-01T00:00:00Z')"
+        ),
+        "INSERT INTO indexers (id, name, provider_type, base_url, created_at, updated_at)
+         VALUES ('idx-live', 'Live', 'newznab', 'https://indexer.invalid',
+                 '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')"
+            .to_string(),
+    ];
+    let row = |indexer: &str, title: &str, facet: &str, key: &str, usable: i64, at: &str| {
+        format!(
+            "INSERT INTO indexer_search_learning (indexer_id, title_id, facet, strategy_key,
+                 attempts, empty_successes, usable_successes, last_attempt_at, updated_at)
+             VALUES ('{indexer}', '{title}', '{facet}', '{key}', {attempts}, 3, {usable},
+                     '{at}', '{at}')",
+            attempts = usable + 3,
+        )
+    };
+    // The shared text row of a live pair with evidence maps to the reserved
+    // v3 row; one without a usable success carries nothing forward.
+    statements.push(row(
+        "idx-live",
+        "title-live",
+        "series",
+        "v2:freetext",
+        2,
+        "2026-10-02T00:00:00Z",
+    ));
+    statements.push(row(
+        "idx-live",
+        "title-live",
+        "movie",
+        "v2:freetext",
+        0,
+        "2026-10-02T00:00:00Z",
+    ));
+    statements.push(row(
+        "idx-live",
+        "title-live",
+        "series",
+        "v2:ids",
+        0,
+        "2026-10-02T00:00:00Z",
+    ));
+    // Rows of a deleted indexer or title are pruned, whatever their key.
+    statements.push(row(
+        "idx-gone",
+        "title-live",
+        "series",
+        "v2:ids",
+        1,
+        "2026-10-02T00:00:00Z",
+    ));
+    statements.push(row(
+        "idx-live",
+        "title-gone",
+        "series",
+        "v2:freetext",
+        1,
+        "2026-10-02T00:00:00Z",
+    ));
+    // Forty per-query rows: the oldest has the only usable success.
+    for ordinal in 0..40 {
+        statements.push(row(
+            "idx-live",
+            "title-live",
+            "series",
+            &format!("v3:freetext:q{ordinal:02}"),
+            i64::from(ordinal == 0),
+            &format!("2026-10-01T00:00:{ordinal:02}Z"),
+        ));
+    }
+    statements
+}
+
+fn assert_migration_0279_outcome(keys: &[String], aggregate: (i64, i64, i64)) {
+    let text_keys: Vec<&str> = keys
+        .iter()
+        .filter_map(|key| key.strip_prefix("idx-live/title-live/series/v3:freetext:"))
+        .collect();
+    assert_eq!(
+        text_keys.len(),
+        32,
+        "the per-title text cap holds: {keys:?}"
+    );
+    assert!(text_keys.contains(&"v2-aggregate"), "{keys:?}");
+    assert!(
+        text_keys.contains(&"q00"),
+        "the usable row outlives newer empty rows: {keys:?}"
+    );
+    for ordinal in 1..10 {
+        assert!(
+            !text_keys.contains(&format!("q{ordinal:02}").as_str()),
+            "the least recently attempted empty rows are evicted: {keys:?}"
+        );
+    }
+    for ordinal in 10..40 {
+        assert!(text_keys.contains(&format!("q{ordinal:02}").as_str()));
+    }
+    assert!(keys.contains(&"idx-live/title-live/series/v2:ids".to_string()));
+    assert!(
+        keys.iter().all(|key| !key.ends_with("/v2:freetext")),
+        "no shared text row survives: {keys:?}"
+    );
+    assert!(
+        keys.iter()
+            .all(|key| key.starts_with("idx-live/title-live/")),
+        "orphaned rows are pruned: {keys:?}"
+    );
+    assert_eq!(keys.len(), 33);
+    assert_eq!(
+        aggregate,
+        (5, 3, 2),
+        "the reserved row keeps the shared row's counters"
+    );
+}
+
+const MIGRATION_0279_KEYS_SQL: &str =
+    "SELECT indexer_id || '/' || title_id || '/' || facet || '/' || strategy_key
+   FROM indexer_search_learning ORDER BY 1";
+const MIGRATION_0279_AGGREGATE_SQL: &str =
+    "SELECT CAST(attempts AS BIGINT), CAST(empty_successes AS BIGINT),
+        CAST(usable_successes AS BIGINT)
+   FROM indexer_search_learning
+  WHERE strategy_key = 'v3:freetext:v2-aggregate'";
+
+/// 0279 carries the shared `v2:freetext` learning rows into the per-query v3
+/// shape, drops what cannot be carried, prunes orphans and applies the cap.
+#[tokio::test]
+async fn migration_0279_carries_text_learning_into_v3_and_applies_the_cap() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let db = directory.path().join("freetext-learning.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("0278 database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(278), true)
+        .await
+        .expect("fresh 0278 fixture should apply");
+    for statement in migration_0279_seed_statements(false) {
+        sqlx::query(sqlx::AssertSqlSafe(statement))
+            .execute(&pool)
+            .await
+            .expect("seed pre-0279 learning");
+    }
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0279 upgrade should apply");
+
+    let keys: Vec<String> = sqlx::query_scalar(MIGRATION_0279_KEYS_SQL)
+        .fetch_all(&pool)
+        .await
+        .expect("read learning keys");
+    let aggregate: (i64, i64, i64) = sqlx::query_as(MIGRATION_0279_AGGREGATE_SQL)
+        .fetch_one(&pool)
+        .await
+        .expect("read the carried row");
+    assert_migration_0279_outcome(&keys, aggregate);
+    drop(pool);
+}
+
+#[tokio::test]
+async fn migration_0279_postgres_carries_text_learning_into_v3_and_applies_the_cap() -> AppResult<()>
+{
+    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let admin_pool = sqlx::PgPool::connect(&raw_url)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!(
+        "scryer_0279_migration_{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create postgres schema: {error}"))
+        })?;
+    let mut schema_url = url::Url::parse(&raw_url)
+        .map_err(|error| AppError::Validation(format!("invalid postgres URL: {error}")))?;
+    schema_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-csearch_path={schema}"));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(schema_url.as_str())
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to open postgres schema: {error}"))
+        })?;
+
+    let result = async {
+        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(278)).await?;
+        for statement in migration_0279_seed_statements(true) {
+            sqlx::query(sqlx::AssertSqlSafe(statement))
+                .execute(&pool)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        }
+        let services = crate::PostgresServices::new_with_mode(
+            schema_url.as_str(),
+            crate::types::MigrationMode::Apply,
+        )
+        .await?;
+        drop(services);
+
+        let keys: Vec<String> = sqlx::query_scalar(MIGRATION_0279_KEYS_SQL)
+            .fetch_all(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let aggregate: (i64, i64, i64) = sqlx::query_as(MIGRATION_0279_AGGREGATE_SQL)
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_migration_0279_outcome(&keys, aggregate);
+        Ok(())
+    }
+    .await;
+
+    drop(pool);
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    drop(admin_pool);
+    cleanup.map_err(|error| {
+        AppError::Repository(format!("failed to drop postgres schema: {error}"))
+    })?;
+    result
 }

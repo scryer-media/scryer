@@ -98,6 +98,7 @@ export function DashboardContainer() {
     (error: unknown) => {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.apiError"),
+        { level: "ERROR" },
       );
     },
     [setGlobalStatus, t],
@@ -322,6 +323,12 @@ export function DashboardContainer() {
   // open the mapper dialog. Everything richer lives on the import page.
   const manualImport = useManualImportLauncher({
     onImportQueued: refreshAfterImportAction,
+    onImportRetried: () => {
+      dispatchNavigationBadgesRefresh();
+      void refreshOverview(true);
+      void refreshImportActivity(true);
+      void refreshQueue(true);
+    },
   });
 
   const markImportFailed = React.useCallback(
@@ -337,10 +344,10 @@ export function DashboardContainer() {
           },
         });
         if (result.error) {
-          setGlobalStatus(result.error.message ?? t("queue.markFailedFailed"));
+          setGlobalStatus(result.error.message ?? t("queue.markFailedFailed"), { level: "ERROR" });
           return;
         }
-        setGlobalStatus(t("queue.markFailedSearchSuccess"));
+        setGlobalStatus(t("queue.markFailedSearchSuccess"), { level: "SUCCESS" });
         refreshAfterImportAction();
       } finally {
         setImportActionItemId(null);
@@ -365,10 +372,10 @@ export function DashboardContainer() {
         },
       });
       if (result.error) {
-        setGlobalStatus(result.error.message ?? t("queue.deleteFailed"));
+        setGlobalStatus(result.error.message ?? t("queue.deleteFailed"), { level: "ERROR" });
         return;
       }
-      setGlobalStatus(t("queue.deleteQueued"));
+      setGlobalStatus(t("queue.deleteQueued"), { level: "SUCCESS" });
       setDeleteConfirmItem(null);
       refreshAfterImportAction();
     } finally {
@@ -430,7 +437,7 @@ export function DashboardContainer() {
       if (!qualityProfileId) {
         // Approving needs a profile and the dashboard has no picker, so send the
         // operator to the requests page rather than guessing.
-        setGlobalStatus(t("status.apiError"));
+        setGlobalStatus(t("status.apiError"), { level: "ERROR" });
         return;
       }
 

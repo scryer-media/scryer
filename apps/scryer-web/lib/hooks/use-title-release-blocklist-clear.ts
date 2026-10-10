@@ -39,7 +39,7 @@ export function useTitleReleaseBlocklistClear({
         setGlobalStatus(t("status.blocklistEntryCleared"));
         await onCleared();
       } catch (error: unknown) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setClearingEntryId((current) => (current === entryId ? null : current));
       }

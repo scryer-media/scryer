@@ -513,6 +513,10 @@ async fn run_postgres_rust_hook(
             crate::migrations::title_folder_ownership_safe::migrate_title_folder_ownership_safe_postgres(tx)
                 .await
         }
+        "repair_root_title_folders" => {
+            crate::migrations::repair_root_title_folders::repair_root_title_folders_postgres(tx)
+                .await
+        }
         "migrate_title_image_blobs" => {
             crate::migrations::title_image_blobs::migrate_title_image_blobs_postgres(tx).await
         }
@@ -543,6 +547,14 @@ async fn run_postgres_rust_hook(
         }
         "compress_post_processing_output" => {
             crate::migrations::post_processing_output::compress_post_processing_output_postgres(tx)
+                .await
+        }
+        "backfill_import_skip_reason_projection" => {
+            crate::migrations::event_storage::backfill_import_skip_reason_projection_postgres(tx)
+                .await
+        }
+        "scrub_stored_release_url_credentials" => {
+            crate::migrations::release_url_scrub::scrub_stored_release_url_credentials_postgres(tx)
                 .await
         }
         #[cfg(test)]

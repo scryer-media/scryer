@@ -6,6 +6,7 @@ pub(super) struct MockDomainEventRepo {
     space_notification_receipts: Mutex<std::collections::BTreeSet<(String, String)>>,
     space_notification_attempts: Mutex<HashMap<String, i64>>,
     pub(super) fail_append_many: AtomicBool,
+    pub(super) fail_append: AtomicBool,
     pub(super) events: Arc<Mutex<Vec<DomainEvent>>>,
     pub(super) subscriber_offsets: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
@@ -234,6 +235,11 @@ impl DomainEventRepository for MockDomainEventRepo {
     }
 
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        if self.fail_append.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic event append failure".into(),
+            ));
+        }
         let mut events = self.events.lock().await;
         let sequence = events
             .last()
@@ -754,6 +760,39 @@ impl MediaRequestRepository for MockMediaRequestRepo {
 
         Ok(MediaRequestUpdateResult {
             request: updated,
+            event,
+        })
+    }
+
+    async fn reopen_rejected(
+        &self,
+        request_id: &str,
+        reopened_event: NewDomainEvent,
+    ) -> AppResult<MediaRequestUpdateResult> {
+        let mut requests = self.requests.lock().await;
+        let Some(request) = requests.iter_mut().find(|request| {
+            request.id == request_id && request.status == MediaRequestStatus::Rejected
+        }) else {
+            return Err(AppError::Validation(
+                "only a dismissed media request can be reopened".into(),
+            ));
+        };
+        request.status = MediaRequestStatus::Pending;
+        request.resolved_by_user_id = None;
+        request.resolved_at = None;
+        request.created_title_id = None;
+        request.approved_quality_profile_id = None;
+        request.approved_quality_profile_name = None;
+        request.approved_lease_days = None;
+        request.updated_at = Utc::now();
+        let reopened = request.clone();
+        drop(requests);
+
+        let event =
+            append_mock_media_request_event(self.domain_events.as_ref(), reopened_event).await?;
+
+        Ok(MediaRequestUpdateResult {
+            request: reopened,
             event,
         })
     }

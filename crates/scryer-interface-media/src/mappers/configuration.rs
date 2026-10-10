@@ -274,12 +274,59 @@ pub fn from_library_paths_settings(settings: LibraryPathsSettings) -> LibraryPat
 }
 
 pub fn from_service_settings(settings: ServiceSettings) -> ServiceSettingsPayload {
+    let public_url = settings.public_url;
+    let addressing = public_url.addressing;
     ServiceSettingsPayload {
+        public_url: public_url.effective,
+        public_url_source: ConfigValueSourceValue::from_application(public_url.source),
+        public_url_saved: public_url.saved,
+        public_url_error: public_url.error.as_ref().map(|error| error.message.clone()),
+        public_url_error_code: public_url
+            .error
+            .map(|error| PublicUrlErrorCodeValue::from_application(error.code)),
+        public_url_editable: public_url.editable,
+        base_path: addressing.base_path,
+        base_path_source: ConfigValueSourceValue::from_application(addressing.base_path_source),
+        bind_address: addressing.bind_address,
+        bind_source: ConfigValueSourceValue::from_application(addressing.bind_source),
+        passkey_rp_id: addressing.passkey_rp_id,
+        passkey_rp_origin: addressing.passkey_rp_origin,
+        passkey_rp_source: PasskeyRelyingPartySourceValue::from_application(
+            addressing.passkey_rp_source,
+        ),
+        passkey_user_count: public_url
+            .passkey_enrollment
+            .map(|counts| counts.users_with_passkeys),
+        passkey_only_user_count: public_url
+            .passkey_enrollment
+            .map(|counts| counts.passkey_only_users),
         trusted_proxy_ips: settings.trusted_proxy_ips,
         trusted_proxy_override: settings.trusted_proxy_override,
         trusted_proxy_source: settings.trusted_proxy_source,
         tls_cert_path: settings.tls_cert_path,
         tls_key_path: settings.tls_key_path,
+    }
+}
+
+pub fn from_public_url_change_preview(
+    preview: scryer_application::PublicUrlChangePreview,
+) -> PublicUrlChangePreviewPayload {
+    PublicUrlChangePreviewPayload {
+        normalized_public_url: preview.normalized,
+        error: preview.error.as_ref().map(|error| error.message.clone()),
+        error_code: preview
+            .error
+            .map(|error| PublicUrlErrorCodeValue::from_application(error.code)),
+        passkey_impact: PasskeyImpactValue::from_application(preview.passkey_impact),
+        current_passkey_rp_id: preview.current_passkey_rp_id,
+        next_passkey_rp_id: preview.next_passkey_rp_id,
+        passkey_user_count: preview
+            .passkey_enrollment
+            .map(|counts| counts.users_with_passkeys),
+        passkey_only_user_count: preview
+            .passkey_enrollment
+            .map(|counts| counts.passkey_only_users),
+        acknowledgement_required: preview.acknowledgement_required,
     }
 }
 
@@ -374,6 +421,7 @@ pub fn from_indexer_routing_entry(
 
 pub fn from_library_settings(settings: LibrarySettings) -> LibrarySettingsPayload {
     LibrarySettingsPayload {
+        search_languages: settings.search_languages,
         required_audio_languages_override: settings.required_audio_languages_override,
         required_audio_languages: settings.required_audio_languages,
         metadata_language_override: settings.metadata_language_override,

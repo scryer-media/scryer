@@ -184,15 +184,17 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             is_sensitive: false,
         },
         // Import-copy verification depth (FR-042). Without a definition the
-        // Settings > General control cannot save at all. Seeded `full`, the
-        // default `resolve_verification_depth` already falls back to, so a
-        // fresh install reads exactly what an unseeded one did.
+        // Settings > General control cannot save at all. Seeded `quick`, the
+        // same default `resolve_verification_depth` falls back to, so a fresh
+        // install reads exactly what an unseeded one does. Reseeding refreshes
+        // only the definition's default: an operator who saved `full` keeps it,
+        // because the effective value prefers a saved value over the default.
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_MEDIA,
             key_name: VERIFICATION_DEPTH_KEY,
             data_type: "string",
-            default_value_json: "\"full\"",
+            default_value_json: "\"quick\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -413,6 +415,38 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: BACKUP_PATH_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SCRIPT_INTERPRETER_PYTHON_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SCRIPT_INTERPRETER_POWERSHELL_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SCRIPT_INTERPRETER_BATCH_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SCRIPT_INTERPRETER_GO_KEY,
             data_type: "string",
             default_value_json: "null",
             is_sensitive: false,
@@ -670,6 +704,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SEARCH_LANGUAGES_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
             data_type: "string",
             default_value_json: "null",
@@ -779,6 +821,16 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "null",
             is_sensitive: false,
         },
+        // Null resolves to no saved public URL, so seeding changes nothing
+        // until an administrator saves one.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SERVICE,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::public_url::PUBLIC_URL_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SERVICE,
             scope: SETTINGS_SCOPE_SYSTEM,
@@ -799,6 +851,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             category: SETTINGS_CATEGORY_SERVICE,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "scheduler.instance_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SERVICE,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: PLEX_CLIENT_IDENTIFIER_KEY,
             data_type: "string",
             default_value_json: "null",
             is_sensitive: false,
@@ -1120,6 +1180,56 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             is_sensitive: true,
         },
         ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.provider_apps",
+            data_type: "json",
+            default_value_json: "null",
+            is_sensitive: true,
+        },
+        // Public OAuth app client ids SMG issues at enrollment, one per list
+        // provider it holds an app for.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.anilist.client_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.mal.client_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.simkl.client_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.trakt.client_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "plugins.config",
+            data_type: "json",
+            default_value_json: "{}",
+            is_sensitive: true,
+        },
+        ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SUBTITLES,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "subtitles.enabled",
@@ -1311,6 +1421,48 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             is_sensitive: false,
         },
     ]
+}
+
+/// The device identifier this instance presents to Plex when members link
+/// accounts. It is generated once and kept, so every link reuses one device
+/// on the member's Plex account instead of adding a device per restart.
+pub(crate) const PLEX_CLIENT_IDENTIFIER_KEY: &str = "lists.plex_client_identifier";
+
+pub(crate) async fn load_or_create_plex_client_identifier(
+    store: Arc<SettingsStore>,
+) -> Result<String, String> {
+    use scryer_application::SettingsRepository;
+
+    let stored = SettingsRepository::get_setting_json(
+        &*store,
+        SETTINGS_SCOPE_SYSTEM,
+        PLEX_CLIENT_IDENTIFIER_KEY,
+        None,
+    )
+    .await
+    .map_err(|error| format!("failed to read the Plex client identifier: {error}"))?;
+    if let Some(existing) = stored
+        .and_then(|raw| serde_json::from_str::<Option<String>>(&raw).ok().flatten())
+        .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+    {
+        return Ok(existing);
+    }
+
+    let identifier = uuid::Uuid::new_v4().to_string();
+    let value_json = serde_json::to_string(&identifier)
+        .map_err(|error| format!("failed to encode the Plex client identifier: {error}"))?;
+    SettingsRepository::upsert_setting_json(
+        &*store,
+        SETTINGS_SCOPE_SYSTEM,
+        PLEX_CLIENT_IDENTIFIER_KEY,
+        None,
+        value_json,
+        "system",
+        None,
+    )
+    .await
+    .map_err(|error| format!("failed to persist the Plex client identifier: {error}"))?;
+    Ok(identifier)
 }
 
 pub(crate) async fn seed_service_setting_definitions(
@@ -2109,6 +2261,42 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn every_gateway_list_client_id_setting_is_declared_and_storable() {
+        let seeds = service_setting_seeds();
+        let (_temp, store) = bootstrap_settings_store().await;
+        for provider in scryer_application::lists::GATEWAY_LIST_CLIENT_ID_PROVIDERS {
+            let key = scryer_application::lists::gateway_list_client_id_setting_key(provider);
+            let seed = seeds
+                .iter()
+                .find(|seed| seed.scope == SETTINGS_SCOPE_SYSTEM && seed.key_name == key)
+                .unwrap_or_else(|| panic!("missing list client id setting seed {key}"));
+            assert_eq!(seed.data_type, "string");
+            assert_eq!(seed.default_value_json, "null");
+            assert!(!seed.is_sensitive, "a public client id is not a secret");
+
+            store
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    &key,
+                    None,
+                    json!("synthetic-client-id").to_string(),
+                    "smg-enrollment",
+                    None,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{key} should be storable: {error}"));
+            assert_eq!(
+                store
+                    .get_setting_json(SETTINGS_SCOPE_SYSTEM, &key, None)
+                    .await
+                    .expect("read back")
+                    .as_deref(),
+                Some("\"synthetic-client-id\"")
+            );
+        }
+    }
+
     #[test]
     fn the_legacy_jwt_access_ttl_seeds_the_session_duration_setting() {
         // `.env.example:50` documents 86400; a day is what that means.
@@ -2591,7 +2779,7 @@ mod tests {
             .expect("verification depth definition must be registered");
         assert_eq!(seed.category, SETTINGS_CATEGORY_MEDIA);
         assert_eq!(seed.data_type, "string");
-        assert_eq!(seed.default_value_json, "\"full\"");
+        assert_eq!(seed.default_value_json, "\"quick\"");
         assert!(!seed.is_sensitive);
 
         let (_temp, store) = bootstrap_settings_store().await;
@@ -2602,10 +2790,10 @@ mod tests {
             .expect("verification depth default");
         assert_eq!(
             serde_json::from_str::<Value>(&initial).unwrap(),
-            json!("full")
+            json!("quick")
         );
 
-        for depth in ["quick", "full"] {
+        for depth in ["full", "quick", "full"] {
             store
                 .upsert_setting_json(
                     SETTINGS_SCOPE_MEDIA,
@@ -2792,6 +2980,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plex_client_identifier_is_generated_once_and_reused() {
+        let (_temp, store) = bootstrap_settings_store().await;
+
+        let first = load_or_create_plex_client_identifier(store.clone())
+            .await
+            .expect("identifier is created");
+        assert!(uuid::Uuid::parse_str(&first).is_ok());
+        let again = load_or_create_plex_client_identifier(store.clone())
+            .await
+            .expect("identifier is reused");
+        assert_eq!(again, first);
+
+        // A value that cannot be presented to Plex is replaced, then kept.
+        SettingsRepository::upsert_setting_json(
+            &*store,
+            SETTINGS_SCOPE_SYSTEM,
+            PLEX_CLIENT_IDENTIFIER_KEY,
+            None,
+            "\"not a device id\"".to_string(),
+            "system",
+            None,
+        )
+        .await
+        .expect("fixture value persists");
+        let replaced = load_or_create_plex_client_identifier(store.clone())
+            .await
+            .expect("identifier is replaced");
+        assert_ne!(replaced, first);
+        assert!(uuid::Uuid::parse_str(&replaced).is_ok());
+        assert_eq!(
+            load_or_create_plex_client_identifier(store)
+                .await
+                .expect("replacement is reused"),
+            replaced
+        );
+    }
+
+    #[tokio::test]
     async fn service_setting_definitions_allow_scheduler_instance_id_to_persist() {
         let (_temp, store) = bootstrap_settings_store().await;
 
@@ -2934,6 +3160,23 @@ mod tests {
                 && seed.default_value_json == "false"
                 && !seed.is_sensitive
         }));
+        for key_name in [
+            scryer_application::SCRIPT_INTERPRETER_PYTHON_KEY,
+            scryer_application::SCRIPT_INTERPRETER_POWERSHELL_KEY,
+            scryer_application::SCRIPT_INTERPRETER_BATCH_KEY,
+            scryer_application::SCRIPT_INTERPRETER_GO_KEY,
+        ] {
+            assert!(
+                service_setting_seeds().iter().any(|seed| {
+                    seed.scope == SETTINGS_SCOPE_SYSTEM
+                        && seed.key_name == key_name
+                        && seed.data_type == "string"
+                        && seed.default_value_json == "null"
+                        && !seed.is_sensitive
+                }),
+                "{key_name} is seeded as an unset string"
+            );
+        }
         assert!(service_setting_seeds().iter().any(|seed| {
             seed.scope == SETTINGS_SCOPE_SYSTEM
                 && seed.key_name == AUTO_BACKUP_ENABLED_KEY

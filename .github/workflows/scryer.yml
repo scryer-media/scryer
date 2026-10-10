@@ -1263,8 +1263,11 @@ jobs:
           fi
           export "${target_cflags_var}=${native_flags}"
           export "${target_cxxflags_var}=${native_flags}"
-          # AWS-LC's entropy sources require optimization to be disabled.
-          export AWS_LC_SYS_CFLAGS="${native_flags/-O3/-O0}"
+          # AWS-LC's jitter-entropy sources refuse to compile optimized, and cc
+          # appends these flags after AWS-LC's own -O0 for them. Give AWS-LC
+          # the flags without a level: the profile's opt-level still optimizes
+          # the library, and nothing overrides the entropy sources' -O0.
+          export AWS_LC_SYS_CFLAGS="${native_flags/-O3 /}"
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           if [ -n "${{ matrix.extra_rustflags }}" ]; then
             export RUSTFLAGS="${RUSTFLAGS} ${{ matrix.extra_rustflags }}"
@@ -1567,8 +1570,11 @@ jobs:
           native_flags="-O3 -DNDEBUG -ffunction-sections -fdata-sections -fvisibility=hidden"
           export "${target_cflags_var}=${native_flags}"
           export "${target_cxxflags_var}=${native_flags}"
-          # AWS-LC's entropy sources require optimization to be disabled.
-          export AWS_LC_SYS_CFLAGS="${native_flags/-O3/-O0}"
+          # AWS-LC's jitter-entropy sources refuse to compile optimized, and cc
+          # appends these flags after AWS-LC's own -O0 for them. Give AWS-LC
+          # the flags without a level: the profile's opt-level still optimizes
+          # the library, and nothing overrides the entropy sources' -O0.
+          export AWS_LC_SYS_CFLAGS="${native_flags/-O3 /}"
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -A linker-messages"
           if [ -n "${{ matrix.extra_rustflags }}" ]; then
             export RUSTFLAGS="${RUSTFLAGS} ${{ matrix.extra_rustflags }}"
@@ -2113,8 +2119,11 @@ jobs:
           $cxxFlagsName = "CXXFLAGS_$targetEnvSuffix"
           Set-Item -Path "Env:$cFlagsName" -Value "/O2 /DNDEBUG /Gy /Gw"
           Set-Item -Path "Env:$cxxFlagsName" -Value "/O2 /DNDEBUG /Gy /Gw"
-          # AWS-LC's entropy sources require optimization to be disabled.
-          $env:AWS_LC_SYS_CFLAGS = "/Od /DNDEBUG /Gy /Gw"
+          # AWS-LC's jitter-entropy sources refuse to compile optimized, and cc
+          # appends these flags after AWS-LC's own -Od for them. Give AWS-LC
+          # the flags without a level: the profile's opt-level still optimizes
+          # the library, and nothing overrides the entropy sources' -Od.
+          $env:AWS_LC_SYS_CFLAGS = "/DNDEBUG /Gy /Gw"
           if ($env:INSTALL_NASM -eq "true") {
             $env:AWS_LC_SYS_PREBUILT_NASM = "0"
           }

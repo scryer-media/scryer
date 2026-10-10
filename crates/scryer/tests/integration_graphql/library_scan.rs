@@ -1721,6 +1721,215 @@ async fn library_series_scan_counts_new_title_files_before_post_hydration_scan_p
     );
 }
 
+/// A title whose recorded folder is the library root does not own "another
+/// folder" in any real sense. A scan must not take the root for a second copy
+/// and detach the title's files from the folder they are actually in.
+#[tokio::test]
+async fn library_movie_scan_keeps_media_of_a_title_recorded_at_the_library_root() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    update_library_paths_for_scan(
+        &ctx,
+        media_root.path().to_string_lossy().as_ref(),
+        "/tmp/series-unused",
+        "/tmp/anime-unused",
+    )
+    .await;
+
+    let title = create_catalog_title(
+        &ctx,
+        "Rooted Movie",
+        MediaFacet::Movie,
+        vec![ExternalId::new("tvdb".to_string(), "123457".to_string())],
+        vec![],
+        false,
+    )
+    .await;
+    ctx.titles
+        .set_folder_path(&title.id, media_root.path().to_string_lossy().as_ref())
+        .await
+        .expect("record the library root as the title folder");
+
+    let movie_dir = media_root.path().join("Rooted Movie (2024)");
+    std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+    let movie_path = movie_dir.join("Rooted.Movie.2024.2160p.WEB-DL.mkv");
+    let movie_file = std::fs::File::create(&movie_path).expect("create movie file");
+    movie_file
+        .set_len(60 * 1024 * 1024)
+        .expect("set movie file size");
+    std::fs::write(
+        movie_dir.join("movie.nfo"),
+        r#"<movie><title>Rooted Movie</title><tvdbid>123457</tvdbid><year>2024</year></movie>"#,
+    )
+    .expect("write movie.nfo");
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: movie_path.to_string_lossy().into_owned(),
+            size_bytes: 60 * 1024 * 1024,
+            quality_label: Some("2160p".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("track the movie file");
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .scan_library(&admin, MediaFacet::Movie)
+        .await
+        .expect("scan movie library");
+
+    let tracked = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(
+        tracked
+            .iter()
+            .map(|file| file.file_path.as_str())
+            .collect::<Vec<_>>(),
+        vec![movie_path.to_str().expect("utf-8 movie path")],
+        "the title keeps the file it has"
+    );
+}
+
+/// A title recorded at the library root whose tracked media sits in more than
+/// one folder gives a scan no single folder to re-point it at. The scan must
+/// not hand the record to whichever folder it reaches first and then detach
+/// the media in the other as a second copy.
+#[tokio::test]
+async fn library_movie_scan_leaves_an_ambiguous_root_record_and_keeps_all_its_media() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let media_root_path = media_root.path().to_string_lossy().into_owned();
+    update_library_paths_for_scan(
+        &ctx,
+        &media_root_path,
+        "/tmp/series-unused",
+        "/tmp/anime-unused",
+    )
+    .await;
+
+    let title = create_catalog_title(
+        &ctx,
+        "Split Movie",
+        MediaFacet::Movie,
+        vec![ExternalId::new("tvdb".to_string(), "123458".to_string())],
+        vec![],
+        false,
+    )
+    .await;
+    ctx.titles
+        .set_folder_path(&title.id, &media_root_path)
+        .await
+        .expect("record the library root as the title folder");
+
+    let mut movie_paths = Vec::new();
+    for (folder, file) in [
+        ("Split Movie (2024)", "Split.Movie.2024.2160p.WEB-DL.mkv"),
+        (
+            "Split Movie Extended (2024)",
+            "Split.Movie.2024.1080p.BluRay.mkv",
+        ),
+    ] {
+        let movie_dir = media_root.path().join(folder);
+        std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+        let movie_path = movie_dir.join(file);
+        std::fs::File::create(&movie_path)
+            .expect("create movie file")
+            .set_len(60 * 1024 * 1024)
+            .expect("set movie file size");
+        std::fs::write(
+            movie_dir.join("movie.nfo"),
+            r#"<movie><title>Split Movie</title><tvdbid>123458</tvdbid><year>2024</year></movie>"#,
+        )
+        .expect("write movie.nfo");
+        ctx.media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: movie_path.to_string_lossy().into_owned(),
+                size_bytes: 60 * 1024 * 1024,
+                quality_label: Some("2160p".into()),
+                ..Default::default()
+            })
+            .await
+            .expect("track the movie file");
+        movie_paths.push(movie_path.to_string_lossy().into_owned());
+    }
+    movie_paths.sort();
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .scan_library(&admin, MediaFacet::Movie)
+        .await
+        .expect("scan movie library");
+
+    let mut tracked = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files")
+        .into_iter()
+        .map(|file| file.file_path)
+        .collect::<Vec<_>>();
+    tracked.sort();
+    assert_eq!(tracked, movie_paths, "the title keeps every file it has");
+    let recorded = ctx
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists")
+        .folder_path;
+    assert_eq!(
+        recorded.as_deref(),
+        Some(media_root_path.as_str()),
+        "an ambiguous record is left for the operator to correct"
+    );
+}
+
+/// A title scan walks the title's recorded folder. When that record is the
+/// library root, the scan refuses instead of reading every other title's
+/// files as this title's.
+#[tokio::test]
+async fn title_scan_refuses_a_title_recorded_at_the_library_root() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (title, _collection) =
+        create_series_scan_title(&ctx, media_root.path(), "Rooted Show", vec![]).await;
+    ctx.titles
+        .set_folder_path(&title.id, media_root.path().to_string_lossy().as_ref())
+        .await
+        .expect("record the library root as the title folder");
+    let other_show = media_root.path().join("Unrelated Show").join("Season 01");
+    std::fs::create_dir_all(&other_show).expect("create unrelated show");
+    std::fs::write(
+        other_show.join("Unrelated.Show.S01E01.mkv"),
+        b"unrelated synthetic episode",
+    )
+    .expect("write unrelated episode");
+
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let error = ctx
+        .app
+        .scan_title_library(&admin, &title.id)
+        .await
+        .expect_err("a title recorded at the library root is not scanned");
+    assert!(
+        matches!(error, scryer_application::AppError::Validation(_)),
+        "unexpected error: {error}"
+    );
+    let tracked = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert!(tracked.is_empty(), "no other title's file was attached");
+}
+
 #[tokio::test]
 async fn library_movie_scan_records_owned_folder_conflict_without_rehoming_title() {
     let ctx = TestContext::new().await;

@@ -7,10 +7,12 @@ export type GlobalStatusOptions = {
   /** Set when the caller renders its own richer toast for the same event. */
   suppressToast?: boolean;
   /**
-   * The toast level, when the caller already knows it. A catch block knows its
-   * status is a failure; the wording does not — server messages such as "nzb
-   * download payload was not valid xml" or "category_mismatch: …" carry none of
-   * the keywords the text classifier looks for, and would show no toast at all.
+   * The level this status toasts at. Leave it out and the status shows no
+   * toast at all, which is right only for progress notes and form hints.
+   *
+   * Nothing infers a level from the wording, so state it from the code path:
+   * a catch block or an error result is "ERROR", the success branch is
+   * "SUCCESS", and an outcome that went through with a caveat is "WARNING".
    */
   level?: StatusToastKind;
 };

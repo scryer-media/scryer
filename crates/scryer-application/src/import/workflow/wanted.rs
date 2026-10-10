@@ -1,3 +1,23 @@
+async fn reused_episode_destination(
+    app: &AppUseCase,
+    title_id: &str,
+    code: crate::import_checks::ImportCheckCode,
+    destination: &Path,
+) -> AppResult<Option<(String, String)>> {
+    if !code.is_duplicate_file() {
+        return Ok(None);
+    }
+    let destination = path_to_stored_string(destination);
+    Ok(app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_path(&destination)
+        .await?
+        .filter(|file| file.title_id == title_id)
+        .map(|file| (destination, file.id)))
+}
+
 fn expected_runtime_seconds_for_episode_import(
     title: &scryer_domain::Title,
     target_episodes: &[scryer_domain::Episode],
@@ -197,6 +217,10 @@ async fn execute_resolved_episode_import(
                     skip_reason_for_import_check_rejection(app, code, &dest_path).await?,
                 ),
                 episode_ids: target_episode_ids.clone(),
+                already_present_destination: reused_episode_destination(
+                    app, &title.id, code, &dest_path,
+                )
+                .await?,
             });
         }
 
@@ -290,10 +314,6 @@ async fn execute_resolved_episode_import(
         .iter()
         .map(|incumbent| incumbent.media_file.clone())
         .collect::<Vec<_>>();
-    let existing_score = existing_files
-        .iter()
-        .max_by_key(|file| file.acquisition_score.unwrap_or(0))
-        .and_then(|file| file.acquisition_score);
     let expected_runtime_seconds =
         expected_runtime_seconds_for_episode_import(title, target_episodes);
     let runtime_sample_validation = match runtime_sample_mode {
@@ -359,9 +379,43 @@ async fn execute_resolved_episode_import(
                 skip_reason_for_import_check_rejection(app, code, &precheck_dest_path).await?,
             ),
             episode_ids: target_episode_ids.clone(),
+            already_present_destination: reused_episode_destination(
+                app,
+                &title.id,
+                code,
+                &precheck_dest_path,
+            )
+            .await?,
         });
     }
 
+    // **One runtime basis per scope** (D4): the episodes this file actually
+    // holds, not the series average. Size scoring is runtime-derived, so scoring
+    // a double-length premiere or a 7-minute special against the average puts it
+    // in a different size band than the grab decision used — the same file,
+    // scored two ways. The grab lane has always used the covered episodes'
+    // runtime (`coverage_size_basis`); this is the same derivation, and it
+    // carries the member count and per-member runtime a pack is judged by.
+    let scope_size_basis = crate::acquisition_coverage::episode_span_size_basis(
+        target_episodes,
+        &target_episode_ids,
+        title.runtime_minutes,
+    )
+    .or_runtime(title.runtime_minutes);
+    let scoring_context = app
+        .resolve_canonical_scoring_context(title, quality_profile)
+        .await;
+    let episode_scope = crate::SubmissionScope::EpisodeSet {
+        episode_ids: target_episode_ids.clone(),
+    };
+    let existing_score = app
+        .current_incumbent_score_for_import_scope(
+            title,
+            &episode_scope,
+            &scoring_context,
+            scope_size_basis.total_runtime_minutes,
+        )
+        .await;
     let prepared = match crate::post_download_gate::prepare_import_candidate_with_disc_selection(
         app,
         title,
@@ -389,6 +443,7 @@ async fn execute_resolved_episode_import(
                     reason_code: Some(rejection.recycle_reason.to_string()),
                     skip_reason: Some(rejection.review_hold_skip_reason()),
                     episode_ids: target_episode_ids.clone(),
+                    already_present_destination: None,
                 });
             }
             // The probe refused the bytes outright. A corrupt container or a
@@ -471,6 +526,7 @@ async fn execute_resolved_episode_import(
             ),
             skip_reason: Some(ImportSkipReason::PolicyMismatch),
             episode_ids: target_episode_ids.clone(),
+            already_present_destination: None,
         });
     }
 
@@ -517,29 +573,9 @@ async fn execute_resolved_episode_import(
         crate::post_download_gate::RuntimeSampleValidationMode::BypassRuntimeSampleCheck
     );
 
-    // **One runtime basis per scope** (D4): the episodes this file actually
-    // holds, not the series average. Size scoring is runtime-derived, so scoring
-    // a double-length premiere or a 7-minute special against the average puts it
-    // in a different size band than the grab decision used — the same file,
-    // scored two ways. The grab lane has always used the covered episodes'
-    // runtime (`coverage_size_basis`); this is the same derivation, and it
-    // carries the member count and per-member runtime a pack is judged by.
-    let scope_size_basis = crate::acquisition_coverage::episode_span_size_basis(
-        target_episodes,
-        &target_episode_ids,
-        title.runtime_minutes,
-    )
-    .or_runtime(title.runtime_minutes);
-
     // **The one import decision** (design §3). Subject, landed score, truth
     // verdict and admission all live in `decide_import`; what is left here is
     // carrying out its plan.
-    let scoring_context = app
-        .resolve_canonical_scoring_context(title, quality_profile)
-        .await;
-    let episode_scope = crate::SubmissionScope::EpisodeSet {
-        episode_ids: target_episode_ids.clone(),
-    };
     let decision_input = crate::import_decide::ImportDecisionInput {
         title,
         scoring_context: &scoring_context,
@@ -658,7 +694,7 @@ async fn execute_resolved_episode_import(
                 return Ok(EpisodeImportOutcome::Imported {
                     dest_path: path_to_stored_string(&dest_path),
                     episode_ids: target_episode_ids,
-                    imported_media_file_id: None,
+                    imported_media_file_id: Some(outcome.new_file_id.clone()),
                     reason_code: Some("upgrade".to_string()),
                     link_type: (import_mode == scryer_domain::ImportMode::Move)
                         .then_some(scryer_domain::ImportStrategy::Move),

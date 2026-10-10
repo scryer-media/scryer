@@ -249,6 +249,11 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
             ActivitySeverity::Info,
             format!("Updated request for '{}'.", data.title_name),
         ),
+        DomainEventPayload::MediaRequestReopened(data) => (
+            ActivityKind::SystemNotice,
+            ActivitySeverity::Info,
+            format!("Reopened request for '{}'.", data.title_name),
+        ),
         DomainEventPayload::MediaRequestCanceled(data) => (
             ActivityKind::SystemNotice,
             ActivitySeverity::Info,
@@ -265,11 +270,18 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
         DomainEventPayload::DownloadQueueItemCommandIssued(data) => (
             ActivityKind::SystemNotice,
             ActivitySeverity::Info,
-            format!(
-                "download {}: {}",
-                download_queue_command_label(data.action),
-                data.item_id
-            ),
+            match data.detail.as_deref() {
+                Some(detail) => format!(
+                    "download {}: {} ({detail})",
+                    download_queue_command_label(data.action),
+                    data.item_id
+                ),
+                None => format!(
+                    "download {}: {}",
+                    download_queue_command_label(data.action),
+                    data.item_id
+                ),
+            },
         ),
         DomainEventPayload::PostProcessingCompleted(data) => (
             ActivityKind::PostProcessingCompleted,
@@ -464,6 +476,11 @@ fn serialize_title_history_data(payload: &DomainEventPayload) -> Option<String> 
 pub(crate) fn title_history_record_from_domain_event(
     event: &DomainEvent,
 ) -> Option<TitleHistoryRecord> {
+    // Title history is shared with library viewers; member facts belong only
+    // in the authorized member event feed and activity projection.
+    if matches!(event.stream, scryer_domain::DomainEventStream::User { .. }) {
+        return None;
+    }
     // Not a filter. An event without a `title_id` is not a malformed event —
     // it is an event with no catalog title behind it, and FR-026 says such a
     // grab is still "recorded as history against the release and indexer".
@@ -535,7 +552,11 @@ pub(crate) fn title_history_record_from_domain_event(
             data.client_name.clone(),
             None,
             None,
-            false,
+            data.canonical_download_id.is_some()
+                && data.reason.as_deref().is_some_and(|reason| {
+                    reason.starts_with("ARCHIVE_PASSWORD_REQUIRED:")
+                        || reason.starts_with("ARCHIVE_PASSWORD_OR_CORRUPTION:")
+                }),
             data.reason.clone(),
             None,
             None,
@@ -599,6 +620,11 @@ pub(crate) fn title_history_record_from_domain_event(
             data.title.as_ref().map(|title| title.title_name.clone()),
             data.title.as_ref().map(|title| title.facet.clone()),
             match data.status {
+                ImportStatus::Failed | ImportStatus::Skipped
+                    if data.skip_reason == Some(ImportSkipReason::PostDownloadRuleBlocked) =>
+                {
+                    TitleHistoryEventType::ImportRejectedByRule
+                }
                 ImportStatus::Failed => TitleHistoryEventType::ImportFailed,
                 ImportStatus::Skipped => TitleHistoryEventType::ImportSkipped,
                 _ => return None,
@@ -1187,6 +1213,7 @@ fn download_queue_command_label(action: scryer_domain::DownloadQueueCommandActio
         scryer_domain::DownloadQueueCommandAction::Pause => "paused",
         scryer_domain::DownloadQueueCommandAction::Resume => "resumed",
         scryer_domain::DownloadQueueCommandAction::Delete => "delete queued",
+        scryer_domain::DownloadQueueCommandAction::ReleaseHeldSources => "held sources released",
     }
 }
 
@@ -1517,6 +1544,7 @@ mod tests {
                     DownloadQueueItemCommandIssuedEventData {
                         item_id: "queue-1".to_string(),
                         action: DownloadQueueCommandAction::Delete,
+                        detail: None,
                     },
                 ),
                 r#"{"type":"download_queue_item_command_issued","data":{"item_id":"queue-1","action":"delete"}}"#,
@@ -1526,6 +1554,7 @@ mod tests {
             ),
             (
                 DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                    canonical_download_id: None,
                     title: Some(title.clone()),
                     source_title: Some("Broken.Release".to_string()),
                     source_hint: Some("client".to_string()),
@@ -1753,6 +1782,7 @@ mod tests {
             1,
             Utc::now(),
             DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                canonical_download_id: None,
                 title: Some(title_snapshot("Planetes", MediaFacet::Anime)),
                 source_title: None,
                 source_hint: Some(source_hint),
@@ -1804,6 +1834,8 @@ mod tests {
                     old_score: Some(10),
                     new_score: Some(20),
                     size_bytes: Some(2_048),
+                    import_id: None,
+                    source_ref: None,
                 }),
             ),
             event(
@@ -2024,6 +2056,67 @@ mod tests {
         assert_eq!(activity.severity, ActivitySeverity::Warning);
         assert_eq!(activity.title_id.as_deref(), Some("title-1"));
         assert_eq!(activity.facet.as_deref(), Some("series"));
+    }
+
+    #[test]
+    fn rule_rejected_imports_get_their_own_history_type_with_the_reason_kept() {
+        let rejection = |status, skip_reason| {
+            event(
+                1,
+                Utc::now(),
+                DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                    title: Some(title_snapshot("Example", MediaFacet::Movie)),
+                    status,
+                    import_id: Some("import-1".to_string()),
+                    source_system: Some("sabnzbd".to_string()),
+                    source_ref: Some("job-1".to_string()),
+                    source_title: Some("Example.2024.1080p".to_string()),
+                    source_path: Some("/downloads/Example.2024.1080p".to_string()),
+                    dest_path: None,
+                    quality: Some("1080p".to_string()),
+                    reason: Some("post-download score -100 rejected import: no-hdr".to_string()),
+                    skip_reason,
+                    episode_ids: Vec::new(),
+                }),
+            )
+        };
+        let history_type = |status, skip_reason| {
+            title_history_record_from_domain_event(&rejection(status, skip_reason))
+                .expect("an import rejection projects to history")
+                .event_type
+        };
+
+        for status in [ImportStatus::Failed, ImportStatus::Skipped] {
+            assert_eq!(
+                history_type(status, Some(ImportSkipReason::PostDownloadRuleBlocked)),
+                TitleHistoryEventType::ImportRejectedByRule
+            );
+        }
+        assert_eq!(
+            history_type(ImportStatus::Failed, None),
+            TitleHistoryEventType::ImportFailed
+        );
+        assert_eq!(
+            history_type(
+                ImportStatus::Skipped,
+                Some(ImportSkipReason::PolicyMismatch)
+            ),
+            TitleHistoryEventType::ImportSkipped
+        );
+
+        let record = title_history_record_from_domain_event(&rejection(
+            ImportStatus::Failed,
+            Some(ImportSkipReason::PostDownloadRuleBlocked),
+        ))
+        .expect("an import rejection projects to history");
+        assert_eq!(
+            record.skip_reason.as_deref(),
+            Some("post_download_rule_blocked")
+        );
+        assert_eq!(
+            record.failure_reason.as_deref(),
+            Some("post-download score -100 rejected import: no-hdr")
+        );
     }
 
     #[test]

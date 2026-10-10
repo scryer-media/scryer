@@ -900,6 +900,8 @@ impl ImportArtifactRepository for UnavailableImportArtifactRepo {
 
 #[derive(Default)]
 struct TestDownloadSubmissionRepo {
+    passwords: Mutex<HashMap<String, crate::DownloadPasswordCandidates>>,
+    fail_password_save: std::sync::atomic::AtomicBool,
     rows: Arc<Mutex<Vec<(DownloadSubmission, DownloadSubmissionIdentity)>>>,
     tracked_states: Arc<Mutex<Vec<(ClientJobLocator, String)>>>,
     identity_tracked_states: Arc<Mutex<Vec<(String, String)>>>,
@@ -942,6 +944,39 @@ fn test_tracked_state_key(
 
 #[async_trait]
 impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
+    async fn set_password_candidates(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+        candidates: &crate::DownloadPasswordCandidates,
+    ) -> AppResult<()> {
+        if self
+            .fail_password_save
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository(
+                "synthetic password persistence failure".into(),
+            ));
+        }
+        self.passwords
+            .lock()
+            .await
+            .insert(id.to_string(), candidates.clone());
+        Ok(())
+    }
+
+    async fn password_candidates(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadPasswordCandidates> {
+        Ok(self
+            .passwords
+            .lock()
+            .await
+            .get(&id.to_string())
+            .cloned()
+            .unwrap_or_default())
+    }
+
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
         self.rows
             .lock()
@@ -1918,6 +1953,7 @@ fn build_artifact_with_result(
         source_ref: source_ref.to_string(),
         import_id: None,
         relative_path: None,
+        workspace_relative_path: None,
         normalized_file_name: normalized_file_name.to_string(),
         media_kind: "episode".to_string(),
         title_id: Some("title-1".to_string()),

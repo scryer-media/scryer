@@ -21,6 +21,7 @@ pub fn descriptor() -> PluginDescriptor {
         sdk_version: SDK_VERSION.to_string(),
         sdk_constraint: current_sdk_constraint(),
         socket_permissions: vec![],
+        settings: vec![],
         provider: ProviderDescriptor::Indexer(IndexerDescriptor {
             provider_type: "test".to_string(),
             provider_aliases: vec![],

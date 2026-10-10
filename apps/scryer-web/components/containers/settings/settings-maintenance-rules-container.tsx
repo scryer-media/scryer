@@ -251,12 +251,13 @@ export function SettingsMaintenanceRulesContainer({
         const detail =
           (data?.maintenanceRuleSet as MaintenanceRuleSetDetail | null) ?? null;
         if (!detail) {
-          setGlobalStatus(t("status.failedToLoad"));
+          setGlobalStatus(t("status.failedToLoad"), { level: "ERROR" });
         }
         return detail;
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToLoad"),
+          { level: "ERROR" },
         );
         return null;
       }
@@ -394,6 +395,7 @@ export function SettingsMaintenanceRulesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     }
   }, [client, setGlobalStatus, t]);
@@ -451,6 +453,7 @@ export function SettingsMaintenanceRulesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     }
   }, [client, setGlobalStatus, t]);
@@ -635,7 +638,7 @@ export function SettingsMaintenanceRulesContainer({
         .mutation(deleteMaintenanceRuleSetMutation, { id: record.id })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("settings.maintenanceRuleDeleted", { name: record.name }));
+      setGlobalStatus(t("settings.maintenanceRuleDeleted", { name: record.name }), { level: "SUCCESS" });
       if (editingRuleSetId === record.id) {
         closeEditor();
       }
@@ -647,6 +650,7 @@ export function SettingsMaintenanceRulesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToDelete"),
+        { level: "ERROR" },
       );
     } finally {
       setMutatingRuleSetId(null);
@@ -698,7 +702,7 @@ export function SettingsMaintenanceRulesContainer({
           })
           .toPromise();
         if (metadata.error) throw metadata.error;
-        setGlobalStatus(t("settings.maintenanceRuleUpdated"));
+        setGlobalStatus(t("settings.maintenanceRuleUpdated"), { level: "SUCCESS" });
       } else {
         const { error } = await client
           .mutation(createMaintenanceRuleSetMutation, {
@@ -706,7 +710,7 @@ export function SettingsMaintenanceRulesContainer({
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("settings.maintenanceRuleCreated"));
+        setGlobalStatus(t("settings.maintenanceRuleCreated"), { level: "SUCCESS" });
       }
       closeEditor();
       await refreshRuleSets();
@@ -792,10 +796,11 @@ export function SettingsMaintenanceRulesContainer({
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("settings.maintenanceGatesUpdated"));
+        setGlobalStatus(t("settings.maintenanceGatesUpdated"), { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setSavingGate(null);
@@ -834,12 +839,14 @@ export function SettingsMaintenanceRulesContainer({
         if (error) throw error;
         setGlobalStatus(
           t("settings.maintenanceRuleModeUpdated", { name: record.name }),
+          { level: "SUCCESS" },
         );
         await refreshRuleSets();
         await refreshCandidates();
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingRuleSetId(null);
@@ -919,6 +926,7 @@ export function SettingsMaintenanceRulesContainer({
         setPendingArming(null);
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToLoad"),
+          { level: "ERROR" },
         );
       }
     },
@@ -940,6 +948,7 @@ export function SettingsMaintenanceRulesContainer({
           result.ok
             ? t("settings.maintenanceRuleArmingUpdated", { name: record.name })
             : result.message,
+          { level: result.ok ? "SUCCESS" : "ERROR" },
         );
       })();
     },
@@ -959,13 +968,14 @@ export function SettingsMaintenanceRulesContainer({
       setPendingArming(null);
       setGlobalStatus(
         t("settings.maintenanceRuleArmingUpdated", { name: record.name }),
+        { level: "SUCCESS" },
       );
       return;
     }
     const serverCount = parseAcknowledgedCandidateCountMismatch(result.message);
     if (serverCount === null) {
       setPendingArming(null);
-      setGlobalStatus(result.message);
+      setGlobalStatus(result.message, { level: "ERROR" });
       await refreshRuleSets();
       return;
     }
@@ -993,6 +1003,7 @@ export function SettingsMaintenanceRulesContainer({
           : t("settings.maintenanceRunNotStarted", {
               message: result.message ?? "",
             }),
+        result.started ? undefined : { level: "WARNING" },
       );
     },
     [setGlobalStatus, t],
@@ -1015,6 +1026,7 @@ export function SettingsMaintenanceRulesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToUpdate"),
+        { level: "ERROR" },
       );
     } finally {
       setEvaluationTriggering(false);
@@ -1044,6 +1056,7 @@ export function SettingsMaintenanceRulesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToUpdate"),
+        { level: "ERROR" },
       );
     } finally {
       setActionTriggering(false);
@@ -1096,6 +1109,7 @@ export function SettingsMaintenanceRulesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToUpdate"),
+        { level: "ERROR" },
       );
     } finally {
       setExcluding(false);
@@ -1126,6 +1140,7 @@ export function SettingsMaintenanceRulesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToDelete"),
+        { level: "ERROR" },
       );
     } finally {
       setRemovingExclusionId(null);

@@ -171,7 +171,7 @@ async fn deferred_analysis_failures_preserve_successful_metadata_and_reject_stal
 }
 
 #[tokio::test]
-async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
+async fn disc_review_is_the_grab_incumbent_and_landed_score_but_not_an_import_incumbent() {
     let analyzer = Arc::new(SelectionAnalyzer {
         seen: Arc::new(Mutex::new(Vec::new())),
         started: Arc::new(tokio::sync::Notify::new()),
@@ -191,7 +191,8 @@ async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
     let context = app
         .resolve_canonical_scoring_context(&title, &profile)
         .await;
-    for (status, count) in [("scanned", 1), ("review_required", 0), ("scanned", 1)] {
+    let mut scanned_bar = None;
+    for (status, import_count) in [("scanned", 1), ("review_required", 0), ("scanned", 1)] {
         files
             .store
             .lock()
@@ -200,7 +201,7 @@ async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
             .find(|row| row.id == id)
             .unwrap()
             .scan_status = status.into();
-        let subject = app
+        let import = app
             .admission_subject_for_scope(
                 &title,
                 &crate::SubmissionScope::Title,
@@ -209,19 +210,96 @@ async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
                 crate::quality::canonical_context::SubjectIntent::Import,
             )
             .await;
-        assert_eq!(subject.incumbents().len(), count, "{status}");
-        if status == "review_required" {
-            let bars = app
-                .landed_bars_for_scopes(&[crate::acquisition_workflow::LandedBarScope {
-                    title_id: title.id.clone(),
-                    episode_id: None,
-                    collection_id: None,
-                    series_movie_link_id: None,
-                }])
-                .await;
-            assert_eq!(bars, vec![None]);
+        assert_eq!(import.incumbents().len(), import_count, "{status}");
+        let grab = app
+            .admission_subject_for_scope(
+                &title,
+                &crate::SubmissionScope::Title,
+                &context,
+                None,
+                crate::quality::canonical_context::SubjectIntent::Grab,
+            )
+            .await;
+        assert_eq!(grab.incumbents().len(), 1, "{status}");
+        let bars = app
+            .landed_bars_for_scopes(&[crate::acquisition_workflow::LandedBarScope {
+                title_id: title.id.clone(),
+                episode_id: None,
+                collection_id: None,
+                series_movie_link_id: None,
+            }])
+            .await;
+        assert!(bars[0].is_some(), "{status}");
+        let bar = grab.best_incumbent();
+        match scanned_bar {
+            None => scanned_bar = bar,
+            Some(scanned) => assert_eq!(bar, Some(scanned), "{status}"),
         }
     }
+}
+
+#[tokio::test]
+async fn grab_compares_an_incoming_release_against_a_file_awaiting_review() {
+    let analyzer = Arc::new(SelectionAnalyzer {
+        seen: Arc::new(Mutex::new(Vec::new())),
+        started: Arc::new(tokio::sync::Notify::new()),
+        resume: None,
+    });
+    let (app, _admin, files, id, _dir) = selection_fixture(analyzer).await;
+    files
+        .store
+        .lock()
+        .await
+        .iter_mut()
+        .find(|row| row.id == id)
+        .unwrap()
+        .scan_status = "review_required".into();
+    let file = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    let title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&file.title_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let profile = app.resolve_quality_profile_for_title(&title).await.unwrap();
+    let context = app
+        .resolve_canonical_scoring_context(&title, &profile)
+        .await;
+    let subject = app
+        .admission_subject_for_scope(
+            &title,
+            &crate::SubmissionScope::Title,
+            &context,
+            None,
+            crate::quality::canonical_context::SubjectIntent::Grab,
+        )
+        .await;
+    let (tier, score) = subject.best_incumbent().expect("the file awaiting review");
+    let policy = crate::admission::AdmissionPolicy {
+        allow_upgrades: true,
+        min_delta: 1,
+        cutoff_score: None,
+        manual_override: false,
+        applies_to_queue: false,
+    };
+
+    let better = crate::admission::evaluate_admission(
+        &subject,
+        crate::admission::CandidateFacts::new(tier, 0, score + 500),
+        &policy,
+    );
+    assert!(better.is_admitted());
+    assert_eq!(better.superseded(), [id.clone()]);
+
+    let worse = crate::admission::evaluate_admission(
+        &subject,
+        crate::admission::CandidateFacts::new(tier, 0, score - 500),
+        &policy,
+    );
+    assert!(!worse.is_admitted());
+    assert!(worse.rejection().is_some());
 }
 
 #[tokio::test]
@@ -756,4 +834,136 @@ async fn disc_title_selection_rejects_concurrent_selection_and_source_changes() 
                 .is_none()
         );
     }
+}
+
+async fn handed_off_file() -> (Arc<MockMediaFileRepo>, Arc<dyn MediaFileRepository>, String) {
+    let files = Arc::new(MockMediaFileRepo::default());
+    let id = files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: "synthetic-title".into(),
+            file_path: "/synthetic/library/Synthetic Feature (2024)/feature.mkv".into(),
+            size_bytes: 4_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let repo: Arc<dyn MediaFileRepository> = files.clone();
+    (files, repo, id)
+}
+
+fn import_acceptance(
+    analysis: Option<MediaFileAnalysis>,
+    scan_error: Option<&str>,
+) -> crate::post_download_gate::ImportedFileAcceptance {
+    crate::post_download_gate::ImportedFileAcceptance {
+        analysis,
+        scan_error: scan_error.map(str::to_string),
+        rule_file_doc: None,
+        audio_language_warning: None,
+    }
+}
+
+fn disc_analysis(selected_title: &str) -> MediaFileAnalysis {
+    let mut analysis = MediaFileAnalysis::default();
+    analysis.details.revision = scryer_media_types::ANALYSIS_REVISION;
+    analysis.details.disc = Some(scryer_media_types::DiscMetadata {
+        disc_type: "bluray".into(),
+        selected_title_id: Some(selected_title.into()),
+        selection: scryer_media_types::DiscSelection {
+            title_id: Some(selected_title.into()),
+            episode_mappings: Vec::new(),
+        },
+        ..Default::default()
+    });
+    analysis.duration_seconds = Some(5_400);
+    analysis
+}
+
+#[tokio::test]
+async fn import_probe_results_are_written_onto_the_file_record() {
+    let (files, repo, id) = handed_off_file().await;
+    let mut analysis = MediaFileAnalysis::default();
+    analysis.details.revision = scryer_media_types::ANALYSIS_REVISION;
+    analysis.duration_seconds = Some(1_440);
+    analysis.video_width = Some(1_920);
+    analysis.video_height = Some(1_080);
+    analysis.audio_languages = vec!["jpn".into()];
+    analysis.container_format = Some("matroska".into());
+
+    crate::post_download_gate::persist_media_analysis_result(
+        &repo,
+        &id,
+        &import_acceptance(Some(analysis), None),
+    )
+    .await
+    .expect("hand-off succeeds");
+
+    let stored = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(stored.scan_status, "scanned");
+    assert_eq!(
+        stored.analysis_details.revision,
+        scryer_media_types::ANALYSIS_REVISION
+    );
+    assert_eq!(stored.duration_seconds, Some(1_440));
+    assert_eq!(
+        (stored.video_width, stored.video_height),
+        (Some(1_920), Some(1_080))
+    );
+    assert_eq!(stored.audio_languages, vec!["jpn".to_string()]);
+    assert_eq!(stored.container_format.as_deref(), Some("matroska"));
+}
+
+#[tokio::test]
+async fn a_failed_import_probe_marks_the_file_record_failed() {
+    let (files, repo, id) = handed_off_file().await;
+
+    crate::post_download_gate::persist_media_analysis_result(
+        &repo,
+        &id,
+        &import_acceptance(None, Some("synthetic probe failure")),
+    )
+    .await
+    .expect("a probe failure is recorded, not raised");
+
+    let stored = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(stored.scan_status, "failed");
+    assert_eq!(stored.analysis_details.revision, 0);
+}
+
+#[tokio::test]
+async fn a_disc_probe_publishes_only_onto_the_selection_it_was_made_for() {
+    let (files, repo, id) = handed_off_file().await;
+
+    // A first import of the disc publishes its analysis.
+    crate::post_download_gate::persist_media_analysis_result(
+        &repo,
+        &id,
+        &import_acceptance(Some(disc_analysis("00001")), None),
+    )
+    .await
+    .expect("first disc hand-off succeeds");
+    let stored = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(stored.scan_status, "scanned");
+    assert_eq!(stored.duration_seconds, Some(5_400));
+
+    // The operator picked another title in the meantime: the stale probe must
+    // not overwrite it, and the import is stopped for review.
+    let error = crate::post_download_gate::persist_media_analysis_result(
+        &repo,
+        &id,
+        &import_acceptance(Some(disc_analysis("00002")), None),
+    )
+    .await
+    .expect_err("a changed disc selection stops the import");
+    assert!(matches!(error, AppError::ManualReconciliationRequired(_)));
+    let stored = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(stored.scan_status, "failed");
+    assert_eq!(
+        stored
+            .analysis_details
+            .disc
+            .as_ref()
+            .and_then(|disc| disc.selection.title_id.as_deref()),
+        Some("00001")
+    );
 }

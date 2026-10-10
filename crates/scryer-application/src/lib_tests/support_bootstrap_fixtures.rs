@@ -1851,6 +1851,7 @@ pub(super) fn empty_update_media_settings() -> UpdateMediaSettings {
 
 pub(super) fn empty_library_settings_override() -> LibrarySettingsOverrideDraft {
     LibrarySettingsOverrideDraft {
+        search_languages: None,
         required_audio_languages: None,
         metadata_language: None,
         use_season_folders: None,

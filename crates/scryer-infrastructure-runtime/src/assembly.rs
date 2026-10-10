@@ -157,6 +157,11 @@ impl DatastoreConfig {
         self.data_dir.join("backups")
     }
 
+    pub fn scripts_dir(&self) -> PathBuf {
+        let dir = self.data_dir.join("scripts");
+        std::path::absolute(&dir).unwrap_or(dir)
+    }
+
     pub fn safe_database_url(&self) -> &str {
         if self.redacted_database_url.is_empty() {
             &self.database_url
@@ -537,8 +542,30 @@ impl PostProcessingScriptRepository for DatastoreCustomizationStore {
             .await
     }
 
+    async fn list_enabled_scheduled(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        self.post_processing_scripts.list_enabled_scheduled().await
+    }
+
+    async fn list_scripts_by_trigger(
+        &self,
+        trigger: scryer_domain::ScriptTrigger,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        self.post_processing_scripts
+            .list_scripts_by_trigger(trigger)
+            .await
+    }
+
     async fn record_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
         self.post_processing_scripts.record_run(run).await
+    }
+
+    async fn update_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
+        self.post_processing_scripts.update_run(run).await
+    }
+    async fn reconcile_interrupted_runs(&self) -> AppResult<u64> {
+        self.post_processing_scripts
+            .reconcile_interrupted_runs()
+            .await
     }
 
     async fn list_runs_for_script(
@@ -893,7 +920,10 @@ impl DatastoreAssembly {
         let domain_event_store = Arc::new(DomainEventStore::new(datastore.clone()));
         let acquisition_store = Arc::new(AcquisitionStore::new(datastore.clone()));
         let download_registry_store = Arc::new(DownloadRegistryStore::new(datastore.clone()));
-        let download_submission_store = Arc::new(DownloadSubmissionStore::new(datastore.clone()));
+        let download_submission_store = Arc::new(
+            DownloadSubmissionStore::new(datastore.clone())
+                .with_encryption_key(db.encryption_key_state()),
+        );
         let import_store = Arc::new(ImportStore::new(datastore.clone()));
         let external_import_monitor_store =
             Arc::new(ExternalImportMonitorStore::new(datastore.clone()));
@@ -1050,7 +1080,10 @@ impl DatastoreAssembly {
         let domain_event_store = Arc::new(DomainEventStore::new(datastore.clone()));
         let acquisition_store = Arc::new(AcquisitionStore::new(datastore.clone()));
         let download_registry_store = Arc::new(DownloadRegistryStore::new(datastore.clone()));
-        let download_submission_store = Arc::new(DownloadSubmissionStore::new(datastore.clone()));
+        let download_submission_store = Arc::new(
+            DownloadSubmissionStore::new(datastore.clone())
+                .with_encryption_key(db.encryption_key_state()),
+        );
         let import_store = Arc::new(ImportStore::new(datastore.clone()));
         let external_import_monitor_store =
             Arc::new(ExternalImportMonitorStore::new(datastore.clone()));
@@ -1120,6 +1153,10 @@ impl DatastoreAssembly {
 
     pub fn backup_dir(&self) -> PathBuf {
         self.config.backup_dir()
+    }
+
+    pub fn scripts_dir(&self) -> PathBuf {
+        self.config.scripts_dir()
     }
 
     pub fn staged_nzb_path(&self) -> PathBuf {
@@ -1633,6 +1670,7 @@ impl DatastoreAssembly {
                     self.quality_profiles(),
                     self.backup_dir(),
                 )
+                .with_scripts_dir(self.scripts_dir())
                 .with_indexer_error_repository(self.indexer_errors())
                 .with_libraries(libraries)
                 .with_media_requests(media_requests)
@@ -1765,6 +1803,7 @@ impl DatastoreAssembly {
                     self.quality_profiles(),
                     self.backup_dir(),
                 )
+                .with_scripts_dir(self.scripts_dir())
                 .with_indexer_error_repository(self.indexer_errors())
                 .with_libraries(libraries)
                 .with_media_requests(media_requests)

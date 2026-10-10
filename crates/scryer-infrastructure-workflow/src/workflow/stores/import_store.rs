@@ -9,9 +9,15 @@ use scryer_application::{
 };
 use scryer_domain::{ImportRecord, ImportStatus, ImportTransferPhase, ImportType};
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, StoreDatastore};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
 include!("import_retry.rs");
+
+pub(super) fn archive_import_has_pending_sources(row: &SqlRow) -> AppResult<bool> {
+    let payload: serde_json::Value = serde_json::from_str(&row.text("payload_json")?)
+        .map_err(|_| AppError::Repository("import preservation metadata is unavailable".into()))?;
+    Ok(payload["archive_processing_pending"].as_bool() == Some(true))
+}
 
 #[derive(Clone)]
 pub struct ImportStore {
@@ -58,6 +64,214 @@ async fn active_binding_download_id(
 
 #[async_trait]
 impl ImportRepository for ImportStore {
+    async fn set_archive_processing_pending(
+        &self,
+        import_id: &str,
+        pending: bool,
+    ) -> AppResult<()> {
+        let import_id = import_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "archive_import_preservation", move |tx| {
+            let import_id = import_id.clone();
+            Box::pin(async move {
+                let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT canonical_download_id, payload_json FROM imports WHERE id = {}",
+                    &[SqlArg::Text(import_id.clone())]).await?
+                    .ok_or_else(|| AppError::NotFound("import not found".into()))?;
+                if let Some(download_id) = row.opt_text("canonical_download_id")? {
+                    lock_retry_download(tx, &download_id).await?;
+                    if pending && SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                        "SELECT download_id FROM download_cleanup WHERE download_id = {} AND (lease_until IS NOT NULL OR payload_checkpoint IS NOT NULL OR (attempts > 0 AND (status <> 'completed' OR outcome IS NULL OR outcome NOT IN ('policy_retained', 'client_removed', 'client_unresolved', 'cleanup_abandoned', 'entry_absent_payload_unverified'))))",
+                        &[SqlArg::Text(download_id)]).await?.is_some() {
+                        return Err(AppError::Validation("source cleanup already owns this download".into()));
+                    }
+                }
+                let mut payload: serde_json::Value = serde_json::from_str(&row.text("payload_json")?)
+                    .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
+                let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+                if pending {
+                    object.insert("archive_processing_pending".into(), serde_json::Value::Bool(true));
+                    object.remove(scryer_application::ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY);
+                }
+                else {
+                    object.remove("archive_processing_pending");
+                    object.remove(scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY);
+                }
+                let encoded = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
+                let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE imports SET payload_json = {} WHERE id = {}",
+                    &[payload, SqlArg::Text(import_id)]).await?;
+                Ok(())
+            })
+        }).await
+    }
+
+    async fn record_archive_hold_reason(&self, import_id: &str, reason: &str) -> AppResult<()> {
+        let import_id = import_id.to_string();
+        let reason = reason.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "archive_import_hold_reason", move |tx| {
+            let import_id = import_id.clone();
+            let reason = reason.clone();
+            Box::pin(async move {
+                let Some(row) = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    "SELECT payload_json FROM imports WHERE id = {}",
+                    &[SqlArg::Text(import_id.clone())],
+                )
+                .await?
+                else {
+                    return Ok(());
+                };
+                let mut payload: serde_json::Value =
+                    serde_json::from_str(&row.text("payload_json")?).map_err(|_| {
+                        AppError::Repository("import payload is unavailable".into())
+                    })?;
+                // Annotates an existing hold only; never creates one.
+                if payload["archive_processing_pending"].as_bool() != Some(true) {
+                    return Ok(());
+                }
+                // A later, milder reason never hides a more severe one
+                // already recorded for the same hold.
+                let reason =
+                    match payload[scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY].as_str() {
+                        Some(stored) => scryer_application::HeldSourcesReason::parse(Some(stored))
+                            .max(scryer_application::HeldSourcesReason::parse(Some(&reason)))
+                            .as_str()
+                            .to_string(),
+                        None => reason,
+                    };
+                let object = payload
+                    .as_object_mut()
+                    .ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+                object.insert(
+                    scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY.into(),
+                    serde_json::Value::String(reason),
+                );
+                let encoded = serde_json::to_string(&payload)
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE imports SET payload_json = {} WHERE id = {}",
+                    &[payload, SqlArg::Text(import_id)],
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn release_archive_holds(
+        &self,
+        source: &ClientJobLocator,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        import_ids: &[String],
+    ) -> AppResult<()> {
+        let source = source.clone();
+        let canonical_download_id = canonical_download_id.map(ToString::to_string);
+        let import_ids = import_ids.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "release_archive_holds", move |tx| {
+            let source = source.clone();
+            let canonical_download_id = canonical_download_id.clone();
+            let import_ids = import_ids.clone();
+            Box::pin(async move {
+                // The same lock the cleanup claim takes, so the claim sees
+                // either every hold or none of them. Without a canonical
+                // download there is no lock to take, so nothing is released.
+                let Some(download_id) = canonical_download_id.as_deref() else {
+                    return Err(AppError::Validation(
+                        "this download has no stable identity yet; its sources stay held".into()));
+                };
+                lock_retry_download(tx, download_id).await?;
+                let rows = SqlRuntime::fetch_all(SqlExec::Tx(tx),
+                    "SELECT id, status, payload_json FROM imports
+                     WHERE (canonical_download_id = {})
+                        OR (COALESCE(source_client_id, '') = {} AND source_system = {} AND source_ref = {})",
+                    &[SqlArg::Text(canonical_download_id.clone().unwrap_or_default()),
+                      SqlArg::Text(source.client_id_or_empty().to_string()),
+                      SqlArg::Text(source.client_type.clone()), SqlArg::Text(source.item_id.clone())]).await?;
+                let mut releasable = Vec::new();
+                for row in &rows {
+                    let id = row.text("id")?;
+                    let status = row.text("status")?;
+                    if matches!(status.as_str(), "pending" | "running" | "processing" | "queued") {
+                        return Err(AppError::Validation(
+                            "this download is still being imported; release its sources once that finishes".into()));
+                    }
+                    let listed = import_ids.contains(&id);
+                    let held = archive_import_has_pending_sources(row)?;
+                    if listed {
+                        if status != "completed" {
+                            return Err(AppError::Validation(
+                                "the import changed while its release was requested; refresh the queue".into()));
+                        }
+                        if held {
+                            releasable.push(id);
+                        }
+                    } else if held {
+                        return Err(AppError::Validation(
+                            "another import of this download holds its sources; refresh the queue".into()));
+                    }
+                }
+                if import_ids.iter().any(|id| !rows.iter().any(|row| row.text("id").is_ok_and(|row_id| &row_id == id))) {
+                    return Err(AppError::Validation(
+                        "the import changed while its release was requested; refresh the queue".into()));
+                }
+                for id in releasable {
+                    let row = rows.iter().find(|row| row.text("id").is_ok_and(|row_id| row_id == id))
+                        .ok_or_else(|| AppError::Repository("released import disappeared".into()))?;
+                    let mut payload: serde_json::Value = serde_json::from_str(&row.text("payload_json")?)
+                        .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
+                    let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+                    object.remove("archive_processing_pending");
+                    object.remove(scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY);
+                    object.insert(scryer_application::ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY.into(), serde_json::Value::Bool(true));
+                    let encoded = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
+                    let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE imports SET payload_json = {} WHERE id = {}",
+                        &[payload, SqlArg::Text(id)]).await?;
+                }
+                Ok(())
+            })
+        }).await
+    }
+
+    async fn open_manual_selection_roots(&self) -> AppResult<Vec<String>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT trusted_source_root, archive_workspace_root FROM manual_import_selections
+             WHERE consumed_at IS NULL",
+            &[],
+        )
+        .await?;
+        let mut roots = Vec::with_capacity(rows.len() * 2);
+        for row in rows {
+            roots.push(row.text("trusted_source_root")?);
+            if let Some(root) = row.opt_text("archive_workspace_root")? {
+                roots.push(root);
+            }
+        }
+        Ok(roots)
+    }
+
+    async fn archive_processing_pending_for_download(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<bool> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT payload_json FROM imports WHERE canonical_download_id = {}",
+            &[SqlArg::Text(download_id.to_string())],
+        )
+        .await?;
+        for row in rows {
+            if archive_import_has_pending_sources(&row)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,
@@ -834,10 +1048,10 @@ impl ImportArtifactRepository for ImportStore {
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),
                     "INSERT INTO download_import_artifacts
-                     (id, source_client_id, source_system, source_ref, canonical_download_id, import_id, relative_path, normalized_file_name,
+                     (id, source_client_id, source_system, source_ref, canonical_download_id, import_id, relative_path, workspace_relative_path, normalized_file_name,
                       media_kind, title_id, episode_id, season_number, episode_number,
                       result, reason_code, imported_media_file_id, created_at)
-                     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                     &[
                         SqlArg::Text(artifact.id),
                         SqlArg::OptText(artifact.source_client_id),
@@ -846,6 +1060,7 @@ impl ImportArtifactRepository for ImportStore {
                         SqlArg::OptText(canonical_download_id),
                         SqlArg::OptText(artifact.import_id),
                         SqlArg::OptText(artifact.relative_path),
+                        SqlArg::OptText(artifact.workspace_relative_path),
                         SqlArg::Text(artifact.normalized_file_name),
                         SqlArg::Text(artifact.media_kind),
                         SqlArg::OptText(artifact.title_id),
@@ -879,10 +1094,10 @@ impl ImportArtifactRepository for ImportStore {
                     SqlRuntime::execute(
                         SqlExec::Tx(&mut *tx),
                         "INSERT INTO download_import_artifacts
-                         (id, source_client_id, source_system, source_ref, canonical_download_id, import_id, relative_path, normalized_file_name,
+                         (id, source_client_id, source_system, source_ref, canonical_download_id, import_id, relative_path, workspace_relative_path, normalized_file_name,
                           media_kind, title_id, episode_id, season_number, episode_number,
                           result, reason_code, imported_media_file_id, created_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                         &[
                             SqlArg::Text(artifact.id),
                             SqlArg::OptText(artifact.source_client_id),
@@ -891,6 +1106,7 @@ impl ImportArtifactRepository for ImportStore {
                             SqlArg::OptText(canonical_download_id.clone()),
                             SqlArg::OptText(artifact.import_id),
                             SqlArg::OptText(artifact.relative_path),
+                        SqlArg::OptText(artifact.workspace_relative_path),
                             SqlArg::Text(artifact.normalized_file_name),
                             SqlArg::Text(artifact.media_kind),
                             SqlArg::OptText(artifact.title_id),
@@ -922,7 +1138,7 @@ impl ImportArtifactRepository for ImportStore {
         ];
         let exact = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path,
+            "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path, workspace_relative_path,
                     normalized_file_name, media_kind, title_id, episode_id,
                     season_number, episode_number, result, reason_code,
                     imported_media_file_id, created_at
@@ -937,7 +1153,7 @@ impl ImportArtifactRepository for ImportStore {
         let rows = if exact.is_empty() {
             SqlRuntime::fetch_all(
                 self.datastore.read_exec(),
-                "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path,
+                "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path, workspace_relative_path,
                         normalized_file_name, media_kind, title_id, episode_id,
                         season_number, episode_number, result, reason_code,
                         imported_media_file_id, created_at
@@ -973,7 +1189,7 @@ impl ImportArtifactRepository for ImportStore {
         };
         let canonical = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path,
+            "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path, workspace_relative_path,
                     normalized_file_name, media_kind, title_id, episode_id,
                     season_number, episode_number, result, reason_code,
                     imported_media_file_id, created_at
@@ -1129,6 +1345,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("import artifacts table should be created");
+        sqlx::query(include_str!(
+            "../../../../scryer/src/db/migrations/0275_import_artifact_workspace_relative_path.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("import artifact workspace path migration should apply");
         sqlx::query(
             "CREATE TABLE manual_import_selections (
                  id TEXT PRIMARY KEY,
@@ -1179,6 +1401,7 @@ mod tests {
             source_ref: source_identity.item_id.clone(),
             import_id: None,
             relative_path: None,
+            workspace_relative_path: None,
             normalized_file_name: format!("{id}.mkv"),
             media_kind: "episode".to_string(),
             title_id: Some("title-1".to_string()),
@@ -1292,6 +1515,58 @@ mod tests {
                 .await
                 .expect("canonical artifact count should succeed"),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn artifact_workspace_relative_path_round_trips_and_stays_null_when_unset() {
+        let store = store().await;
+        let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
+        let identity = source_identity("workspace-artifacts");
+        let mut from_workspace = artifact("from-workspace", &identity, "imported");
+        from_workspace.workspace_relative_path = Some("out/Disc.One/quiet.harbor.mkv".into());
+        let mut from_download = artifact("from-download", &identity, "imported");
+        from_download.relative_path = Some("quiet.harbor.mkv".into());
+        let mut single = artifact("single-insert", &identity, "imported");
+        single.workspace_relative_path = Some("out/quiet.harbor.extra.mkv".into());
+        store
+            .insert_artifacts_for_download(
+                vec![from_workspace, from_download],
+                Some(&canonical_download_id),
+            )
+            .await
+            .unwrap();
+        store
+            .insert_artifact_for_download(single, Some(&canonical_download_id))
+            .await
+            .unwrap();
+
+        let mut rows = store
+            .list_by_source_identity_for_download(Some(&canonical_download_id), &identity)
+            .await
+            .unwrap();
+        rows.sort_by(|left, right| left.id.cmp(&right.id));
+        let paths: Vec<_> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.id.as_str(),
+                    row.workspace_relative_path.as_deref(),
+                    row.relative_path.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                ("from-download", None, Some("quiet.harbor.mkv")),
+                (
+                    "from-workspace",
+                    Some("out/Disc.One/quiet.harbor.mkv"),
+                    None
+                ),
+                ("single-insert", Some("out/quiet.harbor.extra.mkv"), None),
+            ]
         );
     }
 

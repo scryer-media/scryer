@@ -1,9 +1,7 @@
-//! Lists operations: the public chart catalog, chart items, proxied public
-//! IMDb lists, and `resolveTitles` for any kind with alias sources.
+//! Lists operations: the public chart catalog, chart items, and
+//! `resolveTitles` for any kind with alias sources.
 //!
 //! Chart reads are public and cacheable, so they go out as signed APQ GETs.
-//! `listImdbUserList` is served only to an enrolled instance and must not be
-//! cached at the edge, so it goes out as an authenticated APQ POST.
 
 use std::sync::LazyLock;
 
@@ -19,14 +17,11 @@ use super::{
 
 pub(super) const OP_LIST_CHART_CATALOG: &str = "ListChartCatalog";
 pub(super) const OP_LIST_CHART_ITEMS: &str = "ListChartItems";
-pub(super) const OP_LIST_IMDB_USER_LIST: &str = "ListImdbUserList";
 
 static LIST_CHART_CATALOG_HASH: LazyLock<String> =
     LazyLock::new(|| apq_hash(graphql_docs::LIST_CHART_CATALOG_QUERY));
 static LIST_CHART_ITEMS_HASH: LazyLock<String> =
     LazyLock::new(|| apq_hash(graphql_docs::LIST_CHART_ITEMS_QUERY));
-static LIST_IMDB_USER_LIST_HASH: LazyLock<String> =
-    LazyLock::new(|| apq_hash(graphql_docs::LIST_IMDB_USER_LIST_QUERY));
 
 #[derive(Deserialize)]
 struct ListChartCatalogResponse {
@@ -50,12 +45,6 @@ struct ListChartCatalogItem {
 struct ListChartItemsResponse {
     #[serde(rename = "listChartItems")]
     list_chart_items: Vec<ListChartEntry>,
-}
-
-#[derive(Deserialize)]
-struct ListImdbUserListResponse {
-    #[serde(rename = "listImdbUserList")]
-    list_imdb_user_list: Vec<ListChartEntry>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +113,52 @@ fn alias_ref_input(reference: &TitleExternalRef) -> AliasTitleRefInput {
 }
 
 impl MetadataGatewayClient {
+    pub(super) async fn fetch_list_movie_targets(
+        &self,
+        ids: &[i64],
+    ) -> AppResult<Vec<scryer_application::lists::gateway::ListMovieTarget>> {
+        use scryer_application::lists::gateway::ListMovieTarget;
+        const QUERY: &str = include_str!("metadata_gateway/list_movie_targets.graphql");
+        static HASH: LazyLock<String> = LazyLock::new(|| apq_hash(QUERY));
+        #[derive(Deserialize)]
+        struct Response {
+            #[serde(rename = "listMovieTargets")]
+            targets: Vec<ListMovieTarget>,
+        }
+        let ids = ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut result = Vec::with_capacity(ids.len());
+        for chunk in ids.into_iter().collect::<Vec<_>>().chunks(50) {
+            let response: Response = self
+                .execute_graphql_apq("ListMovieTargets", QUERY, &HASH, json!({"movieIds": chunk}))
+                .await?;
+            let returned = response
+                .targets
+                .iter()
+                .map(|row| row.movie_id)
+                .collect::<std::collections::BTreeSet<_>>();
+            if returned.len() != chunk.len()
+                || response.targets.len() != chunk.len()
+                || chunk.iter().any(|id| !returned.contains(id))
+                || response.targets.iter().any(|row| {
+                    row.parents.len() > 2
+                        || row
+                            .parents
+                            .iter()
+                            .any(|parent| parent.title_id <= 0 || parent.tvdb_id <= 0)
+                })
+            {
+                return Err(scryer_application::AppError::Repository(
+                    "invalid movie relationship response".into(),
+                ));
+            }
+            result.extend(response.targets);
+        }
+        Ok(result)
+    }
+
     pub(super) async fn fetch_list_chart_catalog(
         &self,
         language: &str,
@@ -175,25 +210,6 @@ impl MetadataGatewayClient {
             .await?;
         Ok(data
             .list_chart_items
-            .into_iter()
-            .map(ListChartItem::from)
-            .collect())
-    }
-
-    pub(super) async fn fetch_list_imdb_user_list(
-        &self,
-        list_id: &str,
-    ) -> AppResult<Vec<ListChartItem>> {
-        let data: ListImdbUserListResponse = self
-            .execute_authenticated_graphql_apq_post(
-                OP_LIST_IMDB_USER_LIST,
-                graphql_docs::LIST_IMDB_USER_LIST_QUERY,
-                &LIST_IMDB_USER_LIST_HASH,
-                json!({ "listId": list_id }),
-            )
-            .await?;
-        Ok(data
-            .list_imdb_user_list
             .into_iter()
             .map(ListChartItem::from)
             .collect())

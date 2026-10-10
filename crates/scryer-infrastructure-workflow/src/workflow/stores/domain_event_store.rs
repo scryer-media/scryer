@@ -399,8 +399,8 @@ mod title_history_filter_tests {
 
     use scryer_domain::{
         DomainEventActorKind, DomainEventPayload, DomainEventStream, DomainExternalIds,
-        DownloadIgnoredEventData, ImportRejectedEventData, ImportStatus, MediaFacet,
-        MediaFileDeletedEventData, MediaFileDeletedReason, ReleaseGrabbedEventData,
+        DownloadIgnoredEventData, ImportRejectedEventData, ImportSkipReason, ImportStatus,
+        MediaFacet, MediaFileDeletedEventData, MediaFileDeletedReason, ReleaseGrabbedEventData,
         TitleContextSnapshot,
     };
     use sqlx::{Row, sqlite::SqlitePoolOptions};
@@ -432,7 +432,8 @@ mod title_history_filter_tests {
                  payload_json BLOB NOT NULL,
                  import_status TEXT,
                  media_file_delete_reason TEXT,
-                 download_id TEXT
+                 download_id TEXT,
+                 import_skip_reason TEXT
              )",
         )
         .execute(&pool)
@@ -480,6 +481,34 @@ mod title_history_filter_tests {
         }
     }
 
+    #[tokio::test]
+    async fn private_user_stream_roundtrips_through_durable_storage() {
+        let store = store().await;
+        let mut event = download_ignored_event();
+        event.stream = DomainEventStream::User {
+            user_id: "member-owner".into(),
+        };
+        let appended = store.append(event).await.unwrap();
+        assert_eq!(appended.stream.kind(), "user");
+        assert_eq!(appended.stream.identifier(), Some("member-owner"));
+        let rows = store
+            .list(&DomainEventFilter {
+                stream_id: Some("member-owner".into()),
+                after_sequence: Some(appended.sequence - 1),
+                before_sequence: Some(appended.sequence + 1),
+                limit: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sequence, appended.sequence);
+        assert_eq!(rows[0].stream, appended.stream);
+        assert_eq!(rows[0].payload, appended.payload);
+        assert!(stream_from_parts("user", None).is_err());
+        assert!(stream_from_parts("user", Some(String::new())).is_err());
+    }
+
     fn event_with_payload(event_id: &str, payload: DomainEventPayload) -> NewDomainEvent {
         let mut event = download_ignored_event();
         event.event_id = event_id.to_string();
@@ -519,6 +548,8 @@ mod title_history_filter_tests {
                     old_score: None,
                     new_score: None,
                     size_bytes: None,
+                    import_id: None,
+                    source_ref: None,
                 })
             } else {
                 DomainEventPayload::ImportCompleted(scryer_domain::ImportCompletedEventData {
@@ -952,5 +983,82 @@ mod title_history_filter_tests {
             "upgrade_cleanup"
         );
         assert_eq!(rows[2].get::<String, _>("download_id"), "download-1");
+    }
+
+    #[tokio::test]
+    async fn rule_rejections_filter_under_their_own_history_type_only() {
+        let store = store().await;
+        let rejection = |event_id: &str, status, skip_reason| {
+            event_with_payload(
+                event_id,
+                DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                    title: None,
+                    status,
+                    import_id: None,
+                    source_system: None,
+                    source_ref: None,
+                    source_title: None,
+                    source_path: None,
+                    dest_path: None,
+                    quality: None,
+                    reason: None,
+                    skip_reason,
+                    episode_ids: Vec::new(),
+                }),
+            )
+        };
+        store
+            .append_many(vec![
+                rejection(
+                    "rule-failed",
+                    ImportStatus::Failed,
+                    Some(ImportSkipReason::PostDownloadRuleBlocked),
+                ),
+                rejection(
+                    "rule-skipped",
+                    ImportStatus::Skipped,
+                    Some(ImportSkipReason::PostDownloadRuleBlocked),
+                ),
+                rejection("plain-failed", ImportStatus::Failed, None),
+                rejection(
+                    "plain-skipped",
+                    ImportStatus::Skipped,
+                    Some(ImportSkipReason::DuplicateFile),
+                ),
+            ])
+            .await
+            .expect("events should append");
+
+        let listed = |event_type| {
+            let store = store.clone();
+            async move {
+                let mut ids = store
+                    .list_title_history_page_events(Some(&[event_type]), None, false, None, 50, 0)
+                    .await
+                    .expect("history should load")
+                    .into_iter()
+                    .map(|event| event.event_id)
+                    .collect::<Vec<_>>();
+                ids.sort();
+                let count = store
+                    .count_title_history_page_events(Some(&[event_type]), None, false, None)
+                    .await
+                    .expect("history should count");
+                assert_eq!(count, ids.len() as i64);
+                ids
+            }
+        };
+        assert_eq!(
+            listed(TitleHistoryEventType::ImportRejectedByRule).await,
+            vec!["rule-failed", "rule-skipped"]
+        );
+        assert_eq!(
+            listed(TitleHistoryEventType::ImportFailed).await,
+            vec!["plain-failed"]
+        );
+        assert_eq!(
+            listed(TitleHistoryEventType::ImportSkipped).await,
+            vec!["plain-skipped"]
+        );
     }
 }

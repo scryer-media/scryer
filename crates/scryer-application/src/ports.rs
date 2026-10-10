@@ -123,6 +123,8 @@ impl Drop for IndexerDispatchAdmission {
 /// clears an override, and `Some(Some(_))` applies an explicit override.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TitleOptionsPatch {
+    pub search_languages: Option<Option<Vec<String>>>,
+    pub search_aliases: Option<Option<Vec<String>>>,
     pub quality_profile_id: Option<Option<String>>,
     pub root_folder_id: Option<Option<String>>,
     pub monitor_type: Option<Option<String>>,
@@ -1029,6 +1031,7 @@ pub struct TitleNameBucketQuery<'a> {
 /// Name, aliases and tagged aliases in their lookup form, deduplicated. This
 /// is what the persisted projection keys its exact lane on.
 pub fn title_lookup_forms(title: &Title) -> Vec<String> {
+    let title = title.with_custom_search_aliases();
     let mut forms = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in std::iter::once(title.name.as_str())
@@ -1049,6 +1052,7 @@ pub fn title_lookup_forms(title: &Title) -> Vec<String> {
 /// derivation for repositories that have no projection behind them, and the
 /// reason both agree is that the forms come from one place in the domain.
 pub fn title_name_candidates(title: &Title) -> Vec<TitleNameCandidate> {
+    let title = title.with_custom_search_aliases();
     let mut seen = std::collections::HashSet::new();
     title
         .tagged_aliases
@@ -1066,7 +1070,7 @@ pub fn title_name_candidates(title: &Title) -> Vec<TitleNameCandidate> {
         )
         .filter_map(|(name, language)| {
             let literal_term = scryer_domain::title_spelling::title_lookup_form(name);
-            if literal_term.is_empty() || !seen.insert(literal_term.clone()) {
+            if literal_term.is_empty() || !seen.insert((literal_term.clone(), language)) {
                 return None;
             }
             let (match_term, match_year) =
@@ -2005,6 +2009,16 @@ pub trait TitleRepository: Send + Sync {
         Ok(None)
     }
     async fn create_or_get_existing(&self, title: Title) -> AppResult<CreateTitleOutcome>;
+    /// Creation-only options: an existing identity is returned without modification.
+    async fn create_or_get_existing_preserving_options(
+        &self,
+        _title: Title,
+        _selection: MonitorSelection,
+    ) -> AppResult<CreateTitleOutcome> {
+        Err(AppError::Repository(
+            "creation-only title options are not supported".into(),
+        ))
+    }
     async fn create_or_get_existing_with_options_patch(
         &self,
         title: Title,
@@ -2658,6 +2672,16 @@ pub trait MediaRequestRepository: Send + Sync {
         requested_monitor_selection: Option<MonitorSelection>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
+    ) -> AppResult<MediaRequestUpdateResult>;
+
+    /// Put one rejected request back to pending and record `reopened_event`
+    /// in the same transaction. The submitter, requesters, creation time,
+    /// preferences and policy provenance are kept; only the resolution is
+    /// cleared. Fails with a validation error when the row is not rejected.
+    async fn reopen_rejected(
+        &self,
+        request_id: &str,
+        reopened_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
 
     async fn count_pending_by_facet(&self, library_ids: &[String])
@@ -3339,6 +3363,11 @@ pub trait UserRepository: Send + Sync {
 pub trait UserUiSettingsRepository: Send + Sync {
     async fn get_by_user_id(&self, user_id: &str) -> AppResult<Option<UiSettings>>;
     async fn upsert(&self, user_id: &str, settings: UiSettingsUpdate) -> AppResult<UiSettings>;
+    async fn set_catalog_view(
+        &self,
+        user_id: &str,
+        update: UiCatalogViewUpdate,
+    ) -> AppResult<UiSettings>;
 }
 
 #[async_trait]
@@ -4040,6 +4069,13 @@ pub trait WebauthnRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> AppResult<Vec<WebauthnCredentialRecord>>;
+    /// Counts users with passkeys in one query, for settings that warn before
+    /// a change would stop those passkeys from working.
+    async fn passkey_enrollment_counts(&self) -> AppResult<crate::PasskeyEnrollmentCounts> {
+        Err(AppError::Repository(
+            "passkey enrollment counts are not configured".into(),
+        ))
+    }
     async fn get_credential_by_id_for_user(
         &self,
         credential_record_id: &str,
@@ -4762,6 +4798,8 @@ pub trait SubtitleProviderConfigRepository: Send + Sync {
 
 #[async_trait]
 pub trait SettingsRepository: Send + Sync {
+    /// Invalidate cached values after an atomic mutation owned by another repository.
+    fn invalidate_cache(&self) {}
     async fn get_setting_json(
         &self,
         scope: &str,
@@ -5021,6 +5059,43 @@ pub struct IndexerSearchRunWrite {
     pub error_summary: Option<String>,
     pub indexer_fingerprint: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Where a background strategy stands after this run
+    /// ([`SEARCH_STRATEGY_CONVERGED`], [`SEARCH_STRATEGY_CONTAINED`] or
+    /// [`SEARCH_STRATEGY_OPEN`]). `None` for operator and interactive runs,
+    /// which neither reset nor advance the background state.
+    pub strategy_state: Option<String>,
+    /// Where a paged background strategy resumes on the next pass. `None`
+    /// once the provider ran out of pages, and for unpaged indexers.
+    pub page_cursor: Option<String>,
+    /// Shared by the runs that read one background strategy page by page.
+    pub cursor_chain_id: Option<String>,
+}
+
+/// The provider answered the strategy completely.
+pub const SEARCH_STRATEGY_CONVERGED: &str = "converged";
+/// The provider cannot finish the strategy as asked (a result ceiling, a
+/// saturated partition): it waits out a backoff and is never converged.
+pub const SEARCH_STRATEGY_CONTAINED: &str = "contained";
+/// The strategy is incomplete for a reason a later pass can fix on its own
+/// schedule (an upstream failure, a rate limit).
+pub const SEARCH_STRATEGY_OPEN: &str = "open";
+
+/// The latest background state of one strategy for one indexer and scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundIndexerSearchStrategyState {
+    pub query_signature: String,
+    pub strategy_state: String,
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Where the next pass resumes a paged read of this strategy.
+    pub page_cursor: Option<String>,
+    /// The page chain the latest run belongs to.
+    pub cursor_chain_id: Option<String>,
+    /// Every run of that chain, newest first, so a later pass replays all
+    /// the pages read so far.
+    pub chain_run_ids: Vec<String>,
+    /// The strategy labels the latest run searched under.
+    pub branch: String,
 }
 
 #[derive(Debug, Clone)]
@@ -5162,12 +5237,57 @@ pub trait IndexerSearchLearningRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// The latest background state per strategy for one indexer and scope,
+    /// read across a window wider than the reuse window so a backoff keeps
+    /// growing past it.
+    async fn list_background_strategy_states(
+        &self,
+        _indexer_id: &str,
+        _scope_key: &str,
+        _indexer_fingerprint: &str,
+        _created_after: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Vec<BackgroundIndexerSearchStrategyState>> {
+        Ok(Vec::new())
+    }
+
+    /// Tags every run of one background search session with the convergence
+    /// scope it searched for.
+    async fn link_search_session_coverage_scope(
+        &self,
+        _search_session_id: &str,
+        _coverage_scope_key: &str,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// When the indexer's latest background session for this convergence
+    /// scope ended with every strategy either converged or contained, and at
+    /// least one contained strategy is not yet due, the instant the earliest
+    /// contained strategy becomes due. `None` means the indexer is not held.
+    async fn contained_search_hold(
+        &self,
+        _coverage_scope_key: &str,
+        _indexer_id: &str,
+        _indexer_fingerprint: &str,
+        _created_after: chrono::DateTime<chrono::Utc>,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<chrono::DateTime<chrono::Utc>>> {
+        Ok(None)
+    }
+
     async fn cleanup_search_diagnostics(
         &self,
         _candidate_cutoff: chrono::DateTime<chrono::Utc>,
         _run_cutoff: chrono::DateTime<chrono::Utc>,
         _limit: u32,
     ) -> AppResult<u32> {
+        Ok(0)
+    }
+
+    /// Deletes up to `limit` learning rows whose title or indexer no longer
+    /// exists and reports how many went. Title deletion and indexer pruning
+    /// clear their own rows; this sweep catches rows any other path left.
+    async fn prune_orphaned_learning(&self, _limit: u32) -> AppResult<u32> {
         Ok(0)
     }
 
@@ -5344,8 +5464,100 @@ pub struct IdentityTrackedStateTarget<'a> {
     pub source_identity: Option<&'a ClientJobLocator>,
 }
 
+pub const DOWNLOAD_PASSWORD_RETRY_REASON: &str = "download_password_retry";
+pub const DOWNLOAD_PASSWORD_REQUIRED_REASON: &str = "archive_password_required";
+pub const DOWNLOAD_PASSWORD_AMBIGUOUS_REASON: &str = "archive_password_or_corruption";
+
+/// The longest a password retry's request to the download client may run.
+/// A request still unanswered after this is treated as an unknown outcome,
+/// so a claim never outlives its dispatch by more than this bound.
+pub const DOWNLOAD_PASSWORD_RETRY_DISPATCH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(5 * 60);
+
+/// Durable dispatch ownership contains no password values.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DownloadPasswordRetryClaim {
+    pub download_id: DownloadId,
+    pub authorized_title_id: String,
+    #[serde(with = "import_retry_locator")]
+    pub source: ClientJobLocator,
+    pub attempt_id: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadPasswordRetryClaimOutcome {
+    Claimed,
+    Busy,
+}
+
+/// Recovery evidence is scoped to one attempt and its currently bound client job.
+#[derive(Clone, Debug)]
+pub struct DownloadPasswordRetryObservation {
+    pub claim: DownloadPasswordRetryClaim,
+    pub source: ClientJobLocator,
+    pub confirmed: bool,
+}
+
 #[async_trait]
 pub trait DownloadSubmissionRepository: Send + Sync {
+    async fn claim_password_retry(
+        &self,
+        _claim: &DownloadPasswordRetryClaim,
+        _password: &str,
+    ) -> AppResult<DownloadPasswordRetryClaimOutcome> {
+        Err(AppError::Repository(
+            "durable download password retry is unavailable".into(),
+        ))
+    }
+
+    /// Uncertain dispatch remains fenced; it must never be replayed automatically.
+    async fn finish_password_retry(
+        &self,
+        _claim: &DownloadPasswordRetryClaim,
+        _outcome: &crate::DownloadClientRetryOutcome,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "durable download password retry is unavailable".into(),
+        ))
+    }
+
+    async fn password_retry_observation(
+        &self,
+        _id: &DownloadId,
+    ) -> AppResult<Option<DownloadPasswordRetryObservation>> {
+        Ok(None)
+    }
+
+    /// Accept only evidence fetched after reading the attempt, never a queued snapshot.
+    async fn confirm_password_retry_observation(
+        &self,
+        _observation: &DownloadPasswordRetryObservation,
+        _state: scryer_domain::DownloadQueueState,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn set_password_candidates(
+        &self,
+        _id: &DownloadId,
+        candidates: &crate::DownloadPasswordCandidates,
+    ) -> AppResult<()> {
+        if candidates.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::Repository(
+                "download password persistence is unavailable".into(),
+            ))
+        }
+    }
+
+    async fn password_candidates(
+        &self,
+        _id: &DownloadId,
+    ) -> AppResult<crate::DownloadPasswordCandidates> {
+        Ok(Default::default())
+    }
+
     fn supports_durable_download_cleanup(&self) -> bool {
         false
     }
@@ -5973,6 +6185,32 @@ pub trait JobRunRepository: Send + Sync {
         limit: usize,
     ) -> AppResult<Vec<JobRunRecord>>;
 
+    /// Newest runs of `job_key` whose operation type is exactly
+    /// `operation_type`, such as one user-defined job's runs.
+    async fn list_job_runs_by_operation_type(
+        &self,
+        job_key: JobKey,
+        operation_type: &str,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        Ok(self
+            .list_job_runs(Some(job_key), limit.saturating_mul(20).max(200))
+            .await?
+            .into_iter()
+            .filter(|run| run.operation_type == operation_type)
+            .take(limit)
+            .collect())
+    }
+
+    /// The newest run of each operation type recorded under `job_key`, in
+    /// one read; used to show the last run of every user-defined job.
+    async fn list_latest_job_run_per_operation_type(
+        &self,
+        _job_key: JobKey,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        Ok(Vec::new())
+    }
+
     async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>>;
 
     /// Fail every persisted run still in a non-terminal state and return the
@@ -6380,8 +6618,64 @@ mod import_retry_locator {
 
 pub const IMPORT_RETRY_TRACKED_STATE_REASON: &str = "import_retry_recovery";
 
+/// Import payload key recording why an import holds its sources, beside the
+/// `archive_processing_pending` flag. It only ever annotates a hold.
+pub const ARCHIVE_HOLD_REASON_PAYLOAD_KEY: &str = "archive_processing_hold_reason";
+
+/// Import payload key set when an operator's release cleared the hold, so an
+/// interrupted release can be told apart from an import that never held.
+pub const ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY: &str = "archive_processing_released";
+
 #[async_trait]
 pub trait ImportRepository: Send + Sync {
+    async fn set_archive_processing_pending(
+        &self,
+        _import_id: &str,
+        _pending: bool,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "archive source preservation is unavailable".into(),
+        ))
+    }
+
+    /// Record why an import that already holds its sources is holding them.
+    /// Never adds a hold: an import without one is left unchanged.
+    async fn record_archive_hold_reason(&self, _import_id: &str, _reason: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Release the holds of exactly `import_ids`, all imports of `source`, in
+    /// one transaction under the download's retry lock. Refused, changing
+    /// nothing, when any listed import is missing or not completed, when any
+    /// import of the download is still pending or running, or when an import
+    /// of the download that is not listed also holds its sources. Each
+    /// cleared hold is marked with `ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY`.
+    async fn release_archive_holds(
+        &self,
+        _source: &ClientJobLocator,
+        _canonical_download_id: Option<&DownloadId>,
+        _import_ids: &[String],
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "archive source preservation is unavailable".into(),
+        ))
+    }
+
+    /// The stored source and workspace roots of every unconsumed manual-import
+    /// selection, across all actors. A store that cannot answer refuses, so
+    /// callers preserve anything such a selection might still need.
+    async fn open_manual_selection_roots(&self) -> AppResult<Vec<String>> {
+        Err(AppError::Repository(
+            "manual import selections are unavailable".into(),
+        ))
+    }
+
+    async fn archive_processing_pending_for_download(
+        &self,
+        _download_id: &DownloadId,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,
@@ -6831,6 +7125,7 @@ pub struct ImportFilePermissions {
 pub struct ImportFileExecutionContext {
     client_lane_key: String,
     active_import_stream: Option<crate::ActiveImportStreamHandle>,
+    archive_workspace_source: bool,
 }
 
 impl ImportFileExecutionContext {
@@ -6844,11 +7139,24 @@ impl ImportFileExecutionContext {
         Self {
             client_lane_key,
             active_import_stream: None,
+            archive_workspace_source: false,
         }
     }
 
     pub fn client_lane_key(&self) -> &str {
         &self.client_lane_key
+    }
+
+    /// Marks the source as output the archive extractor wrote into its own
+    /// workspace. That file is Scryer's scratch, so the importer may place it
+    /// by rename instead of linking or copying it.
+    pub fn with_archive_workspace_source(mut self, archive_workspace_source: bool) -> Self {
+        self.archive_workspace_source = archive_workspace_source;
+        self
+    }
+
+    pub fn archive_workspace_source(&self) -> bool {
+        self.archive_workspace_source
     }
 
     pub fn with_active_import_stream(
@@ -7399,6 +7707,18 @@ pub trait MediaFileRepository: Send + Sync {
         primary_file_id: &str,
         additional_file_ids: &[String],
     ) -> AppResult<()>;
+
+    /// Make `file_id` Primary for every episode in `episode_ids`, but only
+    /// while, at write time, no file is Primary for any of them and `file_id`
+    /// is the one file linked to each, as Additional. Returns whether it
+    /// promoted. Never demotes another file and never touches anything but
+    /// the role of `file_id`'s episode links.
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool>;
 
     async fn replace_media_file_for_upgrade(
         &self,
@@ -8759,11 +9079,27 @@ pub trait PostProcessingScriptRepository: Send + Sync {
         script: scryer_domain::PostProcessingScript,
     ) -> AppResult<scryer_domain::PostProcessingScript>;
     async fn delete_script(&self, id: &str) -> AppResult<()>;
+    /// Enabled import-triggered scripts that apply to `facet`. Scheduled
+    /// scripts never run on import.
     async fn list_enabled_for_facet(
         &self,
         facet: &str,
     ) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
+    /// Enabled scripts started by their own schedule.
+    async fn list_enabled_scheduled(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
+    /// Every script with the given trigger, enabled or not.
+    async fn list_scripts_by_trigger(
+        &self,
+        trigger: scryer_domain::ScriptTrigger,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
     async fn record_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
+    /// Replace a recorded run's outcome, keyed by its id. A fire-and-forget
+    /// scheduled script records its run at spawn and finishes it here.
+    async fn update_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
+    /// Fail every script run still marked running and return how many. Only
+    /// a previous process can have left one running, so this runs once at
+    /// startup, before any script can start.
+    async fn reconcile_interrupted_runs(&self) -> AppResult<u64>;
     async fn list_runs_for_script(
         &self,
         script_id: &str,
@@ -8884,6 +9220,30 @@ pub trait IndexerClient: Send + Sync {
         _admissible_fingerprints: &[String],
     ) -> AppResult<()> {
         Ok(())
+    }
+
+    /// Ties one background search session's runs to the convergence scope it
+    /// searched for, so [`IndexerClient::contained_search_holds`] can answer
+    /// for that scope later.
+    async fn link_search_session_coverage_scope(
+        &self,
+        _search_session_id: &str,
+        _coverage_scope_key: &str,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Indexers among `indexer_ids` whose latest background search for this
+    /// convergence scope is contained and not yet due, with the instant each
+    /// becomes due. A held indexer is neither covered nor worth asking again
+    /// before then.
+    async fn contained_search_holds(
+        &self,
+        _coverage_scope_key: &str,
+        _indexer_ids: &[String],
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>> {
+        Ok(std::collections::HashMap::new())
     }
 
     /// Which RSS-capable indexers are due for a background RSS poll now.
@@ -9023,6 +9383,36 @@ pub trait IndexerClient: Send + Sync {
         Ok(response)
     }
 
+    /// An operator's raw text search. The multi-indexer client dispatches it
+    /// to each eligible indexer; a single-indexer adapter answers it itself,
+    /// and this default asks [`Self::search`] for the bare query, which
+    /// cannot carry the page size.
+    async fn search_raw_text(
+        &self,
+        request: crate::RawTextSearchRequest,
+        cancel_token: tokio_util::sync::CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        self.search(
+            request.query,
+            std::collections::HashMap::new(),
+            None,
+            None,
+            None,
+            Some(request.categories).filter(|categories| !categories.is_empty()),
+            None,
+            SearchMode::Interactive,
+            IndexerErrorOperation::InteractiveSearch,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            cancel_token,
+        )
+        .await
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "the streaming adapter preserves the complete search envelope"
@@ -9090,6 +9480,7 @@ pub trait IndexerClient: Send + Sync {
             }
         }
         Ok(combined.unwrap_or(IndexerSearchResponse {
+            next_cursor: None,
             results: Vec::new(),
             completion: IndexerSearchCompletion::Complete,
             api_current: None,
@@ -9230,6 +9621,33 @@ pub trait IndexerPluginProvider: Send + Sync {
     fn builtin_provider_types(&self) -> Vec<String> {
         vec![]
     }
+    fn builtin_descriptor_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
+        None
+    }
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if !settings.is_empty() {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.restore_builtin_plugin(provider_type)
+    }
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        if settings.values().any(|values| !values.is_empty()) {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.reload_runtime_plugins(runtime_plugins, disabled_builtins)
+    }
     fn plugin_version_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
@@ -9351,11 +9769,25 @@ pub struct ExternalPluginWasm<'a> {
     pub first_party: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RuntimePluginLoad {
+    /// Database installation identity; absent only during pre-install validation.
+    pub installation_id: Option<String>,
     pub descriptor: scryer_plugin_sdk::PluginDescriptor,
     pub wasm_bytes: Vec<u8>,
     pub first_party: bool,
+    /// Installation-scoped values; never serialized with the public descriptor.
+    pub settings: std::collections::BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for RuntimePluginLoad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimePluginLoad")
+            .field("plugin_id", &self.descriptor.id)
+            .field("first_party", &self.first_party)
+            .field("setting_count", &self.settings.len())
+            .finish_non_exhaustive()
+    }
 }
 
 pub trait DownloadClientPluginProvider: Send + Sync {
@@ -9806,6 +10238,33 @@ pub trait SubtitlePluginProvider: Send + Sync {
     fn builtin_provider_types(&self) -> Vec<String> {
         vec![]
     }
+    fn builtin_descriptor_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
+        None
+    }
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if !settings.is_empty() {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.restore_builtin_plugin(provider_type)
+    }
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        if settings.values().any(|values| !values.is_empty()) {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.reload_runtime_plugins(runtime_plugins, disabled_builtins)
+    }
     fn plugin_version_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
@@ -9863,6 +10322,37 @@ pub trait ArchiveExtractorClient: Send + Sync {
         &self,
         request: ArchivePluginProcessRequest,
     ) -> AppResult<ArchivePluginProcessResponse>;
+
+    async fn process_with_limits(
+        &self,
+        request: ArchivePluginProcessRequest,
+        _limits: scryer_plugin_sdk::ArchiveExtractionLimits,
+    ) -> AppResult<ArchivePluginProcessResponse> {
+        self.process(request).await
+    }
+
+    /// Execution time excludes coordinator admission when the host owns a gate.
+    async fn process_with_budget(
+        &self,
+        request: ArchivePluginProcessRequest,
+        limits: scryer_plugin_sdk::ArchiveExtractionLimits,
+        budget: std::time::Duration,
+    ) -> AppResult<(ArchivePluginProcessResponse, std::time::Duration)> {
+        let started = tokio::time::Instant::now();
+        let response = tokio::time::timeout(budget, self.process_with_limits(request, limits))
+            .await
+            .map_err(|_| {
+                AppError::archive_extraction_timed_out("archive execution budget exhausted")
+            })??;
+        Ok((response, started.elapsed()))
+    }
+}
+
+#[derive(Clone)]
+pub struct ArchiveExtractorSelection {
+    pub installation_id: Option<String>,
+    pub client: Arc<dyn ArchiveExtractorClient>,
+    pub passwords: crate::import::archive_passwords::ArchivePasswordCandidates,
 }
 
 pub trait ArchiveExtractorPluginProvider: Send + Sync {
@@ -9871,6 +10361,20 @@ pub trait ArchiveExtractorPluginProvider: Send + Sync {
         format: ArchivePluginFormat,
     ) -> Option<Arc<dyn ArchiveExtractorClient>>;
 
+    /// A pinned client and its own installation-scoped password snapshot.
+    fn select_for_format(
+        &self,
+        format: ArchivePluginFormat,
+    ) -> AppResult<Option<ArchiveExtractorSelection>> {
+        Ok(self
+            .client_for_format(format)
+            .map(|client| ArchiveExtractorSelection {
+                installation_id: None,
+                client,
+                passwords: Default::default(),
+            }))
+    }
+
     fn available_provider_types(&self) -> Vec<String>;
 
     fn upsert_runtime_plugin(&self, plugin: RuntimePluginLoad) -> Result<(), String> {
@@ -9878,8 +10382,8 @@ pub trait ArchiveExtractorPluginProvider: Send + Sync {
         Err("this provider does not support runtime-load upsert".to_string())
     }
 
-    fn remove_runtime_plugin(&self, provider_type: &str) -> Result<(), String> {
-        let _ = provider_type;
+    fn remove_runtime_plugin(&self, installation_id: &str) -> Result<(), String> {
+        let _ = installation_id;
         Err("this provider does not support runtime-load removal".to_string())
     }
 
@@ -10002,6 +10506,14 @@ pub enum DownloadClientObservation {
         reason: String,
         next_history_offset: usize,
     },
+}
+
+/// Metadata for terminal payload cleanup, never for import admission.
+#[derive(Clone, Debug)]
+pub struct DownloadCleanupPayload {
+    pub download: CompletedDownload,
+    /// Additional paths an entry-removal RPC can delete regardless of its data flag.
+    pub native_delete_paths: Vec<String>,
 }
 
 /// Persistent automatic cleanup, separate from the import outcome.
@@ -10566,6 +11078,22 @@ pub trait DownloadClient: Send + Sync {
         .await
     }
 
+    /// Cleanup-only lookup. Failed jobs must not enter completed-download discovery.
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<DownloadCleanupPayload>> {
+        Ok(self
+            .get_completed_download_for_source(client_id, client_type, download_client_item_id)
+            .await?
+            .map(|download| DownloadCleanupPayload {
+                download,
+                native_delete_paths: Vec::new(),
+            }))
+    }
+
     /// Fetch a single completed download by its client-scoped source
     /// reference.
     ///
@@ -10625,6 +11153,25 @@ pub trait DownloadClient: Send + Sync {
 
     async fn resume_queue_item_for_client(&self, _client_id: &str, id: &str) -> AppResult<()> {
         self.resume_queue_item(id).await
+    }
+
+    /// Retry an existing failed job once. An uncertain result must be reconciled,
+    /// never replayed automatically or replaced with a fresh submission.
+    async fn retry_failed_job(
+        &self,
+        _id: &str,
+        _password: &str,
+    ) -> AppResult<crate::DownloadClientRetryOutcome> {
+        Ok(crate::DownloadClientRetryOutcome::Refused)
+    }
+
+    async fn retry_failed_job_for_client(
+        &self,
+        _client_id: &str,
+        id: &str,
+        password: &str,
+    ) -> AppResult<crate::DownloadClientRetryOutcome> {
+        self.retry_failed_job(id, password).await
     }
 
     /// Remove one item from the client.

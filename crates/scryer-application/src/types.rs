@@ -2580,6 +2580,12 @@ pub enum IndexerSearchOutcome {
     /// caps, or plugin changes, so convergence records it under a fingerprint
     /// that includes the provider's declared capabilities.
     Unsupported,
+    /// The indexer was left out because it is in an operational backoff after
+    /// recent failures. Nothing was sent. Only a raw text search reports it,
+    /// so the operator can see why an indexer stayed silent.
+    BackedOff {
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    },
     Errored,
 }
 
@@ -2612,6 +2618,23 @@ pub struct IndexerSearchResponse {
     /// (empty or not), were skipped/deferred, or errored. Empty for synthetic or
     /// no-eligible-indexer responses.
     pub indexer_outcomes: Vec<IndexerQueryOutcome>,
+    /// Where a paged indexer strategy resumes: set when the provider has more
+    /// pages than this response read. `None` once the provider is exhausted,
+    /// and always `None` from an indexer that does not page by cursor.
+    pub next_cursor: Option<String>,
+}
+
+/// An operator's raw text search (Prowlarr's manual search): the query as
+/// typed with no facet, ids or structured coordinates, the operator's own
+/// categories (empty sends none) and results left unfiltered by title.
+#[derive(Clone, Debug, Default)]
+pub struct RawTextSearchRequest {
+    pub query: String,
+    pub categories: Vec<String>,
+    /// Only these enabled indexers; `None` asks every enabled one.
+    pub indexer_ids: Option<std::collections::HashSet<String>>,
+    /// Page size each indexer is asked for.
+    pub limit: Option<u32>,
 }
 
 /// One complete effective search strategy submitted to a plan-capable indexer.
@@ -2635,6 +2658,14 @@ pub struct IndexerSearchStrategyRequest {
     /// Where the previous successful RSS poll of this indexer stopped. Set only
     /// on an RSS strategy the scheduler holds a marker for.
     pub rss_catch_up: Option<IndexerRssCatchUp>,
+    /// Where a paged indexer resumes this strategy: the `next_cursor` of an
+    /// earlier response to the same strategy. `None` starts from the first
+    /// page.
+    pub page_cursor: Option<String>,
+    /// The most provider pages a paged indexer reads for this strategy in one
+    /// call. `None` reads on until the request's result limit or the end of
+    /// the provider's results.
+    pub page_budget: Option<u32>,
 }
 
 /// The newest release the scheduler recorded on an indexer's previous
@@ -3041,6 +3072,15 @@ pub struct WebauthnCredentialRecord {
     pub friendly_name: Option<String>,
     pub created_at: String,
     pub last_used_at: Option<String>,
+}
+
+/// How many users have registered a passkey, and how many of those have no
+/// other second factor (no TOTP), so a passkey is the only way they can finish
+/// signing in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PasskeyEnrollmentCounts {
+    pub users_with_passkeys: i64,
+    pub passkey_only_users: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3677,17 +3717,13 @@ pub fn derive_primary_quality_label(
     quality_label: Option<&str>,
     resolution: Option<&str>,
 ) -> Option<String> {
-    // Use the scan's dimension thresholds so cropped HD files keep their quality tier.
+    // Use the scan's dimension thresholds for every quality tier.
     match crate::media::release_labels::quality_from_video_dimensions(video_width, video_height) {
         Some("2160p") => return Some("4K".to_string()),
-        Some(quality @ ("4320p" | "1440p" | "1080p" | "720p")) => {
+        Some(quality) => {
             return Some(quality.to_string());
         }
-        _ => {}
-    }
-    // Preserve exact-height labels for SD and other non-HD dimensions.
-    if let Some(height) = video_height.filter(|height| *height > 0) {
-        return Some(format!("{height}p"));
+        None => {}
     }
     quality_label
         .map(str::trim)
@@ -3706,16 +3742,47 @@ mod primary_quality_label_tests {
             (1916, 1076, "1080p"),
             (1920, 1088, "1080p"),
             (1920, 800, "1080p"),
+            (1916, 800, "1080p"),
             (1280, 720, "720p"),
             (1276, 716, "720p"),
+            (1276, 536, "720p"),
+            (2556, 1068, "1440p"),
+            (2560, 1080, "1440p"),
             (2560, 1440, "1440p"),
             (3836, 2156, "4K"),
+            (3836, 1600, "4K"),
             (7680, 4320, "4320p"),
+            (720, 576, "576p"),
+            (854, 480, "480p"),
+            (640, 360, "480p"),
         ] {
             assert_eq!(
                 derive_primary_quality_label(Some(width), Some(height), Some("720p"), None),
                 Some(expected.to_string()),
                 "dimensions {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn unclassified_dimensions_use_stored_metadata_without_literal_height_labels() {
+        for (width, height) in [
+            (None, Some(536)),
+            (Some(0), Some(360)),
+            (Some(-1), Some(360)),
+            (None, None),
+        ] {
+            assert_eq!(
+                derive_primary_quality_label(width, height, Some(" 720p "), Some("1080p")),
+                Some("720p".into())
+            );
+            assert_eq!(
+                derive_primary_quality_label(width, height, Some(" "), Some(" 360p ")),
+                Some("360p".into())
+            );
+            assert_eq!(
+                derive_primary_quality_label(width, height, None, None),
+                None
             );
         }
     }
@@ -4195,13 +4262,84 @@ impl UiTableViewMode {
     }
 }
 
+/// The class of screen a catalog layout was chosen on; each keeps its own layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum UiDeviceClass {
+    #[default]
+    Desktop,
+    Mobile,
+}
+
+impl UiDeviceClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "desktop" => Some(Self::Desktop),
+            "mobile" => Some(Self::Mobile),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UiCatalogViewMode {
+    Compact,
+    PosterTable,
+    Poster,
+}
+
+impl UiCatalogViewMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::PosterTable => "poster-table",
+            Self::Poster => "poster",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "compact" => Some(Self::Compact),
+            "poster-table" => Some(Self::PosterTable),
+            "poster" => Some(Self::Poster),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiTableColumnSetting {
+    pub device_class: UiDeviceClass,
     pub facet: UiSettingsFacet,
     pub table_view_mode: UiTableViewMode,
     pub column_id: String,
     pub column_order: i32,
     pub visible: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiCatalogViewSetting {
+    pub device_class: UiDeviceClass,
+    pub facet: UiSettingsFacet,
+    pub view_mode: UiCatalogViewMode,
+}
+
+/// Saves one device class and facet's catalog layout without touching the others.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiCatalogViewUpdate {
+    pub device_class: UiDeviceClass,
+    pub facet: UiSettingsFacet,
+    /// `None` keeps the stored view mode.
+    pub view_mode: Option<UiCatalogViewMode>,
+    /// `None` keeps the stored columns; a list replaces every column row of this
+    /// device class and facet.
+    pub columns: Option<Vec<UiTableColumnSetting>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4217,7 +4355,10 @@ pub struct UiSettings {
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
+    /// Interface language code chosen by the user; `None` follows the browser.
+    pub language: Option<String>,
     pub table_columns: Vec<UiTableColumnSetting>,
+    pub catalog_views: Vec<UiCatalogViewSetting>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -4234,7 +4375,10 @@ pub struct UiSettingsUpdate {
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
-    pub table_columns: Vec<UiTableColumnSetting>,
+    /// `None` keeps the stored language; `Some(None)` clears it.
+    pub language: Option<Option<String>>,
+    /// `None` keeps the stored columns; a list replaces all of them.
+    pub table_columns: Option<Vec<UiTableColumnSetting>>,
 }
 
 impl UiSettings {
@@ -4251,7 +4395,9 @@ impl UiSettings {
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),
+            language: None,
             table_columns: Vec::new(),
+            catalog_views: Vec::new(),
             created_at: None,
             updated_at: None,
         }

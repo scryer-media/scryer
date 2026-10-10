@@ -1017,8 +1017,14 @@ impl AppUseCase {
         } else {
             MediaFileDiskDeletion::Keep
         };
+        let promotion_scope = self.primary_promotion_scope(&media_file).await;
         self.delete_media_file_authorized(actor, media_file, disk_deletion)
-            .await
+            .await?;
+        if let Some(scope) = promotion_scope {
+            self.promote_sole_additional_media_file(&DomainEventActor::from(actor), &scope)
+                .await;
+        }
+        Ok(())
     }
 
     /// Delete one media file's disk paths (per `disk_deletion`) and catalog
@@ -1309,6 +1315,7 @@ impl AppUseCase {
         // only unmonitored when every one of its requested files is gone.
         let mut deleted_episode_ids = std::collections::BTreeSet::new();
         let mut failed_episode_ids = std::collections::BTreeSet::new();
+        let mut promotions = PrimaryPromotionBatch::default();
 
         for item in &items {
             let _ = self
@@ -1340,6 +1347,8 @@ impl AppUseCase {
                 });
                 continue;
             }
+            self.record_primary_promotion_candidate(&mut promotions, &title_id, &item.file_id)
+                .await;
             match self
                 .delete_preapproved_media_file(&actor, &item.file_id, delete_from_disk)
                 .await
@@ -1364,6 +1373,9 @@ impl AppUseCase {
                 }
             }
         }
+
+        self.finish_primary_promotion_batch(&actor_event, promotions)
+            .await;
 
         let fully_deleted_episode_ids = deleted_episode_ids
             .difference(&failed_episode_ids)
@@ -1711,6 +1723,360 @@ impl AppUseCase {
             .media_files
             .delete_media_file(file_id)
             .await
+    }
+}
+
+/// What a Primary episode file covered, captured before it leaves the
+/// catalog so a sole remaining Additional file for the same episodes can take
+/// its place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PrimaryPromotionScope {
+    deleted_file_id: String,
+    title_id: String,
+    /// Every episode the deleted file was linked to.
+    episode_ids: std::collections::BTreeSet<String>,
+    /// The episodes it was Primary for.
+    primary_episode_ids: std::collections::BTreeSet<String>,
+}
+
+impl AppUseCase {
+    /// Record what `media_file` is Primary for, or `None` when it is not
+    /// Primary for anything automatic promotion may act on. A failed read
+    /// only skips the later promotion; it never affects the delete.
+    async fn primary_promotion_scope(
+        &self,
+        media_file: &TitleMediaFile,
+    ) -> Option<PrimaryPromotionScope> {
+        let title_rows = match self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&media_file.title_id)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    file_id = %media_file.id,
+                    "skipping primary promotion: could not read the title's media files"
+                );
+                return None;
+            }
+        };
+        let series_movie_episode_ids = self
+            .series_movie_linked_episode_ids(&media_file.title_id)
+            .await;
+        primary_promotion_scope_from_rows(
+            &title_rows,
+            series_movie_episode_ids.as_ref(),
+            &media_file.title_id,
+            &media_file.id,
+        )
+    }
+
+    /// The episodes a series movie of `title_id` is linked to, or `None` when
+    /// the links could not be read, which then blocks automatic promotion.
+    pub(crate) async fn series_movie_linked_episode_ids(
+        &self,
+        title_id: &str,
+    ) -> Option<std::collections::BTreeSet<String>> {
+        match self
+            .services
+            .catalog
+            .shows
+            .list_series_movie_links_for_title(title_id)
+            .await
+        {
+            Ok(links) => Some(
+                links
+                    .into_iter()
+                    .filter_map(|link| link.linked_episode_id)
+                    .collect(),
+            ),
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    "skipping primary promotion: could not read the title's series movie links"
+                );
+                None
+            }
+        }
+    }
+
+    /// Capture what `file_id` is Primary for before a batch removes its row.
+    /// The title's rows are read once per batch, before its first removal, and
+    /// a scope is kept only when another file is Additional for part of it.
+    pub(crate) async fn record_primary_promotion_candidate(
+        &self,
+        batch: &mut PrimaryPromotionBatch,
+        title_id: &str,
+        file_id: &str,
+    ) {
+        if !batch.rows_by_title.contains_key(title_id) {
+            let rows = match self
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(title_id)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    warn!(
+                        error = %error,
+                        title_id = %title_id,
+                        "skipping primary promotion: could not read the title's media files"
+                    );
+                    Vec::new()
+                }
+            };
+            let series_movie_episode_ids = self.series_movie_linked_episode_ids(title_id).await;
+            batch
+                .rows_by_title
+                .insert(title_id.to_string(), (rows, series_movie_episode_ids));
+        }
+        let (rows, series_movie_episode_ids) = &batch.rows_by_title[title_id];
+        if let Some(scope) = primary_promotion_scope_from_rows(
+            rows,
+            series_movie_episode_ids.as_ref(),
+            title_id,
+            file_id,
+        )
+        .filter(|scope| scope.has_additional_candidate(rows))
+        {
+            batch.scopes.push(scope);
+        }
+    }
+
+    /// Evaluate promotion once for every scope a finished batch recorded.
+    /// Returns the episodes that got a Primary file back.
+    pub(crate) async fn finish_primary_promotion_batch(
+        &self,
+        actor: &DomainEventActor,
+        batch: PrimaryPromotionBatch,
+    ) -> std::collections::BTreeSet<String> {
+        let mut promoted_episode_ids = std::collections::BTreeSet::new();
+        for scope in &batch.scopes {
+            if self.promote_sole_additional_media_file(actor, scope).await {
+                promoted_episode_ids.extend(scope.primary_episode_ids.iter().cloned());
+            }
+        }
+        promoted_episode_ids
+    }
+}
+
+/// Primary files removed during one batch (a bulk delete, a scan's stale
+/// cleanup, housekeeping), so the sole remaining Additional file is promoted
+/// once after the batch rather than after each removal.
+#[derive(Default)]
+pub(crate) struct PrimaryPromotionBatch {
+    rows_by_title: std::collections::HashMap<
+        String,
+        (
+            Vec<TitleMediaFile>,
+            Option<std::collections::BTreeSet<String>>,
+        ),
+    >,
+    scopes: Vec<PrimaryPromotionScope>,
+}
+
+/// The one gate for automatic promotion, after a delete and in a scan: the
+/// rows of `file_id` and the episodes they cover when the file is positively
+/// an ordinary episode file, or `None` otherwise.
+///
+/// It is an allow-list. A file qualifies only when every row of it is linked
+/// to an episode, it has no series movie link, and none of its episodes is
+/// the linked episode of a series movie (`series_movie_episode_ids`; `None`
+/// when those links could not be read, which qualifies nothing). Movie
+/// files, series movie files and anything else keep their Additional file as
+/// it is until the operator chooses a Primary.
+pub(crate) fn ordinary_episode_file_rows<'a>(
+    title_rows: &'a [TitleMediaFile],
+    series_movie_episode_ids: Option<&std::collections::BTreeSet<String>>,
+    file_id: &str,
+) -> Option<(Vec<&'a TitleMediaFile>, std::collections::BTreeSet<String>)> {
+    let series_movie_episode_ids = series_movie_episode_ids?;
+    let rows = title_rows
+        .iter()
+        .filter(|row| row.id == file_id)
+        .collect::<Vec<_>>();
+    if rows.is_empty()
+        || rows
+            .iter()
+            .any(|row| row.episode_id.is_none() || !row.series_movie_link_ids.is_empty())
+    {
+        return None;
+    }
+    let episode_ids = rows
+        .iter()
+        .filter_map(|row| row.episode_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    if episode_ids
+        .iter()
+        .any(|episode_id| series_movie_episode_ids.contains(episode_id))
+    {
+        return None;
+    }
+    Some((rows, episode_ids))
+}
+
+/// What `file_id` is Primary for, read from the title's rows, or `None` when
+/// automatic promotion must leave its scope alone (see
+/// [`ordinary_episode_file_rows`]).
+fn primary_promotion_scope_from_rows(
+    title_rows: &[TitleMediaFile],
+    series_movie_episode_ids: Option<&std::collections::BTreeSet<String>>,
+    title_id: &str,
+    file_id: &str,
+) -> Option<PrimaryPromotionScope> {
+    let (rows, episode_ids) =
+        ordinary_episode_file_rows(title_rows, series_movie_episode_ids, file_id)?;
+    let primary_episode_ids = rows
+        .iter()
+        .filter(|row| row.role.is_primary())
+        .filter_map(|row| row.episode_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    if primary_episode_ids.is_empty() {
+        return None;
+    }
+
+    Some(PrimaryPromotionScope {
+        deleted_file_id: file_id.to_string(),
+        title_id: title_id.to_string(),
+        episode_ids,
+        primary_episode_ids,
+    })
+}
+
+impl PrimaryPromotionScope {
+    /// Whether another file holds an Additional row for part of this scope.
+    /// A coarse pre-check only; promotion re-reads and decides on fresh rows.
+    fn has_additional_candidate(&self, title_rows: &[TitleMediaFile]) -> bool {
+        title_rows
+            .iter()
+            .filter(|row| row.id != self.deleted_file_id && !row.role.is_primary())
+            .any(|row| {
+                row.episode_id
+                    .as_ref()
+                    .is_some_and(|episode_id| self.episode_ids.contains(episode_id))
+            })
+    }
+}
+
+impl AppUseCase {
+    /// After the Primary episode file described by `scope` was removed, make
+    /// the one Additional file left for exactly the same episodes Primary.
+    /// Zero or several remaining files, or one that covers a different set of
+    /// episodes or is itself a series movie file, leave every role as it is.
+    /// The store applies the change only if no Primary has appeared for those
+    /// episodes in the meantime, and it never demotes anything. Only catalog
+    /// roles change; nothing on disk is touched. Failures are logged, because
+    /// the delete itself has already completed. Returns whether it promoted.
+    async fn promote_sole_additional_media_file(
+        &self,
+        actor: &DomainEventActor,
+        scope: &PrimaryPromotionScope,
+    ) -> bool {
+        match self
+            .try_promote_sole_additional_media_file(actor, scope)
+            .await
+        {
+            Ok(promoted) => promoted,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %scope.title_id,
+                    deleted_file_id = %scope.deleted_file_id,
+                    "failed to promote the remaining additional media file to primary"
+                );
+                false
+            }
+        }
+    }
+
+    async fn try_promote_sole_additional_media_file(
+        &self,
+        actor: &DomainEventActor,
+        scope: &PrimaryPromotionScope,
+    ) -> AppResult<bool> {
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::MEDIA_FILE_PRIMARY_ENTRY,
+                &scope.title_id,
+            )
+            .await?;
+        let media_files = &self.services.library.media_files;
+        if media_files
+            .get_media_file_by_id(&scope.deleted_file_id)
+            .await?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        let Some(title) = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&scope.title_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let rows = media_files.list_media_files_for_title(&title.id).await?;
+        let mut candidate_ids = rows
+            .iter()
+            .filter(|row| {
+                row.episode_id
+                    .as_ref()
+                    .is_some_and(|episode_id| scope.episode_ids.contains(episode_id))
+            })
+            .map(|row| row.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter();
+        let candidate_id = match (candidate_ids.next(), candidate_ids.next()) {
+            (Some(file_id), None) => file_id.to_string(),
+            _ => return Ok(false),
+        };
+        let candidate_rows = rows
+            .iter()
+            .filter(|row| row.id == candidate_id)
+            .collect::<Vec<_>>();
+        let candidate_episode_ids = candidate_rows
+            .iter()
+            .filter_map(|row| row.episode_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let candidate_is_episode_file = candidate_rows
+            .iter()
+            .all(|row| row.episode_id.is_some() && row.series_movie_link_ids.is_empty());
+        if candidate_episode_ids != scope.episode_ids || !candidate_is_episode_file {
+            return Ok(false);
+        }
+        let primary_episode_ids = scope
+            .primary_episode_ids
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        if !media_files
+            .promote_sole_additional_media_file_for_episodes(
+                &title.id,
+                &candidate_id,
+                &primary_episode_ids,
+            )
+            .await?
+        {
+            return Ok(false);
+        }
+        info!(
+            title_id = %title.id,
+            deleted_file_id = %scope.deleted_file_id,
+            promoted_file_id = %candidate_id,
+            "promoted the remaining additional episode file to primary"
+        );
+        self.emit_title_updated_activity(actor.clone(), &title)
+            .await;
+        Ok(true)
     }
 }
 impl AppUseCase {

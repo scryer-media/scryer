@@ -853,6 +853,11 @@ pub(crate) async fn run_claimed_download_cleanup(
         &record.item_id,
     );
     let result = async {
+        if app.services.workflow.imports.archive_processing_pending_for_download(&record.download_id).await? {
+            finish_cleanup_attempt(app, &record, "cleanup_deferred", false, record.history_offset,
+                Some("archive or subtitle delivery is pending; sources preserved")).await;
+            return Ok(None);
+        }
         let persisted = app.services.workflow.download_submissions
             .get_identity_tracked_state_for_download(
                 Some(&record.download_id), &crate::DownloadSubmissionIdentity::default(), Some(&locator),
@@ -954,7 +959,7 @@ pub(crate) async fn run_claimed_download_cleanup(
                 let payload_removed = if host_payload_in_flight {
                     match remove_host_payload_before_entry_cleanup(
                         app, Some(&record.download_id), &record.client_id, &record.client_type,
-                        &record.item_id, Some(&record),
+                        &record.item_id, Some(&record), None,
                     ).await {
                         Ok(report) => {
                             if let Some(marker) = report.filesystem_checkpoint.as_deref()
@@ -1051,7 +1056,9 @@ pub(crate) async fn run_claimed_download_cleanup(
                 && !(active.as_ref().is_some_and(|binding| binding.download_id == record.download_id)
                     && (torrent_hash_matches == Some(true)
                         || record.source_title.as_deref().is_some_and(|name|
-                            cleanup_job_names_match(name, &item.title_name)))))
+                            cleanup_job_names_match(name, &item.title_name)
+                                || (record.client_type == "sabnzbd"
+                                    && cleanup_sab_job_names_match(name, &item.title_name))))))
         {
             return Err(AppError::Validation("cleanup locator is reused or identity is ambiguous".into()));
         }
@@ -1198,6 +1205,25 @@ pub(crate) fn cleanup_job_names_match(source_title: &str, job_name: &str) -> boo
     }
     let source = words(source_title);
     !source.is_empty() && source == words(job_name)
+}
+
+fn cleanup_sab_job_names_match(source_title: &str, job_name: &str) -> bool {
+    let sanitize = |name: &str| -> String {
+        name.trim()
+            .trim_end_matches(['.', ' '])
+            .chars()
+            .map(|ch| {
+                if ch.is_control()
+                    || matches!(ch, '/' | '\\' | ':' | '"' | '*' | '?' | '<' | '>' | '|')
+                {
+                    '_'
+                } else {
+                    ch
+                }
+            })
+            .collect()
+    };
+    cleanup_job_names_match(&sanitize(source_title), &sanitize(job_name))
 }
 
 pub(crate) const CLEANUP_UNATTRIBUTED: &str = "cleanup has no valid routing attribution";

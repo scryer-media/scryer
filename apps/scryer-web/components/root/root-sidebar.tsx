@@ -45,6 +45,7 @@ import {
   FolderCog,
   Heart,
   Inbox,
+  ListPlus,
   MessagesSquare,
   Monitor,
   Moon,
@@ -56,6 +57,7 @@ import {
   Wrench,
   ShieldCheck,
   SlidersHorizontal,
+  SquareTerminal,
   Sun,
   Tag,
   TextSearch,
@@ -78,7 +80,7 @@ import {
   uiSettingsInputFromSettings,
 } from "@/lib/context/ui-settings-context";
 import type { AuthUser } from "@/lib/hooks/use-auth";
-import type { UiSettings } from "@/lib/types/settings";
+import type { SetMyUiSettingsInput, UiSettings } from "@/lib/types/settings";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
@@ -289,6 +291,8 @@ const DEFAULT_SETTINGS_SECTION_ORDER: SettingsSection[] = [
   "delayProfiles",
   "titleTags",
   "plugins",
+  "scripts",
+  "listProviderApps",
 ];
 const MEDIA_NAV_VIEW_IDS: ViewId[] = ["movies", "series", "anime"];
 
@@ -427,9 +431,21 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
+    id: "listProviderApps",
+    label: (t) => t("lists.providerApps.settingsLabel"),
+    icon: ListPlus,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
+  },
+  {
     id: "plugins",
     label: (t) => t("settings.plugins"),
     icon: Puzzle,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
+  },
+  {
+    id: "scripts",
+    label: (t) => t("settings.scripts"),
+    icon: SquareTerminal,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {
@@ -465,6 +481,8 @@ const SETTINGS_NAV_GROUPS: Array<{
       "delayProfiles",
       "titleTags",
       "plugins",
+      "scripts",
+      "listProviderApps",
     ],
   },
 ];
@@ -705,7 +723,7 @@ function RootSidebarContent({
     const next: UiSettings = { ...uiSettings, theme: toUiThemeValue(nextTheme) };
     setUiSettings(next);
     void client
-      .mutation<{ setMyUiSettings?: UiSettings }, { input: UiSettings }>(
+      .mutation<{ setMyUiSettings?: UiSettings }, { input: SetMyUiSettingsInput }>(
         setMyUiSettingsMutation,
         { input: uiSettingsInputFromSettings(next) },
       )
@@ -715,7 +733,7 @@ function RootSidebarContent({
         if (result.error || !result.data?.setMyUiSettings) {
           setUiSettings(previous);
           setTheme(fromUiThemeValue(previous.theme));
-          setGlobalStatus(result.error?.message ?? t("status.failedToUpdate"));
+          setGlobalStatus(result.error?.message ?? t("status.failedToUpdate"), { level: "ERROR" });
           return;
         }
         setUiSettings(result.data.setMyUiSettings);
@@ -726,6 +744,7 @@ function RootSidebarContent({
         setTheme(fromUiThemeValue(previous.theme));
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       });
   }, [
@@ -789,7 +808,7 @@ function RootSidebarContent({
           // Maintenance and request rules are still being finished, so their
           // shortcuts are offered only when the instance has opted in. The
           // permission each already required still applies on top.
-          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules") ||
+          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules" && entry.id !== "listProviderApps") ||
             experimentalFeaturesEnabled) &&
           (!entry.requiredAnyAppPermission ||
             hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
@@ -825,7 +844,7 @@ function RootSidebarContent({
           (!MEDIA_NAV_VIEW_IDS.includes(item.id) || canAccessMediaTopNav) &&
           (item.id !== "calendar" || canViewCatalog) &&
           (item.id !== "lists" ||
-            canAccessListsPage(canViewCatalog, canManageLists, experimentalFeaturesEnabled)) &&
+            canAccessListsPage(canViewCatalog || hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) || canManageTitle, canManageLists || canManageSystemSettings, experimentalFeaturesEnabled)) &&
           (item.id !== "wanted" || canViewCatalog) &&
           (item.id !== "dashboard" || canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&
@@ -840,6 +859,7 @@ function RootSidebarContent({
       canResolveImports,
       canViewCatalog,
       topNav,
+      user,
     ],
   );
   const groupedTopNav = React.useMemo<TopNavGroup[]>(() => {

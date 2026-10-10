@@ -181,6 +181,13 @@ pub async fn stage_nzb_from_bytes(
     .await
 }
 
+/// Stage an NZB body, inflating it first when it arrives compressed.
+///
+/// Some indexers serve stored `.nzb.gz` files as a plain download (no
+/// `Content-Encoding`), so the HTTP client never decodes them. The body's
+/// leading bytes decide: gzip, zlib and zstd are inflated inline, and the
+/// decompressed NZB goes through the same size cap, category gate and XML
+/// validation as a plain one.
 async fn stage_nzb_from_stream<S, B, E>(
     stream: S,
     store: &Arc<dyn StagedNzbStore>,
@@ -191,9 +198,291 @@ async fn stage_nzb_from_stream<S, B, E>(
     cancellation: &CancellationToken,
 ) -> AppResult<StagedNzbLease>
 where
+    S: Stream<Item = Result<B, E>> + Unpin + Send,
+    B: AsRef<[u8]> + Send,
+    E: std::fmt::Display,
+{
+    let (packaging, head, rest) = sniff_nzb_stream(stream, cancellation).await?;
+    let raw = futures_util::stream::iter(head.into_iter().map(Ok))
+        .chain(rest.map(|chunk| chunk.map_err(body_read_failed)));
+    match packaging {
+        NzbPackaging::Plain => {
+            stage_validated_nzb_stream(
+                raw,
+                store,
+                pipeline_limit,
+                source_label,
+                title_id,
+                expected_facet,
+                cancellation,
+            )
+            .await
+        }
+        NzbPackaging::Compressed(compression) => {
+            stage_validated_nzb_stream(
+                Box::pin(decode_nzb_stream(compression, raw)),
+                store,
+                pipeline_limit,
+                source_label,
+                title_id,
+                expected_facet,
+                cancellation,
+            )
+            .await
+        }
+        NzbPackaging::Unsupported(format) => Err(unsupported_packaging(format)),
+    }
+}
+
+/// How a downloaded NZB body is packaged, judged from its leading bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NzbPackaging {
+    /// Not a recognised compression; XML validation decides what it is.
+    Plain,
+    /// A stream compression inflated inline before validation.
+    Compressed(NzbCompression),
+    /// A compression or archive format staging does not open.
+    Unsupported(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NzbCompression {
+    Gzip,
+    Zlib,
+    Zstd,
+}
+
+impl NzbCompression {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Gzip => "gzip",
+            Self::Zlib => "zlib",
+            Self::Zstd => "zstd",
+        }
+    }
+}
+
+/// Leading-byte signatures, longest first where one could prefix another.
+/// Archive containers (xz, zip, 7z, RAR) and bzip2 are recognised only to
+/// refuse them with a clear message.
+const NZB_PACKAGING_SIGNATURES: &[(&[u8], NzbPackaging)] = &[
+    (
+        &[0x1f, 0x8b],
+        NzbPackaging::Compressed(NzbCompression::Gzip),
+    ),
+    (
+        &[0x78, 0x01],
+        NzbPackaging::Compressed(NzbCompression::Zlib),
+    ),
+    (
+        &[0x78, 0x5e],
+        NzbPackaging::Compressed(NzbCompression::Zlib),
+    ),
+    (
+        &[0x78, 0x9c],
+        NzbPackaging::Compressed(NzbCompression::Zlib),
+    ),
+    (
+        &[0x78, 0xda],
+        NzbPackaging::Compressed(NzbCompression::Zlib),
+    ),
+    (
+        &[0x28, 0xb5, 0x2f, 0xfd],
+        NzbPackaging::Compressed(NzbCompression::Zstd),
+    ),
+    (b"BZh", NzbPackaging::Unsupported("bzip2")),
+    (
+        &[0xfd, b'7', b'z', b'X', b'Z', 0x00],
+        NzbPackaging::Unsupported("xz"),
+    ),
+    (b"PK\x03\x04", NzbPackaging::Unsupported("zip")),
+    (
+        &[b'7', b'z', 0xbc, 0xaf, 0x27, 0x1c],
+        NzbPackaging::Unsupported("7z"),
+    ),
+    (b"Rar!\x1a\x07", NzbPackaging::Unsupported("RAR")),
+];
+const NZB_PACKAGING_SNIFF_BYTES: usize = 6;
+
+/// `None` while `prefix` is too short to tell and more bytes may follow.
+fn sniff_nzb_packaging(prefix: &[u8], complete: bool) -> Option<NzbPackaging> {
+    if let Some((_, packaging)) = NZB_PACKAGING_SIGNATURES
+        .iter()
+        .find(|(signature, _)| prefix.starts_with(signature))
+    {
+        return Some(*packaging);
+    }
+    if !complete
+        && NZB_PACKAGING_SIGNATURES
+            .iter()
+            .any(|(signature, _)| signature.starts_with(prefix))
+    {
+        return None;
+    }
+    Some(NzbPackaging::Plain)
+}
+
+/// Read just enough of `stream` to classify its packaging, keeping the
+/// chunks read so the caller can replay them.
+async fn sniff_nzb_stream<S, B, E>(
+    mut stream: S,
+    cancellation: &CancellationToken,
+) -> AppResult<(NzbPackaging, Vec<B>, S)>
+where
     S: Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
     E: std::fmt::Display,
+{
+    let mut head = Vec::new();
+    let mut prefix = Vec::with_capacity(NZB_PACKAGING_SNIFF_BYTES);
+    loop {
+        if let Some(packaging) = sniff_nzb_packaging(&prefix, false) {
+            return Ok((packaging, head, stream));
+        }
+        let next = tokio::select! {
+            _ = cancellation.cancelled() => return cancellation_error(),
+            next = stream.next() => next,
+        };
+        match next {
+            None => {
+                let packaging = sniff_nzb_packaging(&prefix, true).unwrap_or(NzbPackaging::Plain);
+                return Ok((packaging, head, stream));
+            }
+            Some(Err(error)) => return Err(body_read_failed(error)),
+            Some(Ok(chunk)) => {
+                let bytes = chunk.as_ref();
+                let take = NZB_PACKAGING_SNIFF_BYTES
+                    .saturating_sub(prefix.len())
+                    .min(bytes.len());
+                prefix.extend_from_slice(&bytes[..take]);
+                head.push(chunk);
+            }
+        }
+    }
+}
+
+/// A failure that happened before decompression: carried through the
+/// decoder's `io::Error` so it surfaces as itself, not as corrupt input.
+#[derive(Debug)]
+struct RawNzbBodyError(AppError);
+
+impl std::fmt::Display for RawNzbBodyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for RawNzbBodyError {}
+
+/// Inflate `raw` as it streams. The compressed input is capped at
+/// [`MAX_NZB_BYTES`] here; the inflated output is capped by the staging loop
+/// that consumes it, so a decompression bomb stops at the same limit as a
+/// plain oversized NZB.
+fn decode_nzb_stream<'a, S, B>(
+    compression: NzbCompression,
+    raw: S,
+) -> impl Stream<Item = AppResult<Vec<u8>>> + Send + 'a
+where
+    S: Stream<Item = AppResult<B>> + Send + 'a,
+    B: AsRef<[u8]> + Send + 'a,
+{
+    use async_compression::tokio::bufread::{GzipDecoder, ZlibDecoder, ZstdDecoder};
+
+    let mut compressed_bytes = 0u64;
+    let input = raw.map(move |chunk| {
+        let chunk = chunk.map_err(|error| std::io::Error::other(RawNzbBodyError(error)))?;
+        let bytes = chunk.as_ref();
+        compressed_bytes = compressed_bytes.saturating_add(bytes.len() as u64);
+        if compressed_bytes > MAX_NZB_BYTES {
+            return Err(std::io::Error::other(RawNzbBodyError(payload_exceeded(
+                "compressed nzb download",
+            ))));
+        }
+        Ok(Cursor::new(bytes.to_vec()))
+    });
+    let reader = tokio_util::io::StreamReader::new(input);
+    let decoder: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send + 'a>> = match compression {
+        NzbCompression::Gzip => {
+            let mut decoder = GzipDecoder::new(reader);
+            decoder.multiple_members(true);
+            Box::pin(decoder)
+        }
+        NzbCompression::Zlib => Box::pin(ZlibDecoder::new(reader)),
+        NzbCompression::Zstd => {
+            let mut decoder = ZstdDecoder::new(reader);
+            decoder.multiple_members(true);
+            Box::pin(decoder)
+        }
+    };
+    tokio_util::io::ReaderStream::new(decoder).map(move |chunk| {
+        chunk
+            .map(|bytes| bytes.to_vec())
+            .map_err(|error| decoded_chunk_error(compression, error))
+    })
+}
+
+fn decoded_chunk_error(compression: NzbCompression, error: std::io::Error) -> AppError {
+    if !error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<RawNzbBodyError>())
+    {
+        return AppError::Validation(format!(
+            "nzb download payload is {}-compressed but could not be decompressed: {error}",
+            compression.label()
+        ));
+    }
+    match error
+        .into_inner()
+        .map(|inner| inner.downcast::<RawNzbBodyError>())
+    {
+        Some(Ok(raw)) => raw.0,
+        _ => AppError::Repository("nzb download body error was lost while decoding".into()),
+    }
+}
+
+/// Inflate a gzip-, zlib- or zstd-compressed NZB held in memory, such as one
+/// an indexer plugin returned from its own fetch. Any other payload comes back
+/// unchanged for the caller to classify.
+pub(crate) async fn inflate_compressed_nzb(bytes: Vec<u8>) -> AppResult<Vec<u8>> {
+    let Some(NzbPackaging::Compressed(compression)) = sniff_nzb_packaging(&bytes, true) else {
+        return Ok(bytes);
+    };
+    let mut decoded_stream = std::pin::pin!(decode_nzb_stream(
+        compression,
+        futures_util::stream::iter([Ok::<_, AppError>(bytes)]),
+    ));
+    let mut decoded = Vec::new();
+    while let Some(chunk) = decoded_stream.next().await {
+        let chunk = chunk?;
+        if decoded.len().saturating_add(chunk.len()) > MAX_NZB_BYTES as usize {
+            return Err(payload_exceeded("nzb download"));
+        }
+        decoded.extend_from_slice(&chunk);
+    }
+    Ok(decoded)
+}
+
+/// Archive containers need the archive-extractor plugin and a workspace on
+/// disk, which NZB staging does not have; say so rather than reporting the
+/// payload as malformed XML.
+fn unsupported_packaging(format: &str) -> AppError {
+    AppError::Validation(format!(
+        "nzb download payload is a {format} file; only plain, gzip, zlib or zstd NZBs can be staged"
+    ))
+}
+
+async fn stage_validated_nzb_stream<S, B>(
+    stream: S,
+    store: &Arc<dyn StagedNzbStore>,
+    pipeline_limit: &Arc<Semaphore>,
+    source_label: &str,
+    title_id: Option<&str>,
+    expected_facet: Option<&MediaFacet>,
+    cancellation: &CancellationToken,
+) -> AppResult<StagedNzbLease>
+where
+    S: Stream<Item = AppResult<B>> + Unpin,
+    B: AsRef<[u8]>,
 {
     let permit = tokio::select! {
         _ = cancellation.cancelled() => return cancellation_error(),
@@ -231,7 +520,7 @@ where
             };
             let chunk = match chunk {
                 Ok(chunk) => chunk,
-                Err(error) => break Err(body_read_failed(error)),
+                Err(error) => break Err(error),
             };
             let bytes = chunk.as_ref();
             if bytes.is_empty() {
@@ -803,6 +1092,311 @@ mod tests {
             zstd::stream::decode_all(std::io::Cursor::new(compressed)).unwrap(),
             bytes
         );
+    }
+
+    async fn compress(compression: super::NzbCompression, bytes: &[u8]) -> Vec<u8> {
+        use async_compression::tokio::bufread::{GzipEncoder, ZlibEncoder, ZstdEncoder};
+        use tokio::io::AsyncReadExt;
+
+        let mut output = Vec::new();
+        match compression {
+            super::NzbCompression::Gzip => GzipEncoder::new(bytes).read_to_end(&mut output).await,
+            super::NzbCompression::Zlib => ZlibEncoder::new(bytes).read_to_end(&mut output).await,
+            super::NzbCompression::Zstd => ZstdEncoder::new(bytes).read_to_end(&mut output).await,
+        }
+        .expect("compress fixture");
+        output
+    }
+
+    const COMPRESSIONS: [super::NzbCompression; 3] = [
+        super::NzbCompression::Gzip,
+        super::NzbCompression::Zlib,
+        super::NzbCompression::Zstd,
+    ];
+
+    fn staged_bytes(lease: &crate::downloads::clients::StagedNzbLease) -> Vec<u8> {
+        let compressed = std::fs::read(&lease.staged_nzb.compressed_path).expect("staged zstd");
+        zstd::stream::decode_all(std::io::Cursor::new(compressed)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn compressed_nzbs_are_inflated_before_staging() {
+        for compression in COMPRESSIONS {
+            let compressed = compress(compression, &valid_nzb()).await;
+            let tempdir = TempDir::new().unwrap();
+            let store = store(&tempdir).await;
+            let limit = Arc::new(Semaphore::new(1));
+
+            let lease = stage_nzb_from_bytes(
+                &store,
+                &limit,
+                "compressed-bytes",
+                None,
+                Some(&scryer_domain::MediaFacet::Series),
+                &CancellationToken::new(),
+                compressed.clone(),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{compression:?} bytes must stage: {error}"));
+            assert_eq!(staged_bytes(&lease), valid_nzb(), "{compression:?}");
+            drop(lease);
+
+            // The signature split across chunk boundaries still sniffs.
+            let chunks = stream::iter(vec![
+                Ok::<_, std::io::Error>(compressed[..1].to_vec()),
+                Ok(compressed[1..2].to_vec()),
+                Ok(compressed[2..].to_vec()),
+            ]);
+            let lease = stage_nzb_from_stream(
+                chunks,
+                &store,
+                &limit,
+                "compressed-stream",
+                None,
+                None,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{compression:?} stream must stage: {error}"));
+            assert_eq!(staged_bytes(&lease), valid_nzb(), "{compression:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn concatenated_gzip_members_inflate_as_one_nzb() {
+        let nzb = valid_nzb();
+        let (first, second) = nzb.split_at(nzb.len() / 2);
+        let mut members = compress(super::NzbCompression::Gzip, first).await;
+        members.extend(compress(super::NzbCompression::Gzip, second).await);
+        assert_eq!(super::inflate_compressed_nzb(members).await.unwrap(), nzb);
+    }
+
+    #[tokio::test]
+    async fn compressed_nzbs_still_face_the_category_gate_and_xml_validation() {
+        let tempdir = TempDir::new().unwrap();
+        let store = store(&tempdir).await;
+        let limit = Arc::new(Semaphore::new(1));
+        let denied = stage_nzb_from_bytes(
+            &store,
+            &limit,
+            "compressed-category",
+            None,
+            Some(&scryer_domain::MediaFacet::Movie),
+            &CancellationToken::new(),
+            compress(super::NzbCompression::Gzip, &valid_nzb()).await,
+        )
+        .await
+        .err()
+        .expect("category gate must reject the inflated NZB");
+        assert!(matches!(denied, AppError::Validation(_)), "{denied:?}");
+
+        let not_nzb = stage_nzb_from_bytes(
+            &store,
+            &limit,
+            "compressed-html",
+            None,
+            None,
+            &CancellationToken::new(),
+            compress(
+                super::NzbCompression::Zlib,
+                b"<html><body>login</body></html>",
+            )
+            .await,
+        )
+        .await
+        .err()
+        .expect("an inflated non-NZB must reject");
+        assert!(not_nzb.to_string().contains("root element must be <nzb>"));
+        assert!(!contains_partial(tempdir.path()));
+    }
+
+    #[tokio::test]
+    async fn decompression_past_the_nzb_limit_is_refused() {
+        let mut bomb = b"<nzb>".to_vec();
+        bomb.resize(MAX_NZB_BYTES as usize + 1, b' ');
+        bomb.extend_from_slice(b"</nzb>");
+        let compressed = compress(super::NzbCompression::Zstd, &bomb).await;
+        assert!((compressed.len() as u64) < MAX_NZB_BYTES / 100);
+
+        let tempdir = TempDir::new().unwrap();
+        let store = store(&tempdir).await;
+        let error = stage_nzb_from_bytes(
+            &store,
+            &Arc::new(Semaphore::new(1)),
+            "bomb",
+            None,
+            None,
+            &CancellationToken::new(),
+            compressed.clone(),
+        )
+        .await
+        .err()
+        .expect("an NZB inflating past the limit must reject");
+        assert!(
+            matches!(&error, AppError::Validation(message) if message.contains("payload exceeded")),
+            "{error:?}"
+        );
+        assert!(!contains_partial(tempdir.path()));
+
+        let error = super::inflate_compressed_nzb(compressed)
+            .await
+            .expect_err("in-memory inflation is capped too");
+        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn corrupt_compression_and_archives_are_reported_clearly() {
+        let tempdir = TempDir::new().unwrap();
+        let store = store(&tempdir).await;
+        let limit = Arc::new(Semaphore::new(1));
+
+        let mut truncated = compress(super::NzbCompression::Gzip, &valid_nzb()).await;
+        truncated.truncate(truncated.len() / 2);
+        let mut garbled = compress(super::NzbCompression::Zstd, &valid_nzb()).await;
+        let last = garbled.len() - 1;
+        garbled[4..last].iter_mut().for_each(|byte| *byte ^= 0x5a);
+        for (label, payload) in [("gzip", truncated), ("zstd", garbled)] {
+            let error = stage_nzb_from_bytes(
+                &store,
+                &limit,
+                "corrupt",
+                None,
+                None,
+                &CancellationToken::new(),
+                payload,
+            )
+            .await
+            .err()
+            .expect("corrupt compressed payload must reject");
+            assert!(
+                matches!(&error, AppError::Validation(message)
+                    if message.contains(&format!("{label}-compressed"))),
+                "{label}: {error:?}"
+            );
+        }
+
+        for (label, payload) in [
+            ("zip", b"PK\x03\x04synthetic".to_vec()),
+            ("xz", b"\xfd7zXZ\x00synthetic".to_vec()),
+            ("7z", b"7z\xbc\xaf\x27\x1csynthetic".to_vec()),
+            ("RAR", b"Rar!\x1a\x07\x00synthetic".to_vec()),
+            ("bzip2", b"BZh91AY&SYsynthetic".to_vec()),
+        ] {
+            let error = stage_nzb_from_bytes(
+                &store,
+                &limit,
+                "archive",
+                None,
+                None,
+                &CancellationToken::new(),
+                payload,
+            )
+            .await
+            .err()
+            .expect("archive payload must reject");
+            assert!(
+                matches!(&error, AppError::Validation(message)
+                    if message.contains(&format!("a {label} file"))),
+                "{label}: {error:?}"
+            );
+        }
+        assert!(!contains_partial(tempdir.path()));
+    }
+
+    #[tokio::test]
+    async fn a_broken_compressed_body_stays_a_retryable_transport_failure() {
+        let tempdir = TempDir::new().unwrap();
+        let store = store(&tempdir).await;
+        let compressed = compress(super::NzbCompression::Gzip, &valid_nzb()).await;
+        let chunks = stream::iter(vec![
+            Ok::<_, std::io::Error>(compressed[..8].to_vec()),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset",
+            )),
+        ]);
+        let error = stage_nzb_from_stream(
+            chunks,
+            &store,
+            &Arc::new(Semaphore::new(1)),
+            "broken",
+            None,
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .err()
+        .expect("a broken body must reject");
+        assert!(
+            matches!(&error, AppError::DownloadSubmitUnavailable(message)
+                if message.contains("body read failed")),
+            "{error:?}"
+        );
+        assert!(!contains_partial(tempdir.path()));
+    }
+
+    #[tokio::test]
+    async fn plain_and_non_nzb_payloads_pass_through_inflation_unchanged() {
+        for payload in [
+            valid_nzb(),
+            b"d4:infod4:name4:testee".to_vec(),
+            b"x".to_vec(),
+            Vec::new(),
+        ] {
+            assert_eq!(
+                super::inflate_compressed_nzb(payload.clone())
+                    .await
+                    .unwrap(),
+                payload
+            );
+        }
+        let inflated = super::inflate_compressed_nzb(
+            compress(super::NzbCompression::Gzip, &valid_nzb()).await,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            crate::indexers::artifact_transport::classify("fixture", None, None, inflated, None)
+                .unwrap(),
+            scryer_application::ResolvedDownloadArtifact::Nzb { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn gzip_file_served_without_content_encoding_is_staged() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/gzip")
+                    .set_body_bytes(compress(super::NzbCompression::Gzip, &valid_nzb()).await),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let tempdir = TempDir::new().unwrap();
+        let store = store(&tempdir).await;
+        let response = scryer_outbound_http::generic_reqwest_client()
+            .get(format!("{}/nzbs/1/synthetic.nzb.gz", server.uri()))
+            .send()
+            .await
+            .unwrap();
+        let result = super::stage_or_buffer_nzb_response(
+            response,
+            None,
+            &store,
+            &Arc::new(Semaphore::new(1)),
+            "gzip-file",
+            None,
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let super::BufferedOrStagedNzb::Staged(lease) = result else {
+            panic!("a gzip-served NZB must stage");
+        };
+        assert_eq!(staged_bytes(&lease), valid_nzb());
     }
 
     #[tokio::test]

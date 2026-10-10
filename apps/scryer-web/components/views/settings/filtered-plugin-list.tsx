@@ -36,17 +36,20 @@ const FILTERED_PLUGIN_MUTED_CLASS = "text-[var(--scry-muted3)]";
 /** Plugin `pluginType` values that belong to each provider-catalog family. */
 const EMPTY_PLUGIN_TYPES: readonly string[] = [];
 
-const FAMILY_PLUGIN_TYPES: Record<ProviderCatalogFamily, readonly string[]> = {
+type FilteredPluginFamily = ProviderCatalogFamily | "LIST";
+
+const FAMILY_PLUGIN_TYPES: Record<FilteredPluginFamily, readonly string[]> = {
   INDEXER: ["indexer", "usenet_indexer", "torrent_indexer"],
   DOWNLOAD_CLIENT: ["download_client"],
   ARCHIVE_EXTRACTOR: ["archive_extractor"],
   NOTIFICATION: ["notification"],
   SUBTITLE: ["subtitle_provider"],
+  LIST: ["list_provider"],
 };
 
 export type FilteredPluginListProps = {
   /** Plugin family to show + manage (e.g. "indexer"). */
-  family: ProviderCatalogFamily;
+  family: FilteredPluginFamily;
   /** Refreshes provider options after a plugin change so new providers appear. */
   refreshProviderOptions: () => Promise<void>;
   /** Bumps when the provider catalog changes for this panel. */

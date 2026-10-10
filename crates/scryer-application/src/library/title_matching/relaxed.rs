@@ -4,10 +4,11 @@
 use super::{bounded_levenshtein_distance, canonical_lookup_key};
 use scryer_domain::{
     Title,
-    title_normalization::{is_romanization_tag, release_romanization_keys, romanization_key},
+    title_normalization::{release_romanization_keys, romanization_key},
     title_spelling::{
-        SpellingEquivalence, TitleScript, compare_title_spelling, title_script, title_spelling_key,
-        title_spelling_profiles,
+        SpellingEquivalence, TitleScript,
+        compare_title_spelling_for_resolution as compare_title_spelling, title_script,
+        title_spelling_key, title_spelling_profiles,
     },
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -36,6 +37,7 @@ pub(crate) struct SpellingIdentity {
 
 impl SpellingIdentity {
     pub fn new(title: &Title) -> Self {
+        let title = title.with_custom_search_aliases();
         let mut seen = HashSet::new();
         let names = title
             .tagged_aliases
@@ -62,7 +64,9 @@ impl SpellingIdentity {
                     year,
                 }
             })
-            .filter(|name| !name.text.is_empty() && seen.insert(name.key.clone()))
+            .filter(|name| {
+                !name.text.is_empty() && seen.insert((name.key.clone(), name.language.clone()))
+            })
             .collect();
         Self {
             id: title.id.clone(),
@@ -74,7 +78,7 @@ impl SpellingIdentity {
             tmdb_id: crate::acquisition_search_queries::tmdb_id_from_external_ids(
                 &title.external_ids,
             ),
-            imdb_id: crate::acquisition_search_queries::imdb_id_from_title(title),
+            imdb_id: crate::acquisition_search_queries::imdb_id_from_title(&title),
         }
     }
 
@@ -540,7 +544,11 @@ impl SpellingCandidates {
         )) else {
             return false;
         };
-        let bound = distance.saturating_add(1);
+        let bound = if distance == 0 {
+            0
+        } else {
+            distance.saturating_add(1)
+        };
         bucket
             .possible_matches(observed, Some(bound))
             .into_iter()
@@ -686,20 +694,14 @@ pub(crate) fn find_spelling_match(
             else {
                 continue;
             };
-            // A romanization is a transliteration convention, not a spelling a
-            // release group can get wrong: the catalog carries the romanized
-            // alias precisely so a release named in romaji is recognizable,
-            // and an anime episode name carries neither a year nor, usually,
-            // an indexer id to corroborate one. Every other locale equivalence
-            // keeps its corroboration requirement. A romanization still has to
-            // be the only library identity that spelling can name, which the
-            // competitor check below proves.
-            let romanization = distance == 0 && locale.is_some_and(is_romanization_tag);
-            let exact = literally_exact || romanization;
+            // Established spelling equivalents can prove a unique local
+            // identity without a year or ID. Actual typos still require
+            // corroboration. Every non-literal match checks local competitors.
+            let exact = literally_exact || (distance == 0 && locale.is_some());
             if !literally_exact {
                 let native_typo = distance > 0 && title_script(observed) == TitleScript::Cjk;
                 let year_matches = (year.is_some() && year == name.year) || episode_year_matches;
-                if ids != Some(true) && !romanization && (native_typo || !year_matches) {
+                if ids != Some(true) && distance > 0 && (native_typo || !year_matches) {
                     tracing::debug!(
                         title_id = identity.id,
                         observed,

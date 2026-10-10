@@ -221,7 +221,7 @@ export const WantedContainer = memo(function WantedContainer({
       setPendingNextOffset(nextItems.length);
     } catch (error) {
       const message = error instanceof Error ? error.message : t("status.failedToLoad");
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setPendingLoading(false);
     }
@@ -259,7 +259,7 @@ export const WantedContainer = memo(function WantedContainer({
       setPendingNextOffset(pendingNextOffset + nextItems.length);
     } catch (error) {
       const message = error instanceof Error ? error.message : t("status.failedToLoad");
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
     } finally {
       pendingLoadInFlightRef.current = false;
       setPendingLoadingMore(false);
@@ -284,9 +284,9 @@ export const WantedContainer = memo(function WantedContainer({
     async (id: string) => {
       const { data, error } = await executeForceGrab({ id });
       if (error) {
-        setGlobalStatus(error.message);
+        setGlobalStatus(error.message, { level: "ERROR" });
       } else if (data?.forceGrabPendingRelease?.grabbed === false) {
-        setGlobalStatus(t("pending.grabRejected"));
+        setGlobalStatus(t("pending.grabRejected"), { level: "ERROR" });
         void refreshPending();
       } else {
         setGlobalStatus(t("pending.grabbed"));
@@ -300,7 +300,7 @@ export const WantedContainer = memo(function WantedContainer({
     async (id: string) => {
       const { error } = await executeDismiss({ id });
       if (error) {
-        setGlobalStatus(error.message);
+        setGlobalStatus(error.message, { level: "ERROR" });
       } else {
         setGlobalStatus(t("pending.dismissed"));
         void refreshPending();
@@ -339,7 +339,7 @@ export const WantedContainer = memo(function WantedContainer({
       })
       .catch((error) => {
         if (!cancelled) {
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
         }
       })
       .finally(() => {
@@ -372,7 +372,7 @@ export const WantedContainer = memo(function WantedContainer({
       setTotal(data?.wantedItems?.totalCount ?? 0);
     } catch (error) {
       const message = error instanceof Error ? error.message : t("status.failedToLoad");
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setLoading(false);
     }
@@ -407,7 +407,7 @@ export const WantedContainer = memo(function WantedContainer({
       setCutoffTotal(data?.cutoffUnmetTitlesPage?.totalCount ?? 0);
     } catch (error) {
       const message = error instanceof Error ? error.message : t("status.failedToLoad");
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setCutoffLoading(false);
     }
@@ -479,6 +479,7 @@ export const WantedContainer = memo(function WantedContainer({
                 grabbed: job.grabbedCount,
                 failed: job.failedCount,
               }),
+          job.state === "CANCELLED" ? undefined : { level: job.failedCount > 0 ? "ERROR" : "SUCCESS" },
         );
       }
     },
@@ -579,7 +580,7 @@ export const WantedContainer = memo(function WantedContainer({
     }
     const { error } = await executeCancelAcquisitionSearch({ id });
     if (error) {
-      setGlobalStatus(error.message);
+      setGlobalStatus(error.message, { level: "ERROR" });
     }
   }, [executeCancelAcquisitionSearch, searchJob?.id, setGlobalStatus]);
 
@@ -596,7 +597,7 @@ export const WantedContainer = memo(function WantedContainer({
     async (id: string) => {
       const { error } = await executePause({ id });
       if (error) {
-        setGlobalStatus(error.message);
+        setGlobalStatus(error.message, { level: "ERROR" });
       } else {
         void refreshItems();
       }
@@ -608,7 +609,7 @@ export const WantedContainer = memo(function WantedContainer({
     async (id: string) => {
       const { error } = await executeResume({ id });
       if (error) {
-        setGlobalStatus(error.message);
+        setGlobalStatus(error.message, { level: "ERROR" });
       } else {
         void refreshItems();
       }
@@ -620,12 +621,13 @@ export const WantedContainer = memo(function WantedContainer({
     async (titleId: string) => {
       const { data, error } = await executeMismatchRecovery({ titleId });
       if (error) {
-        setGlobalStatus(error.message);
+        setGlobalStatus(error.message, { level: "ERROR" });
       } else {
         setGlobalStatus(
           t("status.mismatchRecoveryQueued", {
             count: data?.triggerTitleMismatchRecoverySearch?.queuedCount ?? 0,
           }),
+          { level: "SUCCESS" },
         );
         void refreshItems();
       }
@@ -674,7 +676,7 @@ export const WantedContainer = memo(function WantedContainer({
       } catch (error) {
         const outcome = autoSearchOutcomeMessage(error, t, cutoffItemLabel(item));
         if (outcome) {
-          setGlobalStatus(outcome);
+          setGlobalStatus(outcome, { level: "WARNING" });
         } else {
           setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), {
             level: "ERROR",
@@ -728,7 +730,7 @@ export const WantedContainer = memo(function WantedContainer({
           setGlobalStatus(t("status.foundNzb", { count: results.length }));
         }
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setCutoffInteractiveSearchingId(null);
       }
@@ -765,7 +767,7 @@ export const WantedContainer = memo(function WantedContainer({
           confirmReplaceConflict,
         );
         assertNoReplaceConflict(payload, conflictMessage);
-        setGlobalStatus(t("status.queueSuccess", { name: release.title }));
+        setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
       }

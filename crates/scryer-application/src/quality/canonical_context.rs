@@ -524,6 +524,14 @@ impl AppUseCase {
             )
         };
 
+        // A file awaiting review is still the file the scope holds, so a grab
+        // must beat it like any other. Import keeps it out: an import admitted
+        // over an incumbent replaces that file, and a file awaiting review is
+        // not replaced by an import.
+        let counts_as_incumbent = |file: &crate::TitleMediaFile| {
+            intent == SubjectIntent::Grab || file.scan_status != "review_required"
+        };
+
         match scope {
             SubmissionScope::Episode { .. } | SubmissionScope::EpisodeSet { .. } => {
                 let episode_ids = match scope {
@@ -550,7 +558,7 @@ impl AppUseCase {
                     AdmissionScope::Episodes(episode_ids),
                     incumbents
                         .iter()
-                        .filter(|incumbent| incumbent.media_file.scan_status != "review_required")
+                        .filter(|incumbent| counts_as_incumbent(&incumbent.media_file))
                         .map(|incumbent| {
                             to_incumbent(&incumbent.media_file, primary_span(incumbent))
                         }),
@@ -574,7 +582,7 @@ impl AppUseCase {
                                 .iter()
                                 .any(|link_id| link_id == series_movie_link_id)
                         })
-                        .filter(|file| file.scan_status != "review_required")
+                        .filter(|file| counts_as_incumbent(file))
                         .map(|file| to_incumbent(file, Vec::new())),
                 )
             }
@@ -589,7 +597,7 @@ impl AppUseCase {
                         .filter(|file| {
                             file.episode_id.is_none() && file.series_movie_link_ids.is_empty()
                         })
-                        .filter(|file| file.scan_status != "review_required")
+                        .filter(|file| counts_as_incumbent(file))
                         .map(|file| to_incumbent(file, Vec::new())),
                 )
             }
@@ -634,7 +642,7 @@ impl AppUseCase {
                     AdmissionScope::Episodes(episode_ids),
                     incumbents
                         .iter()
-                        .filter(|incumbent| incumbent.media_file.scan_status != "review_required")
+                        .filter(|incumbent| counts_as_incumbent(&incumbent.media_file))
                         .map(|incumbent| {
                             to_incumbent(&incumbent.media_file, primary_span(incumbent))
                         }),
@@ -959,6 +967,29 @@ impl AppUseCase {
             }
         }
         queued
+    }
+
+    /// The best bar among the primary files occupying an import scope, scored
+    /// under the rules in force now. This is the `existing_score` the import
+    /// probe hands to rules: the stored `acquisition_score` is what the file
+    /// scored when it landed, and a rule edited since must see the file as the
+    /// current rules judge it, exactly as admission does.
+    pub(crate) async fn current_incumbent_score_for_import_scope(
+        &self,
+        title: &Title,
+        scope: &crate::SubmissionScope,
+        context: &ResolvedScoringContext,
+        runtime_minutes: Option<i32>,
+    ) -> Option<i32> {
+        self.admission_subject_for_scope(
+            title,
+            scope,
+            context,
+            runtime_minutes,
+            SubjectIntent::Import,
+        )
+        .await
+        .best_score()
     }
 
     /// The bar a candidate must clear to displace `file`.

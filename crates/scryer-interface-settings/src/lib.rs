@@ -10,8 +10,9 @@ use scryer_interface_media::mappers::{
     from_download_client_config_with_fields, from_download_client_routing_entry,
     from_indexer_config_with_fields, from_indexer_routing_entry, from_jellyfin_server_user,
     from_library_paths_settings, from_media_server_connection, from_media_server_user_group,
-    from_media_settings, from_proxy_config, from_quality_profile_settings, from_seeding_profile,
-    from_service_settings, from_subtitle_provider_config, from_user_with_auth_factor_status,
+    from_media_settings, from_proxy_config, from_public_url_change_preview,
+    from_quality_profile_settings, from_seeding_profile, from_service_settings,
+    from_subtitle_provider_config, from_user_with_auth_factor_status,
 };
 use scryer_interface_media::types::*;
 
@@ -476,6 +477,40 @@ fn to_app_ui_table_view_mode(mode: UiTableViewModeValue) -> scryer_application::
     }
 }
 
+fn from_ui_device_class(device_class: scryer_application::UiDeviceClass) -> UiDeviceClassValue {
+    match device_class {
+        scryer_application::UiDeviceClass::Desktop => UiDeviceClassValue::Desktop,
+        scryer_application::UiDeviceClass::Mobile => UiDeviceClassValue::Mobile,
+    }
+}
+
+fn to_app_ui_device_class(device_class: UiDeviceClassValue) -> scryer_application::UiDeviceClass {
+    match device_class {
+        UiDeviceClassValue::Desktop => scryer_application::UiDeviceClass::Desktop,
+        UiDeviceClassValue::Mobile => scryer_application::UiDeviceClass::Mobile,
+    }
+}
+
+fn from_ui_catalog_view_mode(
+    mode: scryer_application::UiCatalogViewMode,
+) -> UiCatalogViewModeValue {
+    match mode {
+        scryer_application::UiCatalogViewMode::Compact => UiCatalogViewModeValue::Compact,
+        scryer_application::UiCatalogViewMode::PosterTable => UiCatalogViewModeValue::PosterTable,
+        scryer_application::UiCatalogViewMode::Poster => UiCatalogViewModeValue::Poster,
+    }
+}
+
+fn to_app_ui_catalog_view_mode(
+    mode: UiCatalogViewModeValue,
+) -> scryer_application::UiCatalogViewMode {
+    match mode {
+        UiCatalogViewModeValue::Compact => scryer_application::UiCatalogViewMode::Compact,
+        UiCatalogViewModeValue::PosterTable => scryer_application::UiCatalogViewMode::PosterTable,
+        UiCatalogViewModeValue::Poster => scryer_application::UiCatalogViewMode::Poster,
+    }
+}
+
 pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSettingsPayload {
     UiSettingsPayload {
         theme: from_ui_theme(settings.theme),
@@ -488,15 +523,26 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
         density: from_ui_density(settings.density),
         sidebar_mode: from_ui_sidebar_mode(settings.sidebar_mode),
         default_landing_view: from_ui_default_landing_view(settings.default_landing_view),
+        language: settings.language,
         table_columns: settings
             .table_columns
             .into_iter()
             .map(|column| UiTableColumnSettingPayload {
+                device_class: from_ui_device_class(column.device_class),
                 facet: from_ui_settings_facet(column.facet),
                 table_view_mode: from_ui_table_view_mode(column.table_view_mode),
                 column_id: column.column_id,
                 column_order: column.column_order,
                 visible: column.visible,
+            })
+            .collect(),
+        catalog_views: settings
+            .catalog_views
+            .into_iter()
+            .map(|view| UiCatalogViewSettingPayload {
+                device_class: from_ui_device_class(view.device_class),
+                facet: from_ui_settings_facet(view.facet),
+                view_mode: from_ui_catalog_view_mode(view.view_mode),
             })
             .collect(),
     }
@@ -520,17 +566,49 @@ pub(crate) fn ui_settings_update_from_input(
         density: to_app_ui_density(input.density),
         sidebar_mode: to_app_ui_sidebar_mode(input.sidebar_mode),
         default_landing_view: to_app_ui_default_landing_view(input.default_landing_view),
-        table_columns: input
-            .table_columns
-            .into_iter()
-            .map(|column| scryer_application::UiTableColumnSetting {
-                facet: to_app_ui_settings_facet(column.facet),
-                table_view_mode: to_app_ui_table_view_mode(column.table_view_mode),
-                column_id: column.column_id,
-                column_order: column.column_order,
-                visible: column.visible,
-            })
-            .collect(),
+        // An empty string clears the language; validation treats blank as cleared.
+        language: input.language.map(Some),
+        table_columns: input.table_columns.map(|columns| {
+            columns
+                .into_iter()
+                .map(|column| scryer_application::UiTableColumnSetting {
+                    device_class: column
+                        .device_class
+                        .map(to_app_ui_device_class)
+                        .unwrap_or_default(),
+                    facet: to_app_ui_settings_facet(column.facet),
+                    table_view_mode: to_app_ui_table_view_mode(column.table_view_mode),
+                    column_id: column.column_id,
+                    column_order: column.column_order,
+                    visible: column.visible,
+                })
+                .collect()
+        }),
+    }
+}
+
+pub(crate) fn catalog_view_update_from_input(
+    input: SetMyCatalogViewInput,
+) -> scryer_application::UiCatalogViewUpdate {
+    let device_class = to_app_ui_device_class(input.device_class);
+    let facet = to_app_ui_settings_facet(input.facet);
+    scryer_application::UiCatalogViewUpdate {
+        device_class,
+        facet,
+        view_mode: input.view_mode.map(to_app_ui_catalog_view_mode),
+        columns: input.columns.map(|columns| {
+            columns
+                .into_iter()
+                .map(|column| scryer_application::UiTableColumnSetting {
+                    device_class,
+                    facet,
+                    table_view_mode: to_app_ui_table_view_mode(column.table_view_mode),
+                    column_id: column.column_id,
+                    column_order: column.column_order,
+                    visible: column.visible,
+                })
+                .collect()
+        }),
     }
 }
 
@@ -1066,6 +1144,24 @@ impl SettingsQueries {
         app.get_service_settings(&actor)
             .await
             .map(from_service_settings)
+            .map_err(to_gql_error)
+    }
+
+    /// Previews saving a public URL, or clearing it, without saving: the
+    /// stored form, any refusal, and the effect on passkeys after the next
+    /// restart.
+    async fn public_url_change_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Proposed public URL; omit it and set reset to preview clearing.")]
+        public_url: Option<String>,
+        #[graphql(desc = "Preview clearing the saved public URL.")] reset: Option<bool>,
+    ) -> GqlResult<PublicUrlChangePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.preview_public_url_change(&actor, public_url.as_deref(), reset.unwrap_or(false))
+            .await
+            .map(from_public_url_change_preview)
             .map_err(to_gql_error)
     }
 

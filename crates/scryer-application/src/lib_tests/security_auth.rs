@@ -1072,7 +1072,11 @@ async fn release_candidate_token_resolves_password_without_exposing_it() {
     assert_eq!(decoded.source_hint, selection.source_hint);
     assert_eq!(decoded.source_kind, selection.source_kind);
     assert_eq!(decoded.source_title, selection.source_title);
-    assert_eq!(decoded.source_password.as_deref(), Some("release-password"));
+    // Passwords are literal secrets: surrounding whitespace is part of them.
+    assert_eq!(
+        decoded.source_password.as_deref(),
+        Some(" release-password ")
+    );
 }
 
 #[tokio::test]
@@ -1134,7 +1138,7 @@ async fn release_candidate_token_rejects_missing_password_ticket() {
 }
 
 #[tokio::test]
-async fn release_candidate_token_drops_placeholder_password_flags() {
+async fn release_candidate_token_keeps_flag_like_passwords_behind_a_ticket() {
     let (app, admin) = bootstrap();
     let (_created, authenticated_user) = create_authenticated_user(
         &app,
@@ -1170,7 +1174,10 @@ async fn release_candidate_token_drops_placeholder_password_flags() {
     let claims = jsonwebtoken::dangerous::insecure_decode::<ReleaseCandidateTokenClaims>(&token)
         .expect("candidate token should decode")
         .claims;
-    assert_eq!(claims.password_ref, None);
+    // Provider marker fields are classified by the indexer adapter; a value
+    // that reaches the token issuer is a literal password and stays behind a
+    // server-side ticket like any other.
+    assert!(claims.password_ref.is_some());
     let decoded = app
         .verify_release_candidate_token(
             &authenticated_user,
@@ -1180,7 +1187,7 @@ async fn release_candidate_token_drops_placeholder_password_flags() {
         )
         .await
         .expect("candidate token should verify");
-    assert_eq!(decoded.source_password, None);
+    assert_eq!(decoded.source_password.as_deref(), Some("protected"));
 }
 
 #[tokio::test]
@@ -1934,6 +1941,8 @@ async fn passkey_management_requires_enabled_form_login() {
 #[derive(Default)]
 struct InMemoryWebauthnChallengeRepository {
     challenges: Mutex<HashMap<String, WebauthnChallengeRecord>>,
+    /// Passkey enrollment to report; absent reports a read failure.
+    enrollment_counts: Option<crate::PasskeyEnrollmentCounts>,
 }
 
 #[async_trait]
@@ -2016,6 +2025,191 @@ impl WebauthnRepository for InMemoryWebauthnChallengeRepository {
     async fn delete_expired_challenges(&self, _: &str) -> AppResult<u64> {
         Ok(0)
     }
+
+    async fn passkey_enrollment_counts(&self) -> AppResult<crate::PasskeyEnrollmentCounts> {
+        self.enrollment_counts
+            .ok_or_else(|| AppError::Repository("synthetic enrollment read failure".into()))
+    }
+}
+
+fn public_url_app(
+    enrollment_counts: Option<crate::PasskeyEnrollmentCounts>,
+    passkey_rp_source: crate::public_url::PasskeyRelyingPartySource,
+) -> (AppUseCase, User) {
+    let (app, admin) = bootstrap_with_user_repo(Arc::new(MockUserRepo::default()));
+    let webauthn = Arc::new(InMemoryWebauthnChallengeRepository {
+        enrollment_counts,
+        ..Default::default()
+    });
+    let app = app.with_test_overrides(|services| services.with_webauthn_store(webauthn));
+    app.install_public_url(
+        crate::public_url::PublicUrlPolicy::new(None, Some("https://media.home")),
+        crate::public_url::InstanceAddressing {
+            passkey_rp_id: Some("media.home".into()),
+            passkey_rp_origin: Some("https://media.home".into()),
+            passkey_rp_source,
+            ..Default::default()
+        },
+    );
+    (app, admin)
+}
+
+fn public_url_change(value: Option<&str>, acknowledge: bool) -> UpdateServiceSettings {
+    UpdateServiceSettings {
+        tls_cert_path: None,
+        tls_key_path: None,
+        trusted_proxy_ips: None,
+        reset_trusted_proxy_ips: false,
+        public_url: value.map(str::to_string),
+        reset_public_url: value.is_none(),
+        acknowledge_passkey_impact: acknowledge,
+    }
+}
+
+fn is_rejected(error: &AppError, expected: &str) -> bool {
+    matches!(error, AppError::PublicUrlRejected { code, .. } if code.as_str() == expected)
+}
+
+#[tokio::test]
+async fn a_public_url_change_that_breaks_registered_passkeys_needs_acknowledgement() {
+    use crate::public_url::{PasskeyImpact, PasskeyRelyingPartySource};
+    let counts = crate::PasskeyEnrollmentCounts {
+        users_with_passkeys: 2,
+        passkey_only_users: 1,
+    };
+    let (app, admin) = public_url_app(Some(counts), PasskeyRelyingPartySource::PublicUrl);
+
+    // Same host over plain http leaves no relying party: passkeys turn off.
+    let preview = app
+        .preview_public_url_change(&admin, Some("http://media.home"), false)
+        .await
+        .expect("preview");
+    assert_eq!(preview.passkey_impact, PasskeyImpact::Disabled);
+    assert_eq!(preview.current_passkey_rp_id.as_deref(), Some("media.home"));
+    assert_eq!(preview.next_passkey_rp_id, None);
+    assert_eq!(preview.passkey_enrollment, Some(counts));
+    assert!(preview.acknowledgement_required);
+
+    let preview = app
+        .preview_public_url_change(&admin, Some("https://other.home"), false)
+        .await
+        .expect("preview");
+    assert_eq!(preview.passkey_impact, PasskeyImpact::Changed);
+    assert_eq!(preview.next_passkey_rp_id.as_deref(), Some("other.home"));
+    assert!(preview.acknowledgement_required);
+
+    for change in [Some("http://media.home"), Some("https://other.home"), None] {
+        let error = app
+            .update_service_settings(&admin, public_url_change(change, false))
+            .await
+            .expect_err("a breaking change needs acknowledgement");
+        assert!(
+            is_rejected(&error, "passkey_acknowledgement_required"),
+            "{change:?}: {error}"
+        );
+    }
+    assert_eq!(
+        app.public_url_runtime().snapshot().saved_value(),
+        Some("https://media.home"),
+        "a refused change writes nothing"
+    );
+
+    // The same domain on another port keeps the relying party.
+    let settings = app
+        .update_service_settings(
+            &admin,
+            public_url_change(Some("https://media.home:8443"), false),
+        )
+        .await
+        .expect("same relying party saves without acknowledgement");
+    assert_eq!(
+        settings.public_url.saved.as_deref(),
+        Some("https://media.home:8443")
+    );
+    assert_eq!(settings.public_url.passkey_enrollment, Some(counts));
+
+    let settings = app
+        .update_service_settings(&admin, public_url_change(Some("http://media.home"), true))
+        .await
+        .expect("an acknowledged change saves");
+    assert_eq!(
+        settings.public_url.saved.as_deref(),
+        Some("http://media.home")
+    );
+}
+
+#[tokio::test]
+async fn passkey_acknowledgement_follows_enrollment_and_relying_party_source() {
+    use crate::public_url::{PasskeyImpact, PasskeyRelyingPartySource};
+
+    // Nobody has a passkey: a breaking change needs no acknowledgement.
+    let (app, admin) = public_url_app(
+        Some(crate::PasskeyEnrollmentCounts::default()),
+        PasskeyRelyingPartySource::PublicUrl,
+    );
+    let preview = app
+        .preview_public_url_change(&admin, None, true)
+        .await
+        .expect("preview");
+    assert_eq!(preview.passkey_impact, PasskeyImpact::Disabled);
+    assert!(!preview.acknowledgement_required);
+    app.update_service_settings(&admin, public_url_change(None, false))
+        .await
+        .expect("clearing saves when no passkeys are registered");
+
+    // The count cannot be read: settings still load, and a breaking change
+    // fails safe by requiring acknowledgement.
+    let (app, admin) = public_url_app(None, PasskeyRelyingPartySource::PublicUrl);
+    let settings = app
+        .get_service_settings(&admin)
+        .await
+        .expect("settings load");
+    assert_eq!(settings.public_url.passkey_enrollment, None);
+    let error = app
+        .update_service_settings(&admin, public_url_change(Some("https://other.home"), false))
+        .await
+        .expect_err("unknown enrollment needs acknowledgement");
+    assert!(
+        is_rejected(&error, "passkey_acknowledgement_required"),
+        "{error}"
+    );
+
+    // Explicit WebAuthn variables: the public URL cannot affect passkeys.
+    let (app, admin) = public_url_app(
+        Some(crate::PasskeyEnrollmentCounts {
+            users_with_passkeys: 3,
+            passkey_only_users: 3,
+        }),
+        PasskeyRelyingPartySource::Environment,
+    );
+    let preview = app
+        .preview_public_url_change(&admin, Some("https://other.home"), false)
+        .await
+        .expect("preview");
+    assert_eq!(preview.passkey_impact, PasskeyImpact::Unaffected);
+    assert_eq!(preview.next_passkey_rp_id.as_deref(), Some("media.home"));
+    assert!(!preview.acknowledgement_required);
+    app.update_service_settings(&admin, public_url_change(Some("https://other.home"), false))
+        .await
+        .expect("an unaffected change saves");
+
+    // Rejected values come back with their reason code instead of failing.
+    let preview = app
+        .preview_public_url_change(&admin, Some("https://*.home"), false)
+        .await
+        .expect("preview");
+    assert_eq!(
+        preview.error.map(|error| error.code.as_str()),
+        Some("wildcard_host")
+    );
+    let error = app
+        .update_service_settings(
+            &admin,
+            public_url_change(Some("https://media.home/x"), false),
+        )
+        .await
+        .expect_err("a path at the root is refused");
+    assert!(is_rejected(&error, "path_not_allowed"), "{error}");
 }
 
 #[tokio::test]

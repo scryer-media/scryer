@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-acquisition"
-version = "0.21.13"
+version = "0.21.15"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -12,7 +12,7 @@ scryer-outbound-http = { path = "../scryer-outbound-http" }
 scryer-rules = { path = "../scryer-rules" }
 scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }
 scryer-infrastructure-crypto = { path = "../scryer-infrastructure-crypto" }
-async-compression = { version = "0.4", default-features = false, features = ["tokio", "zstd", "gzip"] }
+async-compression = { version = "0.4", default-features = false, features = ["tokio", "zstd", "gzip", "zlib"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }

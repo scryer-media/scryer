@@ -539,6 +539,7 @@ impl AppServicesBuilder {
         Arc<dyn LogicalBackupExporter>
     );
     app_services_builder_setter!(with_backup_dir, config.backup_dir, PathBuf);
+    app_services_builder_setter!(with_scripts_dir, config.scripts_dir, PathBuf);
     app_services_builder_setter!(
         with_smg_registration_secret,
         config.smg_registration_secret,
@@ -704,6 +705,9 @@ impl AppServicesBuilder {
             accounts: store.clone(),
             policies: store,
             plugins,
+            auth: self.services.lists.auth.clone(),
+            account_runtime: self.services.lists.account_runtime.clone(),
+            vocabulary: self.services.lists.vocabulary.clone(),
         };
         self
     }
@@ -714,6 +718,13 @@ impl AppServicesBuilder {
         value: Arc<dyn crate::lists::ListPluginProvider>,
     ) -> Self {
         self.services.lists.plugins = value;
+        self
+    }
+    pub fn with_list_account_auth_gateway(
+        mut self,
+        value: Arc<dyn crate::lists::account_transport::ListAccountAuthGateway>,
+    ) -> Self {
+        self.services.lists.auth = value;
         self
     }
     pub fn with_notification_provider(

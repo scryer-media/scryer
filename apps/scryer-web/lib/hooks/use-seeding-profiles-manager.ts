@@ -161,14 +161,14 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
         }
         setDraft(buildSeedingProfileTemplate());
         setErrorMessage("");
-        showStatus(t("settings.seedingProfileSaved"));
+        showStatus(t("settings.seedingProfileSaved"), { level: "SUCCESS" });
         return true;
       } catch (err) {
         const message =
           extractSeedingProfileErrorMessage(err) ??
           t("settings.seedingProfileSaveError");
         setErrorMessage(message);
-        showStatus(message);
+        showStatus(message, { level: "ERROR" });
         return false;
       } finally {
         setSaving(false);
@@ -189,7 +189,7 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
           previous.filter((profile) => profile.id !== profileId),
         );
         setErrorMessage("");
-        showStatus(t("settings.seedingProfileDeleted"));
+        showStatus(t("settings.seedingProfileDeleted"), { level: "SUCCESS" });
         return true;
       } catch (err) {
         // The backend names every indexer, routing entry, and the global
@@ -198,7 +198,7 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
           extractSeedingProfileErrorMessage(err) ??
           t("settings.seedingProfileDeleteError");
         setErrorMessage(message);
-        showStatus(message);
+        showStatus(message, { level: "ERROR" });
         return false;
       } finally {
         setSaving(false);
@@ -223,7 +223,7 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
           result.data?.setMinimumSeedersFloor?.minimumSeedersFloor ?? floor,
         );
         setErrorMessage("");
-        showStatus(t("settings.seedingMinimumSeedersFloorSaved"));
+        showStatus(t("settings.seedingMinimumSeedersFloorSaved"), { level: "SUCCESS" });
         return true;
       } catch (err) {
         setMinimumSeedersFloorState(previousFloor);
@@ -231,7 +231,7 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
           extractSeedingProfileErrorMessage(err) ??
           t("settings.seedingProfileSaveError");
         setErrorMessage(message);
-        showStatus(message);
+        showStatus(message, { level: "ERROR" });
         return false;
       } finally {
         setSaving(false);
@@ -256,7 +256,7 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
           result.data?.setDefaultSeedingProfile?.seedingProfileId ?? null,
         );
         setErrorMessage("");
-        showStatus(t("settings.seedingProfileDefaultSaved"));
+        showStatus(t("settings.seedingProfileDefaultSaved"), { level: "SUCCESS" });
         return true;
       } catch (err) {
         setDefaultProfileId(previousDefault);
@@ -264,7 +264,7 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
           extractSeedingProfileErrorMessage(err) ??
           t("settings.seedingProfileSaveError");
         setErrorMessage(message);
-        showStatus(message);
+        showStatus(message, { level: "ERROR" });
         return false;
       } finally {
         setSaving(false);

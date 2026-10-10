@@ -548,6 +548,7 @@ pub(crate) mod tests {
         socket_permissions: Vec<SocketPermission>,
     ) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: "fixture-notification".to_string(),
             name: "Fixture Notification".to_string(),
             version: "1.0.0".to_string(),

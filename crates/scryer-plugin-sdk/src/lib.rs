@@ -43,7 +43,7 @@ pub use notification::{
     PluginNotificationTargetResult, coalesce_media_updates, rich_embed_from_request,
     to_script_environment, to_webhook_json,
 };
-pub const SDK_VERSION: &str = "3.13.0";
+pub const SDK_VERSION: &str = "3.14.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -367,7 +367,18 @@ pub struct PluginDescriptor {
     pub sdk_constraint: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub socket_permissions: Vec<SocketPermission>,
+    /// Installation-wide settings, independent of provider-instance fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<PluginSettingField>,
     pub provider: ProviderDescriptor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginSettingField {
+    #[serde(flatten)]
+    pub field: ConfigFieldDef,
+    #[serde(default)]
+    pub sensitive: bool,
 }
 
 impl PluginDescriptor {
@@ -670,6 +681,9 @@ pub struct ArchiveExtractorDescriptor {
 pub struct ArchiveExtractorCapabilities {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<ArchivePluginFormat>,
+    /// Enforces the caller's `limits` envelope while extracting and staging.
+    #[serde(default)]
+    pub enforced_limits: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1169,6 +1183,30 @@ pub struct ArchivePluginProcessRequest {
     pub operation: ArchivePluginOperation,
 }
 
+/// Optional top-level `limits` envelope on an archive process request. Hosts
+/// require the matching capability before relying on these limits. Zero is a
+/// zero budget, never an alias for unlimited. Scratch and output are separate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct ArchiveExtractionLimits {
+    pub max_input_bytes: u64,
+    pub max_output_bytes: u64,
+    pub max_entries: u64,
+    pub max_directories: u64,
+    pub max_scratch_bytes: u64,
+}
+
+impl Default for ArchiveExtractionLimits {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+            max_output_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+            max_entries: 20_000,
+            max_directories: 20_000,
+            max_scratch_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 // PAR2 recovery is deliberately absent here. Verifying and repairing a PAR2 set
@@ -1194,6 +1232,12 @@ pub enum ArchivePluginOperation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArchivePluginProcessResponse {
     pub status: ArchivePluginStatus,
+    /// Actual source-relative files superseded by successfully placed plain media.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced_source_paths: Vec<String>,
+    /// Source-relative recovery metadata already handled by this invocation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processed_recovery_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<ArchivePluginExtractedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2031,7 +2075,7 @@ pub struct PluginDownloadScopedListResponse<T> {
     pub failures: Vec<PluginDownloadScopeFailure>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PluginDownloadSource {
     pub kind: DownloadInputKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2056,6 +2100,19 @@ pub struct PluginDownloadSource {
     pub source_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_password: Option<String>,
+    /// Ordered release-specific candidates; never includes plugin-wide fallbacks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub password_candidates: Vec<String>,
+}
+
+impl std::fmt::Debug for PluginDownloadSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginDownloadSource")
+            .field("kind", &self.kind)
+            .field("has_password", &self.source_password.is_some())
+            .field("password_candidate_count", &self.password_candidates.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2804,6 +2861,13 @@ pub struct PluginSearchRequest {
     /// asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rss_catch_up: Option<PluginRssCatchUp>,
+    /// Where a paged search resumes: the `next_cursor` of the previous
+    /// response for the same request, sent back verbatim. Opaque to the host;
+    /// the plugin defines its contents. Absent asks for the first page. Only
+    /// meaningful to a plugin that declares `paged_search` in its limit
+    /// capabilities; every other plugin ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_cursor: Option<String>,
 }
 
 /// The newest release the host saw on the previous successful RSS poll of one
@@ -2877,6 +2941,16 @@ pub struct PluginSearchResponse {
     pub grab_current: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grab_max: Option<u32>,
+    /// From a plugin that declares `paged_search`: `Some` when the provider
+    /// has more pages for this request, to be passed back as
+    /// `page_cursor` to read the next one; `None` on a successful response
+    /// when the provider is exhausted for this query. A paged response holds
+    /// at most `IndexerLimitCapabilities::paged_response_bound` results. A
+    /// paged plugin that fails mid-page returns the partial page through
+    /// `IndexerSearchPluginError::PartialResults` with this unset, and the
+    /// host replays that page. Plugins without `paged_search` never set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3176,6 +3250,7 @@ mod tests {
     #[test]
     fn tagged_descriptor_round_trips() {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "newznab".into(),
             name: "Newznab".into(),
             version: "1.0.0".into(),
@@ -3228,6 +3303,7 @@ mod tests {
                     tagged_aliases: vec![],
                     context: None,
                     rss_catch_up: None,
+                    page_cursor: None,
                 },
             }],
         };
@@ -3259,6 +3335,7 @@ mod tests {
     #[test]
     fn subtitle_sync_mode_and_capabilities_round_trip() {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "enhanced-subtitle-sync".into(),
             name: "Enhanced Subtitle Sync".into(),
             version: "1.0.0".into(),
@@ -3401,6 +3478,7 @@ mod tests {
     #[test]
     fn socket_permission_requires_ports_and_tls_modes() {
         let mut descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "email".into(),
             name: "Email".into(),
             version: "1.0.0".into(),
@@ -3551,6 +3629,7 @@ mod tests {
     #[test]
     fn indexer_supported_ids_serialize_in_stable_key_order() {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "newznab".into(),
             name: "Newznab".into(),
             version: "1.0.0".into(),
@@ -3649,6 +3728,7 @@ mod tests {
                 nzb_content_type: None,
                 source_title: None,
                 source_password: None,
+                password_candidates: Vec::new(),
             },
             release: PluginDownloadRelease {
                 info_hash_hint: Some("abcdef0123456789abcdef0123456789abcdef01".to_string()),
@@ -3717,6 +3797,7 @@ mod tests {
                 nzb_content_type: Some("application/x-nzb".to_string()),
                 source_title: None,
                 source_password: None,
+                password_candidates: Vec::new(),
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -3763,6 +3844,7 @@ mod tests {
                 nzb_content_type: Some("application/x-nzb".to_string()),
                 source_title: None,
                 source_password: None,
+                password_candidates: Vec::new(),
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -3804,6 +3886,7 @@ mod tests {
                 nzb_content_type: None,
                 source_title: None,
                 source_password: None,
+                password_candidates: Vec::new(),
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -4108,6 +4191,106 @@ mod tests {
     }
 
     #[test]
+    fn paged_search_fields_skip_when_unset_and_old_json_still_decodes() {
+        let request = serde_json::to_value(PluginSearchRequest {
+            query: "Sample Show".into(),
+            limit: 100,
+            ..PluginSearchRequest::default()
+        })
+        .unwrap();
+        assert!(
+            request.get("page_cursor").is_none(),
+            "an absent cursor must not reach plugins built against an older SDK"
+        );
+        let response = serde_json::to_value(PluginSearchResponse::default()).unwrap();
+        assert!(response.get("next_cursor").is_none());
+        let limits = serde_json::to_value(IndexerLimitCapabilities {
+            page_size: Some(100),
+            ..IndexerLimitCapabilities::default()
+        })
+        .unwrap();
+        assert!(limits.get("paged_search").is_none());
+
+        // Payloads serialized before the fields existed still decode.
+        let parsed: PluginSearchRequest =
+            serde_json::from_value(serde_json::json!({"query": "Sample Show", "limit": 1000}))
+                .unwrap();
+        assert!(parsed.page_cursor.is_none());
+        let parsed: PluginSearchResponse =
+            serde_json::from_value(serde_json::json!({"results": [], "api_current": 3})).unwrap();
+        assert!(parsed.next_cursor.is_none());
+        let parsed: IndexerLimitCapabilities =
+            serde_json::from_value(serde_json::json!({"page_size": 100, "max_pages": 30})).unwrap();
+        assert!(!parsed.paged_search);
+    }
+
+    #[test]
+    fn paged_search_fields_round_trip() {
+        let request = PluginSearchRequest {
+            query: "Sample Show".into(),
+            page_cursor: Some("offset:300".into()),
+            ..PluginSearchRequest::default()
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["page_cursor"], "offset:300");
+        let parsed: PluginSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.page_cursor.as_deref(), Some("offset:300"));
+
+        let response = PluginSearchResponse {
+            next_cursor: Some("offset:400".into()),
+            ..PluginSearchResponse::default()
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["next_cursor"], "offset:400");
+        let parsed: PluginSearchResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.next_cursor.as_deref(), Some("offset:400"));
+
+        let limits = IndexerLimitCapabilities {
+            paged_search: true,
+            ..IndexerLimitCapabilities::default()
+        };
+        let json = serde_json::to_value(&limits).unwrap();
+        assert_eq!(json["paged_search"], true);
+        let parsed: IndexerLimitCapabilities = serde_json::from_value(json).unwrap();
+        assert!(parsed.paged_search);
+
+        // The cursor survives the strategy-event envelope the host decodes.
+        let event = PluginSearchStrategyEvent {
+            strategy_id: "strategy-1".into(),
+            result: PluginResult::Ok(response),
+        };
+        let parsed: PluginSearchStrategyEvent =
+            serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).unwrap();
+        match parsed.result {
+            PluginResult::Ok(response) => {
+                assert_eq!(response.next_cursor.as_deref(), Some("offset:400"))
+            }
+            other => panic!("expected a response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn paged_response_bound_follows_the_declared_page_size() {
+        let declared = IndexerLimitCapabilities {
+            page_size: Some(50),
+            max_page_size: Some(100),
+            ..IndexerLimitCapabilities::default()
+        };
+        assert_eq!(declared.paged_response_bound(0), Some(100));
+        assert_eq!(declared.paged_response_bound(1000), Some(100));
+        assert_eq!(declared.paged_response_bound(25), Some(25));
+        let page_size_only = IndexerLimitCapabilities {
+            page_size: Some(50),
+            ..IndexerLimitCapabilities::default()
+        };
+        assert_eq!(page_size_only.paged_response_bound(1000), Some(50));
+        assert_eq!(
+            IndexerLimitCapabilities::default().paged_response_bound(1000),
+            None
+        );
+    }
+
+    #[test]
     fn committed_schema_matches_generated_types() {
         let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("schemas/plugin-sdk-v3.schema.json");
@@ -4394,6 +4577,7 @@ mod tests {
         torrent: DownloadTorrentCapabilities,
     ) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: provider_type.to_string(),
             name: provider_type.to_string(),
             version: "0.1.0".to_string(),
@@ -4512,6 +4696,7 @@ mod tests {
         capabilities: NotificationCapabilities,
     ) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: provider_type.to_string(),
             name: provider_type.to_string(),
             version: "0.1.0".to_string(),

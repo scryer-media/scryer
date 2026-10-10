@@ -52,16 +52,50 @@ async fn persist_title_folder_ownership_conflict(
 /// the folder the scan found its files in. Returns `true` when the title now
 /// owns `scan_folder_path`; `false` leaves the ownership conflict to the
 /// caller. A title whose owned folder is still on disk, or whose owned root
-/// looks unmounted, is never touched.
+/// looks unmounted, is never touched — unless the recorded folder is a library
+/// root or holds one, which no title owns and which is always on disk.
 async fn reclaim_stale_title_folder_for_scan(
     app: &AppUseCase,
     title: &mut Title,
     scan_folder_path: &Path,
 ) -> AppResult<bool> {
-    if !crate::folder_ownership::title_folder_is_stale(title).await {
+    if !crate::folder_ownership::title_folder_is_stale(title).await
+        && !recorded_at_a_library_root_with_media_in(app, title, scan_folder_path).await?
+    {
         return Ok(false);
     }
     crate::folder_ownership::reclaim_stale_title_folder(app, title, scan_folder_path).await
+}
+
+/// Whether `title` records a library root while `scan_folder_path` holds
+/// every media file the catalog tracks for it. The tracked media is the
+/// evidence that this folder, and not some other folder matched to the same
+/// title, is the one the record should point at. Media spread over several
+/// folders is ambiguous: whichever folder a scan reached first would take the
+/// record and the others would then read as second copies, so such a record
+/// stays as it is (and guarded) for the operator to correct.
+async fn recorded_at_a_library_root_with_media_in(
+    app: &AppUseCase,
+    title: &Title,
+    scan_folder_path: &Path,
+) -> AppResult<bool> {
+    if !crate::folder_ownership::title_folder_spans_a_library_root(app, title).await? {
+        return Ok(false);
+    }
+    let scan_folder_path = path_to_stored_string(scan_folder_path);
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await?;
+    Ok(!media_files.is_empty()
+        && media_files.iter().all(|media_file| {
+            crate::title_folder_rules::stored_path_is_inside_folder(
+                &scan_folder_path,
+                &media_file.file_path,
+            )
+        }))
 }
 
 async fn claim_series_candidate_folder(

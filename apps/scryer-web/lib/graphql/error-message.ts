@@ -45,6 +45,27 @@ export function hasGraphQlErrorCode(error: CombinedError | unknown, code: string
   });
 }
 
+/** A string extension of the first GraphQL error carrying `code`. */
+export function graphQlErrorExtension(
+  error: CombinedError | unknown,
+  code: string,
+  key: string,
+): string | null {
+  if (!isRecord(error) || !Array.isArray(error.graphQLErrors)) {
+    return null;
+  }
+  for (const graphQlError of error.graphQLErrors) {
+    if (!isRecord(graphQlError) || !isRecord(graphQlError.extensions)) {
+      continue;
+    }
+    const value = graphQlError.extensions[key];
+    if (graphQlError.extensions.code === code && typeof value === "string") {
+      return value;
+    }
+  }
+  return null;
+}
+
 function internalGraphQlErrorMessage(error: CombinedError | unknown): string | null {
   if (!isRecord(error) || !Array.isArray(error.graphQLErrors)) {
     return null;

@@ -1110,6 +1110,23 @@ async fn apply_result_retries_failed_execution_with_capped_backoff_and_never_blo
 }
 
 #[tokio::test]
+async fn imported_video_with_pending_subtitles_stays_successful_but_blocks_download_cleanup() {
+    let app = build_app(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");
+    let mut result =
+        failed_execution_result(crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING);
+    result.decision = ImportDecision::Imported;
+    assert!(!apply_import_result(&app, &mut td, result, 1).await);
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+    assert_eq!(td.status, TrackedDownloadStatus::Warning);
+    assert!(td.import_execution_retry.is_none());
+    assert_eq!(
+        td.status_messages,
+        vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING]
+    );
+}
+
+#[tokio::test]
 async fn apply_result_blocks_password_required_failure_without_retry() {
     let app = build_app(Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");
@@ -1198,4 +1215,508 @@ async fn apply_result_clears_execution_retry_when_a_later_attempt_is_rejected() 
     assert!(!apply_import_result(&app, &mut td, rejected, 0).await);
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
     assert!(td.import_execution_retry.is_none());
+}
+
+mod released_hold {
+    use super::*;
+    use crate::tracked_downloads::{
+        HeldImportReleaseSettlement, HeldImportVerification, TrackedDownloadCommand,
+        TrackedDownloadService,
+    };
+
+    /// A batch name that parses to no season or episode, so only the
+    /// submission's scope says what the download should contain.
+    const BATCH_RELEASE: &str = "quiet-harbor-signal-batch-7f3a";
+    const AUTOMATIC: HeldImportVerification = HeldImportVerification {
+        automatic: true,
+        manual_expected_mapping_count: None,
+        require_positive_proof: false,
+    };
+    /// A held automatic import whose hold reason (a failed archive extraction,
+    /// or an unknown reason) demands proof that every expected unit imported.
+    const AUTOMATIC_PROOF_REQUIRED: HeldImportVerification = HeldImportVerification {
+        automatic: true,
+        manual_expected_mapping_count: None,
+        require_positive_proof: true,
+    };
+
+    fn season_episodes() -> Vec<Episode> {
+        ["1", "2", "3"]
+            .iter()
+            .map(|number| {
+                build_episode(
+                    &format!("ep-30{number}"),
+                    "title-1",
+                    "season-3",
+                    "3",
+                    number,
+                    None,
+                )
+            })
+            .collect()
+    }
+
+    fn batch_submission(episode_ids: &[&str]) -> DownloadSubmission {
+        DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: "title-1".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "series".to_string(),
+            download_client_id: Some("client-1".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "dl-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some(BATCH_RELEASE.to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: crate::SubmissionScope::EpisodeSet {
+                episode_ids: episode_ids.iter().map(|id| id.to_string()).collect(),
+            },
+            release_listing_json: None,
+        }
+    }
+
+    /// The app for a batch grabbed by submission scope (`grabbed`), with an
+    /// imported artifact recorded for each of `imported`.
+    async fn batch_app(grabbed: Option<&[&str]>, imported: &[&str]) -> AppUseCase {
+        batch_app_and_submissions(grabbed, imported).await.0
+    }
+
+    /// `batch_app`, with the submission store that records durable markers.
+    async fn batch_app_and_submissions(
+        grabbed: Option<&[&str]>,
+        imported: &[&str],
+    ) -> (AppUseCase, Arc<TestDownloadSubmissionRepo>) {
+        let submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        if let Some(grabbed) = grabbed {
+            submissions.rows.lock().await.push((
+                batch_submission(grabbed),
+                DownloadSubmissionIdentity::default(),
+            ));
+        }
+        let artifacts = imported
+            .iter()
+            .map(|episode_id| {
+                let file = source_file_name(episode_id);
+                let mut artifact = build_artifact("dl-1", episode_id, &file);
+                artifact.relative_path = Some(file);
+                artifact
+            })
+            .collect();
+        let app = build_app_with_download_client_configs_and_submissions(
+            vec![build_title(
+                "title-1",
+                "Quiet Harbor Signal",
+                MediaFacet::Series,
+            )],
+            vec![build_collection("season-3", "title-1", "3")],
+            season_episodes(),
+            artifacts,
+            Arc::new(NullDownloadClient),
+            Arc::new(NullDownloadClientConfigRepository),
+            submissions.clone(),
+        );
+        (app, submissions)
+    }
+
+    fn source_file_name(episode_id: &str) -> String {
+        let number = episode_id.trim_start_matches("ep-30");
+        format!("Quiet.Harbor.Signal.S03E0{number}.1080p.WEB-DL.mkv")
+    }
+
+    /// A held download folder: every source the batch delivered is still on
+    /// disk, whether or not it was imported.
+    fn held_download_dir() -> tempfile::TempDir {
+        let download = tempfile::tempdir().expect("download dir");
+        for episode_id in ["ep-301", "ep-302", "ep-303"] {
+            // Sparse and just past the sample threshold, so it reads as a
+            // real episode without costing disk space.
+            std::fs::File::create(download.path().join(source_file_name(episode_id)))
+                .and_then(|file| file.set_len(51 * 1024 * 1024))
+                .expect("write held source");
+        }
+        download
+    }
+
+    fn held_download(download_dir: &std::path::Path) -> TrackedDownload {
+        let mut td = build_tracked_download("title-1", "series", BATCH_RELEASE);
+        td.state = TrackedDownloadState::ImportBlocked;
+        td.status = TrackedDownloadStatus::Warning;
+        td.status_messages = vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING.into()];
+        td.completed_source = Some(build_completed_download(
+            BATCH_RELEASE,
+            download_dir.to_string_lossy().as_ref(),
+            Some("tv"),
+        ));
+        td
+    }
+
+    async fn release(
+        app: &AppUseCase,
+        td: TrackedDownload,
+        verification: HeldImportVerification,
+    ) -> (AppResult<HeldImportReleaseSettlement>, TrackedDownload) {
+        let actor = scryer_domain::User::new_admin("synthetic-operator");
+        let mut tracker = TrackedDownloadService::new();
+        let id = td.id.clone();
+        let download_id = tracker.insert_for_tests(td);
+        let (reply, response) = tokio::sync::oneshot::channel();
+        crate::integration::workflow::run_tracked_download_command_for_tests(
+            app,
+            &actor,
+            &mut tracker,
+            TrackedDownloadCommand::ReleaseHeldImport {
+                id,
+                canonical_download_id: Some(download_id),
+                verification,
+                reply,
+            },
+        )
+        .await;
+        let settlement = response.await.expect("reply");
+        let td = tracker
+            .get_by_download_id(download_id)
+            .expect("tracked download stays cached")
+            .clone();
+        (settlement, td)
+    }
+
+    #[tokio::test]
+    async fn a_partly_imported_batch_whose_name_does_not_parse_is_not_settled_as_imported() {
+        let download = held_download_dir();
+        let app = batch_app(Some(&["ep-301", "ep-302", "ep-303"]), &["ep-301"]).await;
+
+        let (settlement, td) = release(&app, held_download(download.path()), AUTOMATIC).await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::AwaitingImport
+        );
+        assert_eq!(td.state, TrackedDownloadState::ImportPending);
+        assert!(!td.state.counts_as_imported());
+        // A hold that needs no proof, such as pending subtitles, goes back to
+        // the ordinary retry.
+        assert!(td.import_execution_retry.is_some(), "a retry is scheduled");
+    }
+
+    #[tokio::test]
+    async fn an_unproven_release_is_recorded_durably_with_its_reason() {
+        let download = held_download_dir();
+        let (app, submissions) =
+            batch_app_and_submissions(Some(&["ep-301", "ep-302", "ep-303"]), &["ep-301"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        let download_id = td.download_id.to_string();
+        let key = format!("canonical:{download_id}");
+        assert!(
+            submissions
+                .identity_tracked_states
+                .lock()
+                .await
+                .contains(&(key, "import_blocked".to_string())),
+            "the blocked state is persisted"
+        );
+        assert_eq!(
+            submissions
+                .canonical_identity_tracked_state_details
+                .lock()
+                .await
+                .iter()
+                .find(|(stored, _)| stored == &download_id)
+                .map(|(_, detail)| detail.clone()),
+            Some(crate::completed_download_handler::RELEASED_HOLD_UNPROVEN_WARNING.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_that_is_not_proven_stays_blocked_without_a_retry() {
+        let download = held_download_dir();
+        let app = batch_app(Some(&["ep-301", "ep-302", "ep-303"]), &["ep-301"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+        assert_eq!(
+            td.status_messages,
+            vec![crate::completed_download_handler::RELEASED_HOLD_UNPROVEN_WARNING.to_string()]
+        );
+        assert!(td.import_execution_retry.is_none(), "no retry is scheduled");
+        for episode_id in ["ep-301", "ep-302", "ep-303"] {
+            assert!(download.path().join(source_file_name(episode_id)).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fully_imported_batch_settles_as_imported() {
+        let download = held_download_dir();
+        let app = batch_app(
+            Some(&["ep-301", "ep-302", "ep-303"]),
+            &["ep-301", "ep-302", "ep-303"],
+        )
+        .await;
+
+        let (settlement, td) = release(&app, held_download(download.path()), AUTOMATIC).await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Imported
+        );
+        assert!(td.state.counts_as_imported(), "{:?}", td.state);
+    }
+
+    #[tokio::test]
+    async fn a_scryer_grab_whose_submission_cannot_be_resolved_is_left_untouched() {
+        let download = held_download_dir();
+        let app = batch_app(None, &["ep-301", "ep-302", "ep-303"]).await;
+
+        let (settlement, td) = release(&app, held_download(download.path()), AUTOMATIC).await;
+
+        assert!(settlement.is_err(), "{settlement:?}");
+        assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+        assert_eq!(
+            td.status_messages,
+            vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_download_whose_completed_source_is_unknown_is_left_untouched() {
+        let download = held_download_dir();
+        let app = batch_app(
+            Some(&["ep-301", "ep-302", "ep-303"]),
+            &["ep-301", "ep-302", "ep-303"],
+        )
+        .await;
+        let mut td = held_download(download.path());
+        td.completed_source = None;
+
+        let (settlement, after) = release(&app, td, AUTOMATIC).await;
+
+        assert!(settlement.is_err(), "{settlement:?}");
+        assert_eq!(after.state, TrackedDownloadState::ImportBlocked);
+    }
+
+    #[tokio::test]
+    async fn a_held_manual_import_with_fewer_files_imported_than_mapped_is_not_settled() {
+        let download = held_download_dir();
+        // Automatic verification alone would accept this: the grab asked for
+        // exactly the two episodes that were imported.
+        let app = batch_app(Some(&["ep-301", "ep-302"]), &["ep-301", "ep-302"]).await;
+        let manual = HeldImportVerification {
+            automatic: false,
+            manual_expected_mapping_count: Some(3),
+            require_positive_proof: false,
+        };
+
+        let (settlement, td) = release(&app, held_download(download.path()), manual).await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::AwaitingImport
+        );
+        assert!(!td.state.counts_as_imported());
+    }
+
+    #[tokio::test]
+    async fn a_held_manual_import_with_every_mapped_file_imported_settles() {
+        let download = held_download_dir();
+        let app = batch_app(Some(&["ep-301", "ep-302"]), &["ep-301", "ep-302"]).await;
+        let manual = HeldImportVerification {
+            automatic: false,
+            manual_expected_mapping_count: Some(2),
+            require_positive_proof: false,
+        };
+
+        let (settlement, td) = release(&app, held_download(download.path()), manual).await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Imported
+        );
+        assert!(td.state.counts_as_imported(), "{:?}", td.state);
+    }
+
+    #[tokio::test]
+    async fn releasing_a_download_not_blocked_on_the_hold_leaves_it_alone() {
+        let download = held_download_dir();
+        let app = batch_app(
+            Some(&["ep-301", "ep-302", "ep-303"]),
+            &["ep-301", "ep-302", "ep-303"],
+        )
+        .await;
+        let mut td = held_download(download.path());
+        td.state = TrackedDownloadState::ImportPending;
+        td.status_messages.clear();
+
+        let (settlement, after) = release(&app, td, AUTOMATIC).await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unchanged
+        );
+        assert_eq!(after.state, TrackedDownloadState::ImportPending);
+    }
+
+    /// A download Scryer did not grab, with no grab to scope it, so its
+    /// expected units cannot be established from a name that does not parse.
+    fn adopted_held_download(download_dir: &std::path::Path) -> TrackedDownload {
+        let mut td = held_download(download_dir);
+        td.client_item.is_scryer_origin = false;
+        td
+    }
+
+    /// A download whose archives failed to extract: one loose episode video
+    /// beside the archive parts that still hold the rest.
+    fn failed_extraction_download_dir() -> tempfile::TempDir {
+        let download = tempfile::tempdir().expect("download dir");
+        std::fs::File::create(download.path().join(source_file_name("ep-301")))
+            .and_then(|file| file.set_len(51 * 1024 * 1024))
+            .expect("write held source");
+        for part in FAILED_ARCHIVE_PARTS {
+            std::fs::write(download.path().join(part), b"archive part").expect("write part");
+        }
+        download
+    }
+
+    const FAILED_ARCHIVE_PARTS: [&str; 2] = ["quiet.harbor.part01.rar", "quiet.harbor.part02.rar"];
+
+    fn held_sources_remain(download: &std::path::Path) -> bool {
+        download.join(source_file_name("ep-301")).exists()
+            && FAILED_ARCHIVE_PARTS
+                .iter()
+                .all(|part| download.join(part).exists())
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_is_not_settled_on_the_fallback_verdict() {
+        // Every visible video was imported, which the ordinary verdict accepts,
+        // but nothing proves the archives' contents were.
+        let download = failed_extraction_download_dir();
+        let app = batch_app(None, &["ep-301"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            adopted_held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+        assert!(!td.state.counts_as_imported());
+        assert_eq!(
+            td.status_messages,
+            vec![crate::completed_download_handler::RELEASED_HOLD_UNPROVEN_WARNING.to_string()]
+        );
+        assert!(td.import_execution_retry.is_none(), "no retry is scheduled");
+        assert!(held_sources_remain(download.path()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_with_nothing_visible_in_the_download_is_not_settled() {
+        let download = tempfile::tempdir().expect("download dir");
+        std::fs::write(download.path().join("quiet.harbor.r00"), b"archive part").unwrap();
+        let app = batch_app(None, &["ep-301", "ep-302"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            adopted_held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        assert!(!td.state.counts_as_imported());
+        assert!(download.path().join("quiet.harbor.r00").exists());
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_whose_scoped_batch_is_only_partly_accounted_for_is_not_settled()
+     {
+        // Nothing is visible, so the imported files alone stand in for the
+        // download's contents; that is no proof the whole batch was imported.
+        let download = tempfile::tempdir().expect("download dir");
+        let app = batch_app(Some(&["ep-301", "ep-302", "ep-303"]), &["ep-301"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        assert!(!td.state.counts_as_imported());
+        assert!(td.import_execution_retry.is_none(), "no retry is scheduled");
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_settles_when_every_scoped_unit_was_imported() {
+        let download = held_download_dir();
+        let app = batch_app(
+            Some(&["ep-301", "ep-302", "ep-303"]),
+            &["ep-301", "ep-302", "ep-303"],
+        )
+        .await;
+
+        let (settlement, td) = release(
+            &app,
+            held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Imported
+        );
+        assert!(td.state.counts_as_imported(), "{:?}", td.state);
+    }
+
+    #[tokio::test]
+    async fn a_pending_subtitles_hold_still_settles_on_the_fallback_verdict() {
+        let download = failed_extraction_download_dir();
+        let app = batch_app(None, &["ep-301"]).await;
+
+        let (settlement, td) =
+            release(&app, adopted_held_download(download.path()), AUTOMATIC).await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Imported
+        );
+        assert!(td.state.counts_as_imported(), "{:?}", td.state);
+    }
 }

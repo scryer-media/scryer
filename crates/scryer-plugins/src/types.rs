@@ -227,6 +227,7 @@ fn indexer_limit_capabilities_to_domain(
         rate_limit_hint_seconds: limits.rate_limit_hint_seconds,
         api_quota_supported: limits.api_quota_supported,
         grab_quota_supported: limits.grab_quota_supported,
+        paged_search: limits.paged_search,
     }
 }
 

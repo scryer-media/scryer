@@ -76,7 +76,11 @@ fn a_merge_refuses_undeclared_and_host_bound_keys() {
             &changes(&[(key, Some("synthetic"))]),
         )
         .expect_err("refused");
-        assert!(matches!(error, AppError::Validation(_)), "{key}: {error:?}");
+        assert_eq!(
+            error.validation_reason(),
+            Some(refusal::PROVIDER_SETTING_UNKNOWN),
+            "{key}: {error:?}"
+        );
     }
 }
 
@@ -104,6 +108,40 @@ fn a_view_never_returns_a_secret_value() {
     assert!(secret.secret && secret.is_set);
     assert_eq!(secret.value, None);
     assert_eq!(view.fields[1].value.as_deref(), Some("north"));
+}
+
+#[test]
+fn a_gateway_client_id_fills_in_only_where_the_operator_set_none() {
+    let filled = with_gateway_client_id(BTreeMap::new(), Some(" synthetic-gateway-id "));
+    assert_eq!(
+        filled,
+        BTreeMap::from([("client_id".to_string(), "synthetic-gateway-id".to_string())])
+    );
+
+    let operator = BTreeMap::from([("client_id".to_string(), "synthetic-operator-id".to_string())]);
+    assert_eq!(
+        with_gateway_client_id(operator.clone(), Some("synthetic-gateway-id")),
+        operator
+    );
+
+    let blank_operator = BTreeMap::from([("client_id".to_string(), " ".to_string())]);
+    assert_eq!(
+        with_gateway_client_id(blank_operator, Some("synthetic-gateway-id"))["client_id"],
+        "synthetic-gateway-id"
+    );
+
+    let region = BTreeMap::from([("region".to_string(), "north".to_string())]);
+    for blank in [None, Some(""), Some("   ")] {
+        assert_eq!(with_gateway_client_id(region.clone(), blank), region);
+    }
+}
+
+#[test]
+fn gateway_client_id_settings_are_keyed_by_lowercased_provider_type() {
+    assert_eq!(
+        gateway_list_client_id_setting_key("Trakt"),
+        "lists.trakt.client_id"
+    );
 }
 
 #[test]

@@ -45,9 +45,49 @@ pub(crate) fn is_upgrade_from_before_to_at_least(
         && parse_major_minor(current_version).is_some_and(|current| current >= target)
 }
 
+/// Whether `version` is an older release than `major.minor.patch`. A version
+/// that cannot be read is not older than anything.
+pub(crate) fn is_release_before(version: &str, major: u64, minor: u64, patch: u64) -> bool {
+    let normalized = version.trim().trim_start_matches('v');
+    let mut parts = normalized.splitn(3, '.');
+    let mut number = || {
+        parts
+            .next()?
+            .chars()
+            .take_while(|character| character.is_ascii_digit())
+            .collect::<String>()
+            .parse::<u64>()
+            .ok()
+    };
+    match (number(), number(), number()) {
+        (Some(found_major), Some(found_minor), Some(found_patch)) => {
+            (found_major, found_minor, found_patch) < (major, minor, patch)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_release_is_older_only_when_all_three_numbers_read_and_compare_lower() {
+        for version in [
+            "0.21.13",
+            "v0.21.13",
+            "0.20.99",
+            "0.21.9-rc.1",
+            "0.21.13+build",
+        ] {
+            assert!(is_release_before(version, 0, 21, 14), "{version}");
+        }
+        for version in [
+            "0.21.14", "0.21.15", "0.22.0", "1.0.0", "0.21", "", "nightly",
+        ] {
+            assert!(!is_release_before(version, 0, 21, 14), "{version}");
+        }
+    }
 
     #[test]
     fn parses_major_minor_from_common_version_forms() {

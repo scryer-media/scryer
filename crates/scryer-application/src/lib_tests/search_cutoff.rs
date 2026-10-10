@@ -1632,17 +1632,16 @@ async fn a_multi_episode_files_landed_bar_matches_the_gates_incumbent_bar() {
         .link_file_to_episode(&file_id, &episode_ids[0])
         .await
         .expect("link first episode");
-    // The store joins one row per link; the mock's `link_file_to_episode`
-    // overwrites, so the second membership is seeded the way the join emits it.
-    {
-        let mut store = media_files.store.lock().await;
-        let mut second = store
-            .iter()
-            .find(|entry| entry.id == file_id)
-            .cloned()
-            .expect("seeded file");
-        second.episode_id = Some(episode_ids[1].clone());
-        store.push(second);
+    media_files
+        .link_file_to_episode(&file_id, &episode_ids[1])
+        .await
+        .expect("link second episode");
+    // A new link starts Additional, as in the store.
+    for episode_id in &episode_ids {
+        media_files
+            .set_media_file_roles_for_episode(&title.id, episode_id, &file_id, &[])
+            .await
+            .expect("make the file each episode's primary");
     }
 
     let profile = app
@@ -2242,6 +2241,11 @@ async fn a_season_with_a_missing_episode_has_not_reached_cutoff() {
             .link_file_to_episode(&file_id, episode_id)
             .await
             .expect("link media file to episode");
+        // A new link starts Additional, as in the store.
+        media_files
+            .set_media_file_roles_for_episode(&title.id, episode_id, &file_id, &[])
+            .await
+            .expect("make the file the episode's primary");
     }
 
     let scope = crate::SubmissionScope::Collection {
@@ -2286,6 +2290,10 @@ async fn a_season_with_a_missing_episode_has_not_reached_cutoff() {
         .link_file_to_episode(&file_id, &episode_ids[2])
         .await
         .expect("link media file to episode");
+    media_files
+        .set_media_file_roles_for_episode(&title.id, &episode_ids[2], &file_id, &[])
+        .await
+        .expect("make the file the episode's primary");
     let existing_files = media_files
         .list_media_files_for_title(&title.id)
         .await
@@ -2384,6 +2392,11 @@ async fn a_batch_that_fills_missing_episodes_is_admitted_over_a_better_member() 
         .link_file_to_episode(&file_id, &episode_ids[4])
         .await
         .expect("link media file to episode");
+    // A new link starts Additional, as in the store.
+    media_files
+        .set_media_file_roles_for_episode(&title.id, &episode_ids[4], &file_id, &[])
+        .await
+        .expect("make the file the episode's primary");
 
     let profile = test_quality_profile("batch-filler");
     let scoring_context = app

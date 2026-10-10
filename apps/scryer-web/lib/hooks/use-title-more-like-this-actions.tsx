@@ -110,7 +110,7 @@ export function useTitleMoreLikeThisActions({
       }
       const facet = discoveryItemFacet(item);
       if (!facet) {
-        setGlobalStatus(t("status.apiError"));
+        setGlobalStatus(t("status.apiError"), { level: "ERROR" });
         return;
       }
       try {
@@ -129,6 +129,7 @@ export function useTitleMoreLikeThisActions({
       } catch (caught) {
         setGlobalStatus(
           caught instanceof Error ? caught.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       }
     },
@@ -159,13 +160,14 @@ export function useTitleMoreLikeThisActions({
         const target = data?.title as TitleRouteTarget | null | undefined;
         const view = viewForFacet(target?.facet);
         if (!target || !view) {
-          setGlobalStatus(t("status.apiError"));
+          setGlobalStatus(t("status.apiError"), { level: "ERROR" });
           return;
         }
         navigate(routePathForTitle(target, view));
       } catch (caught) {
         setGlobalStatus(
           caught instanceof Error ? caught.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       }
     },

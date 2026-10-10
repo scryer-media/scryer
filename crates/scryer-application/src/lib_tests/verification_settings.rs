@@ -1,9 +1,9 @@
 use super::*;
 
-/// FR-042: full verification is the default, so an install that has never
-/// touched the preference gets the strong guarantee.
+/// Import copies verify at quick depth until the operator opts up, so an
+/// install that has never touched the preference gets quick.
 #[tokio::test]
-async fn verification_depth_defaults_to_full() {
+async fn verification_depth_defaults_to_quick() {
     let (app, actor) = bootstrap();
 
     let settings = app
@@ -11,9 +11,46 @@ async fn verification_depth_defaults_to_full() {
         .await
         .expect("read verification settings");
 
-    assert_eq!(settings.depth, VerificationDepth::Full);
+    assert_eq!(settings.depth, VerificationDepth::Quick);
     assert_eq!(
         app.resolve_verification_depth().await,
+        VerificationDepth::Quick
+    );
+}
+
+/// The default only covers an unset preference: an operator's explicit `full`
+/// is read back as full, not replaced by the quick default.
+#[tokio::test]
+async fn unset_verification_depth_reads_quick_and_explicit_full_stays_full() {
+    let (app, actor) = bootstrap();
+    assert_eq!(
+        app.resolve_verification_depth().await,
+        VerificationDepth::Quick
+    );
+
+    app.services
+        .config
+        .settings
+        .upsert_setting_json(
+            SETTINGS_SCOPE_MEDIA,
+            VERIFICATION_DEPTH_KEY,
+            None,
+            "\"full\"".to_string(),
+            SETTINGS_SOURCE_TYPED_GRAPHQL,
+            None,
+        )
+        .await
+        .expect("save explicit full depth");
+
+    assert_eq!(
+        app.resolve_verification_depth().await,
+        VerificationDepth::Full
+    );
+    assert_eq!(
+        app.get_verification_settings(&actor)
+            .await
+            .expect("read verification settings")
+            .depth,
         VerificationDepth::Full
     );
 }
@@ -61,11 +98,10 @@ async fn verification_depth_round_trips_through_settings() {
     );
 }
 
-/// A corrupt or unknown stored value must never silently weaken verification:
-/// the resolver falls back to the `full` default (FR-042's floor rule read in
-/// the safe direction).
+/// A corrupt or unknown stored value is not read as either depth on its own
+/// terms: the resolver falls back to the documented default.
 #[tokio::test]
-async fn unparseable_verification_depth_falls_back_to_full() {
+async fn unparseable_verification_depth_falls_back_to_the_default() {
     let (app, actor) = bootstrap();
 
     app.services
@@ -84,14 +120,14 @@ async fn unparseable_verification_depth_falls_back_to_full() {
 
     assert_eq!(
         app.resolve_verification_depth().await,
-        VerificationDepth::Full
+        VerificationDepth::default()
     );
     assert_eq!(
         app.get_verification_settings(&actor)
             .await
             .expect("read verification settings")
             .depth,
-        VerificationDepth::Full
+        VerificationDepth::default()
     );
 }
 
@@ -107,15 +143,15 @@ async fn updating_verification_depth_requires_system_settings_permission() {
         .update_verification_settings(
             &viewer,
             UpdateVerificationSettings {
-                depth: VerificationDepth::Quick,
+                depth: VerificationDepth::Full,
             },
         )
         .await
-        .expect_err("viewer must not be able to weaken verification");
+        .expect_err("viewer must not be able to change verification");
 
     assert!(matches!(error, AppError::Unauthorized(_)), "got {error:?}");
     assert_eq!(
         app.resolve_verification_depth().await,
-        VerificationDepth::Full
+        VerificationDepth::Quick
     );
 }

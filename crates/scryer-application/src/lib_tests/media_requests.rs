@@ -1354,6 +1354,7 @@ async fn list_media_requests_filters_by_facet_and_manageable_libraries() {
                 facet: Some(MediaFacet::Movie),
                 library_ids: Some(vec![default_library_id, alternate_library_id.clone()]),
                 status: Some(MediaRequestStatus::Pending),
+                requester_user_id: None,
             },
         )
         .await
@@ -1362,6 +1363,85 @@ async fn list_media_requests_filters_by_facet_and_manageable_libraries() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].library_id, alternate_library_id);
     assert_eq!(requests[0].requesters.len(), 1);
+}
+
+#[tokio::test]
+async fn manager_queue_filters_by_requester_within_manageable_libraries() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let other_library_id = "movie-library-unmanaged".to_string();
+    harness
+        .libraries
+        .libraries
+        .lock()
+        .await
+        .push(custom_movie_library(&other_library_id, "Unmanaged Movies"));
+    let second_requester = library_permission_user(
+        "queue-filter-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
+
+    harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id.clone(), 9041))
+        .await
+        .expect("first requester's request should succeed");
+    harness
+        .app
+        .submit_media_request(
+            &second_requester,
+            media_request_input(library_id.clone(), 9042),
+        )
+        .await
+        .expect("second requester's request should succeed");
+    harness
+        .app
+        .submit_media_request(
+            &harness.user,
+            media_request_input(other_library_id.clone(), 9043),
+        )
+        .await
+        .expect("unmanaged library request should succeed");
+
+    let queue_manager = library_permission_user(
+        "queue-filter-manager",
+        &library_id,
+        &[scryer_domain::LibraryPermission::ManageTitles],
+    );
+    let list = |requester_user_id: Option<String>| {
+        harness.app.list_media_requests(
+            &queue_manager,
+            ListMediaRequestsInput {
+                facet: Some(MediaFacet::Movie),
+                library_ids: None,
+                status: None,
+                requester_user_id,
+            },
+        )
+    };
+
+    let unfiltered = list(None).await.expect("queue should load");
+    assert_eq!(unfiltered.len(), 2);
+
+    let filtered = list(Some(second_requester.id.clone()))
+        .await
+        .expect("filtered queue should load");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].created_by_user_id, second_requester.id);
+
+    // The filter narrows the manager's queue; it never reaches a library the
+    // manager cannot already see.
+    let first_requester = list(Some(harness.user.id.clone()))
+        .await
+        .expect("filtered queue should load");
+    assert_eq!(first_requester.len(), 1);
+    assert_eq!(first_requester[0].library_id, library_id);
+
+    let blank = list(Some("   ".to_string()))
+        .await
+        .expect("blank filter should load");
+    assert_eq!(blank.len(), 2);
 }
 
 #[tokio::test]
@@ -1393,6 +1473,7 @@ async fn list_my_media_requests_filters_to_requester_owned_requests() {
                 facet: Some(MediaFacet::Movie),
                 library_ids: None,
                 status: None,
+                requester_user_id: None,
             },
         )
         .await
@@ -1444,6 +1525,7 @@ async fn request_only_user_can_list_submitted_bluey_series_request() {
                 facet: Some(MediaFacet::Series),
                 library_ids: None,
                 status: Some(MediaRequestStatus::Pending),
+                requester_user_id: None,
             },
         )
         .await
@@ -1621,6 +1703,160 @@ async fn requester_cannot_update_or_cancel_after_manager_resolution() {
     assert!(
         matches!(cancel_error, AppError::Validation(ref message) if message.contains("no longer pending")),
         "unexpected cancel error: {cancel_error:?}"
+    );
+}
+
+#[tokio::test]
+async fn manager_reopens_a_dismissed_request_keeping_requester_and_recording_the_reopen() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id, 9036))
+        .await
+        .expect("request should succeed");
+    let original = harness.media_requests.requests.lock().await[0].clone();
+    harness
+        .app
+        .dismiss_media_request(&harness.manager, &original.id)
+        .await
+        .expect("manager should dismiss request");
+
+    let reopened = harness
+        .app
+        .reopen_media_request(&harness.manager, &original.id)
+        .await
+        .expect("manager should reopen the dismissed request");
+
+    assert_eq!(reopened.status, MediaRequestStatus::Pending);
+    assert_eq!(reopened.created_by_user_id, original.created_by_user_id);
+    assert_eq!(reopened.created_at, original.created_at);
+    assert_eq!(reopened.resolved_by_user_id, None);
+    assert_eq!(reopened.resolved_at, None);
+    assert_eq!(harness.media_requests.requests.lock().await.len(), 1);
+
+    let reopen_events = harness
+        .domain_events
+        .events
+        .lock()
+        .await
+        .iter()
+        .filter_map(|event| match &event.payload {
+            DomainEventPayload::MediaRequestReopened(data) => {
+                Some((event.actor_user_id.clone(), data.request_id.clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reopen_events,
+        vec![(Some(harness.manager.id.clone()), original.id.clone())]
+    );
+
+    // From here the ordinary pending paths apply unchanged.
+    harness
+        .app
+        .update_my_media_request(
+            &harness.user,
+            UpdateMediaRequestInput {
+                request_id: original.id.clone(),
+                requested_quality_profile_id: "1080p".to_string(),
+                requested_monitor_type: None,
+                requested_monitor_selection: None,
+                requested_lease_days: None,
+            },
+        )
+        .await
+        .expect("requester can edit the reopened request");
+    harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &original.id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("manager can approve the reopened request");
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Approved
+    );
+}
+
+#[tokio::test]
+async fn only_a_resolver_can_reopen_and_only_a_dismissed_request() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id.clone(), 9037))
+        .await
+        .expect("request should succeed");
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+
+    let pending_error = harness
+        .app
+        .reopen_media_request(&harness.manager, &request_id)
+        .await
+        .expect_err("a pending request is not reopened");
+    assert!(
+        matches!(pending_error, AppError::Validation(ref message) if message.contains("dismissed")),
+        "unexpected error: {pending_error:?}"
+    );
+
+    harness
+        .app
+        .dismiss_media_request(&harness.manager, &request_id)
+        .await
+        .expect("manager should dismiss request");
+    let requester_error = harness
+        .app
+        .reopen_media_request(&harness.user, &request_id)
+        .await
+        .expect_err("the requester cannot reopen their dismissed request");
+    assert!(
+        matches!(requester_error, AppError::Unauthorized(_)),
+        "unexpected error: {requester_error:?}"
+    );
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Rejected
+    );
+
+    harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id, 9038))
+        .await
+        .expect("second request should succeed");
+    let canceled_id = harness.media_requests.requests.lock().await[1].id.clone();
+    harness
+        .app
+        .cancel_my_media_request(&harness.user, &canceled_id)
+        .await
+        .expect("requester should cancel");
+    let canceled_error = harness
+        .app
+        .reopen_media_request(&harness.manager, &canceled_id)
+        .await
+        .expect_err("a canceled request is not reopened");
+    assert!(
+        matches!(canceled_error, AppError::Validation(_)),
+        "unexpected error: {canceled_error:?}"
+    );
+    assert!(
+        !harness
+            .domain_events
+            .events
+            .lock()
+            .await
+            .iter()
+            .any(|event| matches!(event.payload, DomainEventPayload::MediaRequestReopened(_)))
     );
 }
 
@@ -2035,6 +2271,7 @@ async fn media_request_admin_surfaces_require_manage_titles_library_permission()
                 facet: Some(MediaFacet::Movie),
                 library_ids: None,
                 status: Some(MediaRequestStatus::Pending),
+                requester_user_id: None,
             },
         )
         .await
@@ -2697,6 +2934,7 @@ async fn a_title_manager_sees_and_cancels_their_own_held_request() {
                 facet: Some(MediaFacet::Movie),
                 library_ids: None,
                 status: None,
+                requester_user_id: None,
             },
         )
         .await

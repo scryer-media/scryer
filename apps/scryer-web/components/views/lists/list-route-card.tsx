@@ -1,14 +1,31 @@
 import { TitleTagsPicker } from "@/components/common/title-tags-picker";
+import { Calendar, ChevronDown, Eye, FolderOpen, Folders, Hash, Library, SlidersHorizontal, Tag, type LucideIcon } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleTagDefinition } from "@/lib/types/title-tags";
-import type { ListRoute } from "@/lib/types/lists";
+import type { ListRoute, ListFilter } from "@/lib/types/lists";
+import { ListFacetFilters } from "./list-facet-filters";
+import { ListEpisodePolicyFields } from "./list-episode-policy-fields";
 import type { Facet, LibraryRecord } from "@/lib/types/titles";
 import { listKindLabelKey } from "@/lib/utils/lists";
+import { facetById } from "@/lib/facets/registry";
+import { facetStyle } from "@/lib/facets/style";
 
 const INHERIT_QUALITY_PROFILE = "__inherit__";
 
+function RouteFieldLabel({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Icon className="size-4 shrink-0 text-[var(--scry-muted3)]" aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
 type ListRouteCardProps = {
+  filters: ListFilter[];
+  onFiltersChange: (filters: ListFilter[]) => void;
   kind: Facet;
   route: ListRoute;
   libraries: readonly LibraryRecord[];
@@ -16,6 +33,7 @@ type ListRouteCardProps = {
   tagDefinitions: readonly TitleTagDefinition[];
   tagsLoading: boolean;
   disabled?: boolean;
+  requestOnly?: boolean;
   idPrefix: string;
   onChange: (route: ListRoute) => void;
 };
@@ -29,10 +47,14 @@ export function ListRouteCard({
   tagDefinitions,
   tagsLoading,
   disabled,
+  requestOnly = false,
   idPrefix,
   onChange,
+  filters,
+  onFiltersChange,
 }: ListRouteCardProps) {
   const t = useTranslate();
+  const FacetIcon = facetById(kind)!.icon;
   const kindLibraries = libraries.filter((library) => library.facet === kind);
   const library = kindLibraries.find((entry) => entry.id === route.libraryId) ?? null;
   const roots = library?.roots ?? [];
@@ -52,109 +74,127 @@ export function ListRouteCard({
         ];
 
   return (
-    <fieldset
+    <Collapsible
       id={`${idPrefix}-route-${kind.toLowerCase()}`}
-      className="space-y-4 rounded-[12px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-4"
+      className="rounded-[12px] border"
+      style={{ borderColor: facetStyle(kind).dot }}
       disabled={disabled}
     >
-      <legend className="px-1 text-[13px] font-semibold text-[var(--scry-ink2)]">
-        {t("lists.route.heading", { kind: t(listKindLabelKey(kind)) })}
-      </legend>
-      {kindLibraries.length === 0 ? (
-        <p className="text-[12.5px] text-[var(--scry-warning-text)]">{t("lists.route.noLibrary")}</p>
-      ) : null}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <SingleSelectField
-          id={`${idPrefix}-route-${kind.toLowerCase()}-library`}
-          label={t("search.addConfigLibrary")}
-          value={route.libraryId}
-          options={kindLibraries.map((entry) => ({ value: entry.id, label: entry.name }))}
-          onValueChange={(libraryId) => {
-            const next = kindLibraries.find((entry) => entry.id === libraryId);
-            const root = next?.roots.find((entry) => entry.isDefault) ?? next?.roots[0];
-            update({ libraryId, rootFolderId: root?.id ?? null });
-          }}
-          disabled={disabled || kindLibraries.length === 0}
-        />
-        <SingleSelectField
-          id={`${idPrefix}-route-${kind.toLowerCase()}-quality`}
-          label={t("search.addConfigQualityProfile")}
-          value={route.qualityProfileId ?? INHERIT_QUALITY_PROFILE}
-          options={[
-            { value: INHERIT_QUALITY_PROFILE, label: t("search.addConfigInheritLibrary") },
-            ...qualityProfiles.map((profile) => ({ value: profile.id, label: profile.name })),
-          ]}
-          onValueChange={(value) =>
-            update({ qualityProfileId: value === INHERIT_QUALITY_PROFILE ? null : value })
-          }
-          disabled={disabled}
-        />
-        <SingleSelectField
-          id={`${idPrefix}-route-${kind.toLowerCase()}-root`}
-          label={t("search.addConfigRootFolder")}
-          valueKind="path"
-          value={route.rootFolderId ?? ""}
-          options={roots.map((root) => ({ value: root.id, label: root.path }))}
-          onValueChange={(rootFolderId) => update({ rootFolderId })}
-          disabled={disabled || roots.length === 0}
-        />
-        <SingleSelectField
-          id={`${idPrefix}-route-${kind.toLowerCase()}-monitor`}
-          label={t("search.addConfigMonitorType")}
-          value={route.monitorType}
-          options={monitorOptions}
-          onValueChange={(monitorType) => update({ monitorType })}
-          disabled={disabled}
-        />
-        {kind === "MOVIE" ? (
-          <SingleSelectField
-            id={`${idPrefix}-route-${kind.toLowerCase()}-availability`}
-            label={t("settings.minAvailabilityLabel")}
-            value={route.minAvailability ?? "announced"}
-            options={["announced", "in_cinemas", "released"].map((value) => ({
-              value,
-              label: t(`settings.minAvailability.${value}`),
-            }))}
-            onValueChange={(minAvailability) => update({ minAvailability })}
+      <CollapsibleTrigger className="group flex w-full items-center justify-between gap-3 rounded-[12px] p-4 text-left text-[13px] font-semibold text-[var(--scry-ink2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={disabled}>
+        <span className="inline-flex items-center gap-2">
+          <FacetIcon className="size-4" style={{ color: facetStyle(kind).text }} aria-hidden="true" />
+          {t(listKindLabelKey(kind))}
+        </span>
+        <ChevronDown className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" aria-hidden="true" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <fieldset className="space-y-4 px-4 pb-4" disabled={disabled}>
+          <legend className="sr-only">{t("lists.route.heading", { kind: t(listKindLabelKey(kind)) })}</legend>
+          {kindLibraries.length === 0 ? (
+            <p className="text-[12.5px] text-[var(--scry-warning-text)]">{t("lists.route.noLibrary")}</p>
+          ) : null}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SingleSelectField
+              id={`${idPrefix}-route-${kind.toLowerCase()}-library`}
+              label={<RouteFieldLabel icon={Library} label={t("search.addConfigLibrary")} />}
+              value={route.libraryId}
+              options={kindLibraries.map((entry) => ({ value: entry.id, label: entry.name }))}
+              onValueChange={(libraryId) => {
+                const next = kindLibraries.find((entry) => entry.id === libraryId);
+                const root = next?.roots.find((entry) => entry.isDefault) ?? next?.roots[0];
+                update({ libraryId, rootFolderId: root?.id ?? null });
+              }}
+              disabled={disabled || kindLibraries.length === 0}
+            />
+            <SingleSelectField
+              id={`${idPrefix}-route-${kind.toLowerCase()}-quality`}
+              label={<RouteFieldLabel icon={SlidersHorizontal} label={t("search.addConfigQualityProfile")} />}
+              value={route.qualityProfileId ?? INHERIT_QUALITY_PROFILE}
+              options={[
+                ...(!requestOnly ? [{ value: INHERIT_QUALITY_PROFILE, label: t("search.addConfigInheritLibrary") }] : []),
+                ...qualityProfiles.map((profile) => ({ value: profile.id, label: profile.name })),
+              ]}
+              onValueChange={(value) =>
+                update({ qualityProfileId: value === INHERIT_QUALITY_PROFILE ? null : value })
+              }
+              disabled={disabled}
+            />
+            {!requestOnly ? <SingleSelectField
+              id={`${idPrefix}-route-${kind.toLowerCase()}-root`}
+              label={<RouteFieldLabel icon={FolderOpen} label={t("search.addConfigRootFolder")} />}
+              valueKind="path"
+              value={route.rootFolderId ?? ""}
+              options={roots.map((root) => ({ value: root.id, label: root.path }))}
+              onValueChange={(rootFolderId) => update({ rootFolderId })}
+              disabled={disabled || roots.length === 0}
+            /> : null}
+            <SingleSelectField
+              id={`${idPrefix}-route-${kind.toLowerCase()}-monitor`}
+              label={<RouteFieldLabel icon={Eye} label={t("search.addConfigMonitorType")} />}
+              value={route.monitorType}
+              options={monitorOptions}
+              onValueChange={(monitorType) => update({ monitorType })}
+              disabled={disabled}
+            />
+            {!requestOnly && (kind === "MOVIE" ? (
+              <SingleSelectField
+                id={`${idPrefix}-route-${kind.toLowerCase()}-availability`}
+                label={<RouteFieldLabel icon={Calendar} label={t("settings.minAvailabilityLabel")} />}
+                value={route.minAvailability ?? "announced"}
+                options={["announced", "in_cinemas", "released"].map((value) => ({
+                  value,
+                  label: t(`settings.minAvailability.${value}`),
+                }))}
+                onValueChange={(minAvailability) => update({ minAvailability })}
+                disabled={disabled}
+              />
+            ) : (
+              <SingleSelectField
+                id={`${idPrefix}-route-${kind.toLowerCase()}-season-folder`}
+                label={<RouteFieldLabel icon={Folders} label={t("search.addConfigSeasonFolder")} />}
+                value={route.useSeasonFolders === false ? "disabled" : "enabled"}
+                options={[
+                  { value: "enabled", label: t("search.seasonFolder.enabled") },
+                  { value: "disabled", label: t("search.seasonFolder.disabled") },
+                ]}
+                onValueChange={(value) => update({ useSeasonFolders: value === "enabled" })}
+                disabled={disabled}
+              />
+            ))}
+            {!requestOnly && kind === "ANIME" ? (
+              <SingleSelectField
+                id={`${idPrefix}-route-${kind.toLowerCase()}-numbering`}
+                label={<RouteFieldLabel icon={Hash} label={t("settings.releaseNumberingLabel")} />}
+                value={route.releaseNumbering ?? "AUTO"}
+                options={[
+                  { value: "AUTO", label: t("settings.releaseNumberingAuto") },
+                  { value: "OFFICIAL", label: t("settings.releaseNumberingOfficial") },
+                  { value: "ALTERNATE", label: t("settings.releaseNumberingAlternate") },
+                  { value: "DVD", label: t("settings.releaseNumberingDvd") },
+                ]}
+                onValueChange={(releaseNumbering) => update({ releaseNumbering })}
+                disabled={disabled}
+              />
+            ) : null}
+          {!requestOnly ? <div className="min-w-0 space-y-1.5">
+            <label htmlFor={`${idPrefix}-route-${kind.toLowerCase()}-tags-tags-add`} className="block text-sm font-medium text-[var(--scry-ink2)]">
+              <RouteFieldLabel icon={Tag} label={t("settings.titleTags")} />
+            </label>
+            <TitleTagsPicker
+            layout="compact"
+            idPrefix={`${idPrefix}-route-${kind.toLowerCase()}-tags`}
+            value={route.tags}
+            onChange={(tags) => update({ tags })}
+            definitions={tagDefinitions}
+            loading={tagsLoading}
             disabled={disabled}
           />
-        ) : (
-          <SingleSelectField
-            id={`${idPrefix}-route-${kind.toLowerCase()}-season-folder`}
-            label={t("search.addConfigSeasonFolder")}
-            value={route.useSeasonFolders === false ? "disabled" : "enabled"}
-            options={[
-              { value: "enabled", label: t("search.seasonFolder.enabled") },
-              { value: "disabled", label: t("search.seasonFolder.disabled") },
-            ]}
-            onValueChange={(value) => update({ useSeasonFolders: value === "enabled" })}
-            disabled={disabled}
-          />
-        )}
-        {kind === "ANIME" ? (
-          <SingleSelectField
-            id={`${idPrefix}-route-${kind.toLowerCase()}-numbering`}
-            label={t("settings.releaseNumberingLabel")}
-            value={route.releaseNumbering ?? "AUTO"}
-            options={[
-              { value: "AUTO", label: t("settings.releaseNumberingAuto") },
-              { value: "OFFICIAL", label: t("settings.releaseNumberingOfficial") },
-              { value: "ALTERNATE", label: t("settings.releaseNumberingAlternate") },
-              { value: "DVD", label: t("settings.releaseNumberingDvd") },
-            ]}
-            onValueChange={(releaseNumbering) => update({ releaseNumbering })}
-            disabled={disabled}
-          />
-        ) : null}
-      </div>
-      <TitleTagsPicker
-        idPrefix={`${idPrefix}-route-${kind.toLowerCase()}-tags`}
-        value={route.tags}
-        onChange={(tags) => update({ tags })}
-        definitions={tagDefinitions}
-        loading={tagsLoading}
-        disabled={disabled}
-      />
-    </fieldset>
+          </div> : null}
+          </div>
+          <ListFacetFilters facet={kind} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
+          <ListEpisodePolicyFields facet={kind} library={library} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
+        </fieldset>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

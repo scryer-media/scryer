@@ -42,17 +42,23 @@ export function useTitleRefreshAndScan({
         throw error;
       }
       const summary = data?.scanTitleLibrary;
+      const skipped = summary?.skipped ?? 0;
+      const unmatched = summary?.unmatched ?? 0;
       setGlobalStatus(
         t("status.titleScanSuccess", {
           imported: summary?.imported ?? 0,
-          skipped: summary?.skipped ?? 0,
-          unmatched: summary?.unmatched ?? 0,
+          skipped,
+          unmatched,
         }),
+        // A scan that left files behind is worth a second look; one that
+        // took everything is a plain success.
+        { level: skipped > 0 || unmatched > 0 ? "WARNING" : "SUCCESS" },
       );
       await onScanned();
     } catch (error: unknown) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("settings.libraryScanFailed"),
+        { level: "ERROR" },
       );
     } finally {
       setLoadingTitleId((current) =>

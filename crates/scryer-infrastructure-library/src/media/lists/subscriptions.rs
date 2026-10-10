@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use scryer_application::lists::refusal::{self, refused};
 use scryer_application::lists::{ListSubscriptionQuery, ListSubscriptionRepository};
 use scryer_application::{AppError, AppResult};
 use scryer_domain::{
@@ -33,6 +34,60 @@ const RUN_COLUMNS: &str =
 
 #[async_trait]
 impl ListSubscriptionRepository for ListStore {
+    async fn vocabulary_cache(
+        &self,
+    ) -> AppResult<Option<scryer_application::lists::vocabulary::VocabularySnapshot>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT version, payload_json, checked_at, jitter_seconds FROM canonical_tag_vocabulary_cache WHERE id = 'canonical'",
+            &[],
+        ).await?;
+        row.map(|row| {
+            Ok(scryer_application::lists::vocabulary::VocabularySnapshot {
+                version: row.text("version")?,
+                entries: json_column(&row, "payload_json", "[]")?,
+                checked_at: row.timestamp("checked_at")?,
+                jitter_seconds: row.i64("jitter_seconds")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn save_vocabulary_cache(
+        &self,
+        snapshot: &scryer_application::lists::vocabulary::VocabularySnapshot,
+        unchanged: bool,
+    ) -> AppResult<()> {
+        let (sql, args) = if unchanged {
+            (
+                "UPDATE canonical_tag_vocabulary_cache SET checked_at = {} WHERE id = 'canonical' AND version = {}",
+                vec![
+                    SqlArg::Timestamp(snapshot.checked_at),
+                    SqlArg::Text(snapshot.version.clone()),
+                ],
+            )
+        } else {
+            (
+                "INSERT INTO canonical_tag_vocabulary_cache (id, version, payload_json, checked_at, jitter_seconds) VALUES ('canonical', {}, {}, {}, {}) ON CONFLICT (id) DO UPDATE SET version = excluded.version, payload_json = excluded.payload_json, checked_at = excluded.checked_at, jitter_seconds = excluded.jitter_seconds",
+                vec![
+                    SqlArg::Text(snapshot.version.clone()),
+                    json_arg(&snapshot.entries)?,
+                    SqlArg::Timestamp(snapshot.checked_at),
+                    SqlArg::I64(snapshot.jitter_seconds),
+                ],
+            )
+        };
+        let changed =
+            SqlRuntime::execute_write(&self.datastore, "save_canonical_vocabulary", sql, args)
+                .await?;
+        if changed != 1 {
+            return Err(AppError::Repository(
+                "canonical vocabulary cache changed during refresh".into(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn create(&self, subscription: ListSubscription) -> AppResult<ListSubscription> {
         let insert_args = subscription_insert_args(&subscription)?;
         let route_rows = route_rows(&subscription)?;
@@ -53,7 +108,10 @@ impl ListSubscriptionRepository for ListStore {
                 if let Some(source) = public_source
                     && public_source_followed_tx(tx, &source).await?
                 {
-                    return Err(AppError::Validation("this list is already followed".into()));
+                    return Err(refused(
+                        refusal::ALREADY_FOLLOWED,
+                        "this list is already followed",
+                    ));
                 }
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),
@@ -317,6 +375,19 @@ impl ListSubscriptionRepository for ListStore {
         .await?;
         rows.iter().map(row_to_run).collect()
     }
+
+    async fn delete_sync_runs_older_than(&self, cutoff: DateTime<Utc>) -> AppResult<u32> {
+        let deleted = SqlRuntime::execute_write(
+            &self.datastore,
+            "delete_expired_list_sync_runs",
+            "DELETE FROM list_sync_runs WHERE started_at < {}",
+            vec![SqlArg::Timestamp(cutoff)],
+        )
+        .await?;
+        u32::try_from(deleted).map_err(|_| {
+            AppError::Repository("deleted list sync run count exceeds u32 range".to_string())
+        })
+    }
 }
 
 impl ListStore {
@@ -438,7 +509,7 @@ fn subscription_insert_args(subscription: &ListSubscription) -> AppResult<Vec<Sq
         ListSourceOrigin::SmgChart { chart_key, scope } => {
             (Some(chart_key.clone()), Some(scope.clone()))
         }
-        ListSourceOrigin::ProviderFetch | ListSourceOrigin::SmgImdbList => (None, None),
+        ListSourceOrigin::ProviderFetch => (None, None),
     };
     let sync = &subscription.sync;
     let counts = &subscription.counts;
@@ -562,7 +633,6 @@ fn row_to_subscription(row: &SqlRow) -> AppResult<ListSubscription> {
             scope: row.opt_text("chart_scope")?.unwrap_or_default(),
         },
         "provider_fetch" => ListSourceOrigin::ProviderFetch,
-        "smg_imdb_list" => ListSourceOrigin::SmgImdbList,
         other => {
             return Err(AppError::Repository(format!(
                 "unknown source_origin value '{other}'"

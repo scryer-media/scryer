@@ -379,6 +379,9 @@ pub fn from_notification_target(
 pub fn from_domain_event(event: DomainEvent) -> DomainEventEnvelopePayload {
     let (stream_kind, stream_id) = match event.stream {
         scryer_domain::DomainEventStream::Global => (StreamKindValue::Global, None),
+        scryer_domain::DomainEventStream::User { user_id } => {
+            (StreamKindValue::User, Some(user_id))
+        }
         scryer_domain::DomainEventStream::Title { title_id } => {
             (StreamKindValue::Title, Some(title_id))
         }
@@ -536,6 +539,14 @@ pub fn from_pp_script(s: scryer_domain::PostProcessingScript) -> PostProcessingS
         priority: s.priority,
         enabled: s.enabled,
         debug: s.debug,
+        language: s.language.into(),
+        trigger: s.trigger.into(),
+        schedule_description: s
+            .schedule
+            .as_ref()
+            .map(scryer_application::scripts::schedule::describe_schedule),
+        schedule: s.schedule.map(Into::into),
+        run_on_startup: s.run_on_startup,
         created_at: s.created_at,
         updated_at: s.updated_at,
     }
@@ -644,4 +655,17 @@ pub(super) fn monitor_type_value_from_normalized(value: &str) -> Option<MonitorT
 /// the wire carries real JSON, never a string-encoded document.
 pub fn json_string_to_value(raw: String) -> async_graphql::Json<serde_json::Value> {
     async_graphql::Json(serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null))
+}
+
+pub fn from_script_interpreter_config(
+    config: scryer_application::scripts::runner::InterpreterConfig,
+) -> ScriptInterpreterSettingsPayload {
+    let display =
+        |path: Option<std::path::PathBuf>| path.map(|path| path.to_string_lossy().into_owned());
+    ScriptInterpreterSettingsPayload {
+        python: display(config.python),
+        powershell: display(config.powershell),
+        batch: display(config.batch),
+        go: display(config.go),
+    }
 }

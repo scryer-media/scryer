@@ -54,6 +54,28 @@ pub async fn remember_rejected_request(
     }
     subscription_ids.extend(rows.iter().map(|row| row.subscription_id.clone()));
 
+    let movie = request
+        .is_list_series_movie()
+        .then(|| {
+            request
+                .requested_monitor_selection
+                .as_ref()
+                .and_then(|selection| selection.series_movies.first())
+        })
+        .flatten();
+    let (kind, external_ids, display_title) = if let Some(movie) = movie {
+        (
+            scryer_domain::MediaFacet::Movie,
+            &movie.external_ids,
+            &movie.name,
+        )
+    } else if request.is_list_series_movie() {
+        return Err(crate::AppError::Repository(
+            "list movie request has no selected movie".into(),
+        ));
+    } else {
+        (request.facet.clone(), &request.external_ids, &request.title)
+    };
     let mut public_ids = BTreeSet::new();
     for subscription_id in &subscription_ids {
         let Some(subscription) = subscriptions.get_by_id(subscription_id).await? else {
@@ -64,21 +86,17 @@ pub async fn remember_rejected_request(
         }
         public_ids.insert(subscription.id.clone());
         let existing = exclusions
-            .find_matching(
-                request.facet.clone(),
-                &request.external_ids,
-                Some(&subscription.id),
-            )
+            .find_matching(kind.clone(), external_ids, Some(&subscription.id))
             .await?;
-        if !existing.is_empty() || request.external_ids.is_empty() {
+        if !existing.is_empty() || external_ids.is_empty() {
             continue;
         }
         exclusions
             .create(ListExclusion {
                 id: Id::new().0,
-                kind: request.facet.clone(),
-                external_ids: request.external_ids.clone(),
-                display_title: request.title.clone(),
+                kind: kind.clone(),
+                external_ids: external_ids.clone(),
+                display_title: display_title.clone(),
                 year: request.year,
                 scope: ListExclusionScope::List {
                     subscription_id: subscription.id.clone(),

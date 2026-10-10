@@ -414,6 +414,16 @@ mod tests {
         }
     }
 
+    /// A derived folder is the root joined with the platform separator, so a
+    /// Unix-shaped expectation is compared component by component.
+    fn assert_folder(actual: Option<&str>, expected: &str) {
+        assert_eq!(
+            actual.map(std::path::Path::new),
+            Some(std::path::Path::new(expected)),
+            "{actual:?}"
+        );
+    }
+
     fn media(id: &str, path: &str) -> MediaFileRow {
         media_for("title-1", id, path)
     }
@@ -439,10 +449,7 @@ mod tests {
             |_| 0,
         );
 
-        assert_eq!(
-            plans[0].folder_path.as_deref(),
-            Some("/data/Anime/Fixture Alpha")
-        );
+        assert_folder(plans[0].folder_path.as_deref(), "/data/Anime/Fixture Alpha");
         assert_eq!(plans[0].unlink_media_file_ids, vec!["beta-1", "loose"]);
     }
 
@@ -458,10 +465,7 @@ mod tests {
         );
 
         assert!(plans[0].tied_maximum);
-        assert_eq!(
-            plans[0].folder_path.as_deref(),
-            Some("/data/Anime/Fixture Beta")
-        );
+        assert_folder(plans[0].folder_path.as_deref(), "/data/Anime/Fixture Beta");
         assert_eq!(plans[0].unlink_media_file_ids, vec!["alpha"]);
     }
 
@@ -497,10 +501,7 @@ mod tests {
             .iter()
             .find(|plan| plan.title_id == "title-2")
             .expect("second plan");
-        assert_eq!(
-            first.folder_path.as_deref(),
-            Some("/data/Anime/Shared Fixture")
-        );
+        assert_folder(first.folder_path.as_deref(), "/data/Anime/Shared Fixture");
         assert!(first.unlink_media_file_ids.is_empty());
         assert_eq!(second.folder_path, None);
         assert_eq!(second.unlink_media_file_ids, vec!["second-1"]);
@@ -570,7 +571,7 @@ mod tests {
             .await
             .expect("link count");
 
-        assert_eq!(folder_path.as_deref(), Some("/data/Anime/Winner"));
+        assert_folder(folder_path.as_deref(), "/data/Anime/Winner");
         assert_eq!(media_ids, vec!["winner-1", "winner-2"]);
         assert_eq!(link_count, 0);
     }

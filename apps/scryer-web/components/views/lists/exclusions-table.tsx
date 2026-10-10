@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { SingleSelectField } from "@/components/ui/select";
 import {
@@ -21,11 +22,14 @@ import type { ListExclusion, ListSubscription } from "@/lib/types/lists";
 import type { Facet } from "@/lib/types/titles";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
+  exclusionFieldsFromMetadataResult,
   LIST_KINDS,
   listKindLabelKey,
   parseExternalIdList,
   type AddListExclusionInput,
 } from "@/lib/utils/lists";
+
+import { ExclusionTitleSearch } from "./exclusion-title-search";
 
 const ALL_LISTS = "__all__";
 
@@ -90,10 +94,28 @@ export function ExclusionsTable({
         className="space-y-3 rounded-[12px] border border-[var(--scry-border3)] bg-[var(--scry-surf)] p-4"
       >
         <h2 className="text-[13px] font-semibold text-[var(--scry-ink2)]">{t("lists.exclusions.addHeading")}</h2>
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_100px_140px]">
+        <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)_100px]">
+          <SingleSelectField
+            id="list-exclusion-kind"
+            label={t("lists.exclusions.kindLabel")}
+            value={kind}
+            options={LIST_KINDS.map((value) => ({ value, label: t(listKindLabelKey(value)) }))}
+            onValueChange={(value) => setKind(value as Facet)}
+          />
           <label className="space-y-1.5" htmlFor="list-exclusion-title">
             <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.exclusions.titleLabel")}</span>
-            <Input id="list-exclusion-title" value={title} onChange={(event) => setTitle(event.target.value)} />
+            <ExclusionTitleSearch
+              id="list-exclusion-title"
+              value={title}
+              kind={kind}
+              onChange={setTitle}
+              onPick={(result) => {
+                const fields = exclusionFieldsFromMetadataResult(result, kind);
+                setTitle(fields.title);
+                setYear(fields.year);
+                setIds(fields.ids);
+              }}
+            />
           </label>
           <label className="space-y-1.5" htmlFor="list-exclusion-year">
             <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.exclusions.yearLabel")}</span>
@@ -105,13 +127,6 @@ export function ExclusionsTable({
               onChange={(event) => setYear(sanitizeDigits(event.target.value))}
             />
           </label>
-          <SingleSelectField
-            id="list-exclusion-kind"
-            label={t("lists.exclusions.kindLabel")}
-            value={kind}
-            options={LIST_KINDS.map((value) => ({ value, label: t(listKindLabelKey(value)) }))}
-            onValueChange={(value) => setKind(value as Facet)}
-          />
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="space-y-1.5" htmlFor="list-exclusion-ids">
@@ -201,17 +216,15 @@ export function ExclusionsTable({
                 </TableCell>
                 <TableCell className="text-right">
                   {/* Not `list-exclusion-…`: that id family belongs to the rows alone. */}
-                  <Button
+                  <IconButton
                     id={`list-exclusions-remove-${exclusion.id}`}
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("lists.exclusions.remove", { name: exclusion.displayTitle })}
+                    label={t("lists.exclusions.remove", { name: exclusion.displayTitle })}
+                    tone="delete"
                     disabled={busyIds.has(exclusion.id)}
                     onClick={() => setPendingRemoval(exclusion)}
                   >
                     <Trash2 className="h-4 w-4" />
-                  </Button>
+                  </IconButton>
                 </TableCell>
               </TableRow>
             ))}

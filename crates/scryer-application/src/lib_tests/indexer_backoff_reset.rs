@@ -78,6 +78,7 @@ impl IndexerClient for BackoffRecordingIndexerClient {
         _cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
             indexer_outcomes: Vec::new(),
             results: Vec::new(),

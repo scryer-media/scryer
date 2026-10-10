@@ -1,5 +1,72 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { listMembershipTitleHref } from "./lists.ts";
+import { listMembershipReasonKey, sortListSubscriptions } from "./lists.ts";
+
+test("a list entry's reason code resolves to its sentence, and an unknown code to none", () => {
+  assert.equal(listMembershipReasonKey("media_type_not_included"), "lists.reason.mediaTypeNotIncluded");
+  assert.equal(listMembershipReasonKey("missing_unreleased"), "lists.reason.missingReleaseDate");
+  assert.equal(listMembershipReasonKey("constructor"), null);
+  assert.equal(listMembershipReasonKey("some_future_reason"), null);
+  assert.equal(listMembershipReasonKey(null), null);
+});
+
+test("followed lists sort by name, and by last sync as failed, waiting, synced, then switched off", () => {
+  const list = (name: string, state: "OK" | "NEW" | "FAIL", lastAt: string | null, enabled = true) => ({
+    name,
+    enabled,
+    sync: { state, lastAt, nextAt: null, errorMessage: null, errorAt: null, pausedUntil: null },
+  });
+  const lists = [
+    list("delta", "OK", "2026-01-02T00:00:00Z"),
+    list("Alpha", "OK", "2026-01-03T00:00:00Z"),
+    list("charlie", "FAIL", "2026-01-01T00:00:00Z"),
+    list("Bravo 10", "OK", "2026-01-04T00:00:00Z", false),
+    list("Bravo 2", "NEW", null),
+  ];
+  const names = (sorted: { name: string }[]) => sorted.map((entry) => entry.name);
+
+  assert.deepEqual(names(sortListSubscriptions(lists, null)), names(lists));
+  assert.deepEqual(names(sortListSubscriptions(lists, { key: "name", descending: false })), [
+    "Alpha",
+    "Bravo 2",
+    "Bravo 10",
+    "charlie",
+    "delta",
+  ]);
+  assert.deepEqual(names(sortListSubscriptions(lists, { key: "name", descending: true })), [
+    "delta",
+    "charlie",
+    "Bravo 10",
+    "Bravo 2",
+    "Alpha",
+  ]);
+  // A switched-off list sorts as off even though its last sync succeeded.
+  assert.deepEqual(names(sortListSubscriptions(lists, { key: "sync", descending: false })), [
+    "charlie",
+    "Bravo 2",
+    "Alpha",
+    "delta",
+    "Bravo 10",
+  ]);
+  assert.deepEqual(names(sortListSubscriptions(lists, { key: "sync", descending: true })), [
+    "Bravo 10",
+    "delta",
+    "Alpha",
+    "Bravo 2",
+    "charlie",
+  ]);
+});
+
+test("membership title links use library IDs for every facet and omit unlinked titles", () => {
+  assert.equal(listMembershipTitleHref("MOVIE", "movie-1"), "/movies?id=movie-1");
+  assert.equal(listMembershipTitleHref("SERIES", "series-1"), "/series?id=series-1");
+  assert.equal(listMembershipTitleHref("ANIME", "anime-1"), "/anime?id=anime-1");
+  assert.equal(listMembershipTitleHref("ANIME", "parent-1", "movie&1"), "/anime?id=parent-1&seriesMovie=movie%261");
+  assert.equal(listMembershipTitleHref("ANIME", "title&other=1"), "/anime?id=title%26other%3D1");
+  assert.equal(listMembershipTitleHref("ANIME", null), null);
+  assert.equal(listMembershipTitleHref("ANIME", "  "), null);
+});
 
 import type {
   ListProviderManifest,
@@ -12,16 +79,20 @@ import type {
 } from "../types/lists.ts";
 import {
   DEFAULT_LIST_MAX_PER_SYNC,
+  providerLogoSrc,
   defaultListRoute,
   draftToSubscribeInput,
   emptyListDraft,
   draftToUpdateInput,
   EMPTY_LIST_FILTER,
   findListFilter,
+  inheritedListEpisodePolicyLabelKey,
   splitListValues,
   withListFilter,
+  exclusionFieldsFromMetadataResult,
   exclusionInputFromTitle,
   isListModeSelectable,
+  isListSourceFollowed,
   listCoverageSegments,
   listDraftProblems,
   listIntervalParts,
@@ -32,6 +103,10 @@ import {
   listMembershipStateLabelKey,
   listMembershipStateTone,
   listModeLabelKey,
+  LIST_SYNC_RUNS_SHOWN,
+  listCoverageSegmentTone,
+  listSyncStateLabelKey,
+  shownListSyncRuns,
   listSyncStateTone,
   listMembershipRowId,
   listSyncPollDelayMs,
@@ -46,6 +121,8 @@ import {
   recognizeListUrl,
   titleListMembershipChanged,
   followListOfferedKinds,
+  isListMediaParam,
+  listKindsFromSourceParams,
   subscriptionToDraft,
 } from "./lists.ts";
 
@@ -223,10 +300,52 @@ test("public modes exclude member requests and discover cannot be picked yet", (
 test("state labels and tones cover every sync and membership state", () => {
   assert.equal(listSyncStateTone("FAIL"), "negative");
   assert.equal(listSyncStateTone("OK"), "positive");
+  assert.equal(listSyncStateLabelKey("NEW"), "lists.syncState.new");
+  assert.equal(listSyncStateLabelKey("NEW", null), "lists.syncState.new");
+  assert.equal(listSyncStateLabelKey("NEW", "2026-10-09T12:00:00Z"), "lists.syncState.waiting");
+  assert.equal(listSyncStateLabelKey("OK", "2026-10-09T12:00:00Z"), "lists.syncState.ok");
   assert.equal(listMembershipStateLabelKey("BLOCKED_PERMISSION"), "lists.membershipState.blockedPermission");
   assert.equal(listMembershipStateLabelKey("IN_LIBRARY"), "lists.membershipState.inLibrary");
   assert.equal(listMembershipStateTone("REJECTED"), "negative");
   assert.equal(listMembershipStateTone("UNRESOLVED"), "warning");
+  assert.equal(listCoverageSegmentTone("added"), listMembershipStateTone("ADDED"));
+  assert.equal(listCoverageSegmentTone("unresolved"), listMembershipStateTone("UNRESOLVED"));
+});
+
+test("a source counts as followed only on the same provider, source type and parameters", () => {
+  const followed = [
+    { source: { provider: "anilist", sourceType: "popular", params: [] } },
+    {
+      source: {
+        provider: "trakt",
+        sourceType: "user_list",
+        params: [{ key: "user", value: "someone" }, { key: "list", value: "favourites" }],
+      },
+    },
+  ];
+  assert.equal(isListSourceFollowed(followed, { provider: "anilist", sourceType: "popular", params: [] }), true);
+  assert.equal(isListSourceFollowed(followed, { provider: "anilist", sourceType: "trending", params: [] }), false);
+  assert.equal(isListSourceFollowed(followed, { provider: "imdb", sourceType: "popular", params: [] }), false);
+  assert.equal(
+    isListSourceFollowed(followed, {
+      provider: "trakt",
+      sourceType: "user_list",
+      params: [{ key: "list", value: "favourites " }, { key: "user", value: "someone" }],
+    }),
+    true,
+  );
+  assert.equal(
+    isListSourceFollowed(followed, {
+      provider: "trakt",
+      sourceType: "user_list",
+      params: [{ key: "user", value: "someone" }, { key: "list", value: "watchlist" }],
+    }),
+    false,
+  );
+  assert.equal(
+    isListSourceFollowed(followed, { provider: "trakt", sourceType: "user_list", params: [{ key: "user", value: "someone" }] }),
+    false,
+  );
 });
 
 test("provider intervals read in the largest whole unit", () => {
@@ -303,6 +422,31 @@ test("subscribe input is public, drops blank parameters and routes for unfollowe
   assert.equal(input.maxPerSync, 5);
 });
 
+test("a picked search result fills the exclusion form with its name, year and ids", () => {
+  const fields = exclusionFieldsFromMetadataResult(
+    {
+      name: "Sample Film",
+      year: 2031,
+      tvdbId: "",
+      smgId: 41,
+      tmdbId: 9001,
+      imdbId: "tt0000041",
+      externalIds: [{ source: "TMDB", kind: "movie", value: "9001" }],
+    },
+    "MOVIE",
+  );
+  assert.deepEqual(fields, { title: "Sample Film", year: "2031", ids: "tmdb:9001, smg:41, imdb:tt0000041" });
+  assert.deepEqual(parseExternalIdList(fields.ids), [
+    { source: "tmdb", value: "9001" },
+    { source: "smg", value: "41" },
+    { source: "imdb", value: "tt0000041" },
+  ]);
+  assert.equal(
+    exclusionFieldsFromMetadataResult({ name: "Sample Show", year: null, tvdbId: "77", imdbId: null }, "SERIES").year,
+    "",
+  );
+});
+
 test("deleted titles become all-lists exclusions only when they carry external ids", () => {
   assert.deepEqual(
     exclusionInputFromTitle({
@@ -347,6 +491,19 @@ test("filters are replaced by kind and removed with null", () => {
 test("membership rows get ids scoped to their list", () => {
   assert.equal(listMembershipRowId("sub-1", "tmdb:603"), "list-membership-sub-1-tmdb-603");
   assert.notEqual(listMembershipRowId("sub-1", "tmdb:603"), listMembershipRowId("sub-2", "tmdb:603"));
+});
+
+test("a collapsed sync history shows its newest runs and knows when older ones exist", () => {
+  const runs = Array.from({ length: LIST_SYNC_RUNS_SHOWN + 1 }, (_, index) => `run-${index}`);
+  const collapsed = shownListSyncRuns(runs, false);
+  assert.equal(collapsed.runs.length, LIST_SYNC_RUNS_SHOWN);
+  assert.equal(collapsed.runs[0], "run-0");
+  assert.equal(collapsed.more, true);
+  assert.deepEqual(shownListSyncRuns(runs.slice(0, LIST_SYNC_RUNS_SHOWN), false), {
+    runs: runs.slice(0, LIST_SYNC_RUNS_SHOWN),
+    more: false,
+  });
+  assert.deepEqual(shownListSyncRuns(runs, true), { runs, more: false });
 });
 
 test("a sync watch settles on a new run, a new sync time or a state change", () => {
@@ -604,7 +761,7 @@ test("inputs built from query results carry no __typename at any depth", () => {
     },
   ]);
   assert.deepEqual(update.filters, [
-    { kind: "RATING_AT_LEAST", scale: "tmdb", value: 7.5, from: null, to: null, values: [] },
+    { kind: "RATING_AT_LEAST", scale: "tmdb", value: 7.5, from: null, to: null, values: [], facet: null, matchAny: false, minimums: [], unresolvedLabels: [] },
   ]);
 
   const source = {
@@ -634,6 +791,19 @@ test("a new follow starts with a per-sync cap that can be cleared", () => {
   assert.equal(DEFAULT_LIST_MAX_PER_SYNC, 25);
   const cleared = listDraftProblems({ ...draft, maxPerSync: null });
   assert.equal(cleared.includes("lists.follow.problem.maxPerSync"), false);
+});
+
+test("media selectors fold into Include across providers without hiding other source controls", () => {
+  const param = { key: "type", label: "Type", type: "ENUM" as const, options: ["all", "movies", "shows", "anime"], required: false };
+  assert.equal(isListMediaParam(param), true);
+  assert.equal(isListMediaParam({ ...param, key: "kind", options: ["movie", "series"] }), true);
+  assert.equal(isListMediaParam({ ...param, key: "status", options: ["watching", "completed"] }), false);
+  assert.equal(isListMediaParam({ ...param, key: "credit", options: ["all", "cast", "crew"] }), false);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "SERIES", "ANIME"], [param], [{ key: "type", value: "shows" }], true), ["SERIES"]);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "ANIME"], [param], [{ key: "type", value: "anime" }], true), ["MOVIE", "ANIME"]);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "SERIES"], [{ ...param, options: ["movie", "series"] }], [], true), ["MOVIE"]);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "SERIES"], [param], [{ key: "type", value: "__include__" }], true), ["MOVIE", "SERIES"]);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "SERIES", "ANIME"], [{ ...param, options: ["movies", "shows"] }], [{ key: "type", value: "shows" }], true), ["SERIES", "ANIME"]);
 });
 
 test("the follow form offers the kinds the source declares, keeping kinds already saved", () => {
@@ -698,4 +868,47 @@ test("a failed policy change rolls back only that member's row", () => {
   // A later change to the same member that already landed is not undone.
   const later = [member("a", "NONE"), member("b", "NONE")];
   assert.deepEqual(rollBackMemberListPolicy(later, before, "AUTO"), later);
+});
+
+test("list providers with a shipped logo resolve to it; the rest keep their abbreviation", () => {
+  const expected: Record<string, string> = {
+    tmdb: "/rating-sources/tmdb.svg",
+    imdb: "/rating-sources/imdb.svg",
+    trakt: "/rating-sources/trakt.svg",
+    anilist: "/media-sites/anilist.svg",
+    mal: "/media-sites/mal.svg",
+    tvdb: "/media-sites/tvdb.svg",
+    mdblist: "/rating-sources/mdblist.avif",
+    plex: "/auth-providers/plex.svg",
+    simkl: "/plugin-logos/svg/simkl.svg",
+  };
+  for (const [providerType, src] of Object.entries(expected)) {
+    assert.equal(providerLogoSrc(providerType), src, providerType);
+  }
+
+  for (const providerType of ["custom", "some-future-plugin", "", "  "]) {
+    assert.equal(providerLogoSrc(providerType), null, JSON.stringify(providerType));
+  }
+});
+
+test("an inherited episode policy names what the route's library resolves it to", () => {
+  const anime = { settings: { monitorSpecials: true, fillerPolicy: "SKIP_FILLER", recapPolicy: "DOWNLOAD_ALL" } };
+  assert.equal(inheritedListEpisodePolicyLabelKey("MONITOR_SPECIALS", "ANIME", anime), "search.seasonFolder.enabled");
+  assert.equal(inheritedListEpisodePolicyLabelKey("FILLER_POLICY", "ANIME", anime), "settings.fillerPolicySkipFiller");
+  assert.equal(inheritedListEpisodePolicyLabelKey("RECAP_POLICY", "ANIME", anime), "settings.recapPolicyDownloadAll");
+
+  const other = { settings: { monitorSpecials: false, fillerPolicy: "DOWNLOAD_ALL", recapPolicy: "SKIP_RECAP" } };
+  assert.equal(inheritedListEpisodePolicyLabelKey("MONITOR_SPECIALS", "ANIME", other), "search.seasonFolder.disabled");
+  assert.equal(inheritedListEpisodePolicyLabelKey("FILLER_POLICY", "ANIME", other), "settings.fillerPolicyDownloadAll");
+  assert.equal(inheritedListEpisodePolicyLabelKey("RECAP_POLICY", "ANIME", other), "settings.recapPolicySkipRecap");
+
+  // Series libraries carry no specials setting: inheriting never monitors them.
+  assert.equal(inheritedListEpisodePolicyLabelKey("MONITOR_SPECIALS", "SERIES", null), "search.seasonFolder.disabled");
+
+  // Settings the viewer may not read leave the choice unlabelled, not guessed.
+  for (const library of [null, undefined, {}, { settings: null }]) {
+    assert.equal(inheritedListEpisodePolicyLabelKey("MONITOR_SPECIALS", "ANIME", library), null);
+    assert.equal(inheritedListEpisodePolicyLabelKey("FILLER_POLICY", "ANIME", library), null);
+    assert.equal(inheritedListEpisodePolicyLabelKey("RECAP_POLICY", "ANIME", library), null);
+  }
 });

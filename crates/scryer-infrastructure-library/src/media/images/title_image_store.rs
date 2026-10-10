@@ -24,8 +24,8 @@ const APPEND_DOMAIN_EVENT_INSERT_SQL: &str = "INSERT INTO domain_events (
             event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
             title_id, facet, correlation_id, causation_id, schema_version,
             stream_kind, stream_id, event_type, payload_json, import_status,
-            media_file_delete_reason, download_id
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+            media_file_delete_reason, download_id, import_skip_reason
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 #[derive(Clone)]
 pub struct TitleImageStore {
@@ -828,6 +828,7 @@ async fn append_domain_event_tx(
             SqlArg::OptText(projections.import_status),
             SqlArg::OptText(projections.media_file_delete_reason),
             SqlArg::OptText(projections.download_id),
+            SqlArg::OptText(projections.import_skip_reason),
         ],
     )
     .await?;

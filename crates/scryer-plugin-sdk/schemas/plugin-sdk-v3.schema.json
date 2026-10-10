@@ -212,6 +212,13 @@
             "$ref": "#/$defs/SocketPermission"
           }
         },
+        "settings": {
+          "description": "Installation-wide settings, independent of provider-instance fields.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginSettingField"
+          }
+        },
         "provider": {
           "$ref": "#/$defs/ProviderDescriptor"
         }
@@ -258,6 +265,208 @@
         "plain",
         "starttls",
         "tls"
+      ]
+    },
+    "PluginSettingField": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "field_type": {
+          "$ref": "#/$defs/ConfigFieldType"
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "default_value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value_source": {
+          "$ref": "#/$defs/ConfigFieldValueSource",
+          "default": "user"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigFieldRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHostBindingId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigFieldOption"
+          }
+        },
+        "help_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visible_when": {
+          "description": "Shown only while this holds. `None` means always shown.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required_when": {
+          "description": "Required while this holds, in addition to `required`. A field hidden by\n`visible_when` is never required, whatever this says.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "advanced": {
+          "description": "Placed behind the form's advanced disclosure rather than shown up front.",
+          "type": "boolean",
+          "default": false
+        },
+        "sensitive": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "field_type"
+      ]
+    },
+    "ConfigFieldType": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "string",
+            "password",
+            "multiline",
+            "bool",
+            "select",
+            "number",
+            "path",
+            "tag"
+          ]
+        },
+        {
+          "description": "Enumerated selection rendered with a filter box. Same `options` payload\nas `Select`; declare it when the list is long enough that scanning it\nunaided is the wrong ask.",
+          "type": "string",
+          "const": "filtered_select"
+        }
+      ]
+    },
+    "ConfigFieldValueSource": {
+      "type": "string",
+      "enum": [
+        "user",
+        "host_binding"
+      ]
+    },
+    "ConfigFieldRole": {
+      "type": "string",
+      "enum": [
+        "connection_url"
+      ]
+    },
+    "PluginHostBindingId": {
+      "type": "string",
+      "enum": [
+        "smg.opensubtitles_api_key"
+      ]
+    },
+    "ConfigFieldOption": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "config_overrides": {
+          "description": "Config values supplied by this option when the corresponding stored\nvalues are absent. Explicit configuration remains authoritative.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "FieldCondition": {
+      "description": "A predicate over another configuration field's current value.\n\nThe host evaluates these, so the operator set is closed rather than an\nexpression language: a plugin declares what it depends on, it does not run\nlogic in the form.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "Key of the field whose value is tested.",
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/ConditionOp"
+        },
+        "values": {
+          "description": "Values compared against. `eq`/`ne` use the first, `in`/`not_in` the\nwhole set, and `non_empty` ignores it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "op"
+      ]
+    },
+    "ConditionOp": {
+      "description": "How a [`FieldCondition`] compares another field's value.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "eq",
+            "ne",
+            "in",
+            "not_in"
+          ]
+        },
+        {
+          "description": "Holds when the referenced field has a non-blank value. Ignores `values`.",
+          "type": "string",
+          "const": "non_empty"
+        }
       ]
     },
     "ProviderDescriptor": {
@@ -879,6 +1088,10 @@
         "grab_quota_supported": {
           "type": "boolean",
           "default": false
+        },
+        "paged_search": {
+          "description": "The plugin answers searches one provider page at a time.\n\nA plugin that sets this promises, for every request that names a query\nor ids, that one invocation fetches at most one provider page, never\nloops over pages internally, returns at most\n[`Self::paged_response_bound`] results, honours\n[`PluginSearchRequest::page_cursor`](crate::PluginSearchRequest::page_cursor)\nand reports [`PluginSearchResponse::next_cursor`](crate::PluginSearchResponse::next_cursor).\n`PageCeilingReached` then only means the provider itself refused to page\nfurther. Requests for recent releases (no query, no ids) are outside\nthis promise: a plugin may still page its feed internally to reach\n`rss_catch_up`, and never sets a cursor on those responses.\n\nAbsent or `false` keeps the unpaged contract, and the host treats the\nplugin's responses as before SDK 3.14.",
+          "type": "boolean"
         }
       }
     },
@@ -1075,112 +1288,6 @@
         "key",
         "label",
         "field_type"
-      ]
-    },
-    "ConfigFieldType": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "string",
-            "password",
-            "multiline",
-            "bool",
-            "select",
-            "number",
-            "path",
-            "tag"
-          ]
-        },
-        {
-          "description": "Enumerated selection rendered with a filter box. Same `options` payload\nas `Select`; declare it when the list is long enough that scanning it\nunaided is the wrong ask.",
-          "type": "string",
-          "const": "filtered_select"
-        }
-      ]
-    },
-    "ConfigFieldValueSource": {
-      "type": "string",
-      "enum": [
-        "user",
-        "host_binding"
-      ]
-    },
-    "ConfigFieldRole": {
-      "type": "string",
-      "enum": [
-        "connection_url"
-      ]
-    },
-    "PluginHostBindingId": {
-      "type": "string",
-      "enum": [
-        "smg.opensubtitles_api_key"
-      ]
-    },
-    "ConfigFieldOption": {
-      "type": "object",
-      "properties": {
-        "value": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "config_overrides": {
-          "description": "Config values supplied by this option when the corresponding stored\nvalues are absent. Explicit configuration remains authoritative.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "value",
-        "label"
-      ]
-    },
-    "FieldCondition": {
-      "description": "A predicate over another configuration field's current value.\n\nThe host evaluates these, so the operator set is closed rather than an\nexpression language: a plugin declares what it depends on, it does not run\nlogic in the form.",
-      "type": "object",
-      "properties": {
-        "key": {
-          "description": "Key of the field whose value is tested.",
-          "type": "string"
-        },
-        "op": {
-          "$ref": "#/$defs/ConditionOp"
-        },
-        "values": {
-          "description": "Values compared against. `eq`/`ne` use the first, `in`/`not_in` the\nwhole set, and `non_empty` ignores it.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "key",
-        "op"
-      ]
-    },
-    "ConditionOp": {
-      "description": "How a [`FieldCondition`] compares another field's value.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "eq",
-            "ne",
-            "in",
-            "not_in"
-          ]
-        },
-        {
-          "description": "Holds when the referenced field has a non-blank value. Ignores `values`.",
-          "type": "string",
-          "const": "non_empty"
-        }
       ]
     },
     "IndexerDescriptor": {
@@ -1944,6 +2051,11 @@
           "items": {
             "$ref": "#/$defs/ArchivePluginFormat"
           }
+        },
+        "enforced_limits": {
+          "description": "Enforces the caller's `limits` envelope while extracting and staging.",
+          "type": "boolean",
+          "default": false
         }
       }
     },
@@ -1988,7 +2100,9 @@
         },
         "capabilities": {
           "$ref": "#/$defs/ArchiveExtractorCapabilities",
-          "default": {}
+          "default": {
+            "enforced_limits": false
+          }
         }
       },
       "required": [
@@ -2677,6 +2791,13 @@
               "type": "null"
             }
           ]
+        },
+        "page_cursor": {
+          "description": "Where a paged search resumes: the `next_cursor` of the previous\nresponse for the same request, sent back verbatim. Opaque to the host;\nthe plugin defines its contents. Absent asks for the first page. Only\nmeaningful to a plugin that declares `paged_search` in its limit\ncapabilities; every other plugin ignores it.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -3168,6 +3289,13 @@
             "string",
             "null"
           ]
+        },
+        "password_candidates": {
+          "description": "Ordered release-specific candidates; never includes plugin-wide fallbacks.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -6083,6 +6211,13 @@
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "next_cursor": {
+          "description": "From a plugin that declares `paged_search`: `Some` when the provider\nhas more pages for this request, to be passed back as\n`page_cursor` to read the next one; `None` on a successful response\nwhen the provider is exhausted for this query. A paged response holds\nat most `IndexerLimitCapabilities::paged_response_bound` results. A\npaged plugin that fails mid-page returns the partial page through\n`IndexerSearchPluginError::PartialResults` with this unset, and the\nhost replays that page. Plugins without `paged_search` never set it.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -10310,6 +10445,20 @@
       "properties": {
         "status": {
           "$ref": "#/$defs/ArchivePluginStatus"
+        },
+        "replaced_source_paths": {
+          "description": "Actual source-relative files superseded by successfully placed plain media.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "processed_recovery_paths": {
+          "description": "Source-relative recovery metadata already handled by this invocation.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "files": {
           "type": "array",

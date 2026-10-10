@@ -1,0 +1,722 @@
+//! Schedule evaluation for scripts started by the job scheduler.
+//!
+//! Every [`ScriptSchedule`] variant answers the same question: when does the
+//! script next fire strictly after a given instant. Daily, weekly and cron
+//! schedules evaluate in host-local time, the same way the daily backup job
+//! does.
+//!
+//! Daylight-saving transitions:
+//! - A daily or weekly time inside a spring-forward gap slides forward to the
+//!   first wall-clock minute that exists (02:30 becomes 03:00). A time that
+//!   occurs twice on a fall-back day fires once, at the earlier instance,
+//!   matching the auto-backup job.
+//! - Cron follows croner's rules: a fixed-time expression (`30 1 * * *`)
+//!   fires once at the earlier instance of a repeated time and at the first
+//!   instant after a gap; an expression with a wildcard or stepped minute or
+//!   hour field fires on both instances of a repeated time.
+
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeDelta, TimeZone, Utc, Weekday};
+use croner::Cron;
+use croner::parser::{CronParser, Seconds, Year};
+use scryer_domain::{ScheduleWeekday, ScriptSchedule};
+
+use crate::AppError;
+
+/// Shortest interval a scheduled script may repeat at.
+pub const MIN_INTERVAL_SECONDS: i64 = 60;
+
+/// Longest interval a scheduled script may repeat at: one year.
+pub const MAX_INTERVAL_SECONDS: i64 = 365 * 24 * 60 * 60;
+
+/// How far past a nonexistent local time (a daylight-saving gap) a local
+/// schedule slides to find the first real instant.
+const DST_GAP_SEARCH_MINUTES: i64 = 180;
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct ScheduleError(String);
+
+impl ScheduleError {
+    fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
+impl ScheduleError {
+    pub fn into_app_error(self) -> AppError {
+        AppError::Validation(self.0)
+    }
+}
+
+/// Outcome of checking a schedule a user is editing: whether it is valid,
+/// why not, how it reads, and when it would next fire.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptScheduleValidation {
+    pub valid: bool,
+    pub error: Option<String>,
+    pub description: Option<String>,
+    pub next_runs: Vec<DateTime<Utc>>,
+}
+
+/// How many upcoming fire times a schedule check previews.
+pub const PREVIEW_RUN_COUNT: usize = 3;
+
+/// Validates `schedule` and previews its next fire times after `after`.
+pub fn check_schedule(schedule: &ScriptSchedule, after: DateTime<Utc>) -> ScriptScheduleValidation {
+    match upcoming_fires(schedule, after, PREVIEW_RUN_COUNT) {
+        Ok(next_runs) => ScriptScheduleValidation {
+            valid: true,
+            error: None,
+            description: Some(describe_schedule(schedule)),
+            next_runs,
+        },
+        Err(error) => ScriptScheduleValidation {
+            valid: false,
+            error: Some(error.0),
+            description: None,
+            next_runs: Vec::new(),
+        },
+    }
+}
+
+/// Checks that a schedule can be evaluated and, for cron, that it fires at
+/// least once more from now. Cron expressions are exactly five crontab
+/// fields: minute, hour, day of month, month, day of week.
+pub fn validate_schedule(schedule: &ScriptSchedule) -> Result<(), ScheduleError> {
+    validate_schedule_in(schedule, Utc::now(), &Local)
+}
+
+fn validate_schedule_in<Tz: TimeZone>(
+    schedule: &ScriptSchedule,
+    now: DateTime<Utc>,
+    tz: &Tz,
+) -> Result<(), ScheduleError> {
+    validate_schedule_shape(schedule)?;
+    if let ScriptSchedule::Cron { expression } = schedule {
+        next_cron_occurrence(&parse_cron(expression)?, now, tz)?;
+    }
+    Ok(())
+}
+
+/// Structural checks that need no clock.
+fn validate_schedule_shape(schedule: &ScriptSchedule) -> Result<(), ScheduleError> {
+    match schedule {
+        ScriptSchedule::Manual => Ok(()),
+        ScriptSchedule::Interval { every_seconds } => {
+            if *every_seconds < MIN_INTERVAL_SECONDS {
+                return Err(ScheduleError::new(format!(
+                    "interval must be at least {MIN_INTERVAL_SECONDS} seconds"
+                )));
+            }
+            if *every_seconds > MAX_INTERVAL_SECONDS {
+                return Err(ScheduleError::new(format!(
+                    "interval must be at most {MAX_INTERVAL_SECONDS} seconds (one year)"
+                )));
+            }
+            Ok(())
+        }
+        ScriptSchedule::Daily { time_local } => parse_local_time_of_day(time_local).map(|_| ()),
+        ScriptSchedule::Weekly { days, time_local } => {
+            if days.is_empty() {
+                return Err(ScheduleError::new("weekly schedule needs at least one day"));
+            }
+            parse_local_time_of_day(time_local).map(|_| ())
+        }
+        ScriptSchedule::Cron { expression } => parse_cron(expression).map(|_| ()),
+    }
+}
+
+/// The first time `schedule` fires strictly after `after`, or `None` for a
+/// manual-only schedule.
+pub fn next_fire_after(
+    schedule: &ScriptSchedule,
+    after: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, ScheduleError> {
+    next_fire_after_in(schedule, after, &Local)
+}
+
+/// [`next_fire_after`] with local times evaluated in `tz`.
+pub(crate) fn next_fire_after_in<Tz: TimeZone>(
+    schedule: &ScriptSchedule,
+    after: DateTime<Utc>,
+    tz: &Tz,
+) -> Result<Option<DateTime<Utc>>, ScheduleError> {
+    validate_schedule_shape(schedule)?;
+    match schedule {
+        ScriptSchedule::Manual => Ok(None),
+        ScriptSchedule::Interval { every_seconds } => TimeDelta::try_seconds(*every_seconds)
+            .and_then(|interval| after.checked_add_signed(interval))
+            .map(Some)
+            .ok_or_else(|| ScheduleError::new("interval is out of range")),
+        ScriptSchedule::Daily { time_local } => {
+            let (hour, minute) = parse_local_time_of_day(time_local)?;
+            next_local_time_on_days(after, tz, hour, minute, |_| true).map(Some)
+        }
+        ScriptSchedule::Weekly { days, time_local } => {
+            let (hour, minute) = parse_local_time_of_day(time_local)?;
+            next_local_time_on_days(after, tz, hour, minute, |weekday| {
+                days.iter().any(|day| to_chrono_weekday(*day) == weekday)
+            })
+            .map(Some)
+        }
+        ScriptSchedule::Cron { expression } => {
+            next_cron_occurrence(&parse_cron(expression)?, after, tz).map(Some)
+        }
+    }
+}
+
+/// Up to `count` consecutive fire times after `after`. Empty for a
+/// manual-only schedule.
+pub fn upcoming_fires(
+    schedule: &ScriptSchedule,
+    after: DateTime<Utc>,
+    count: usize,
+) -> Result<Vec<DateTime<Utc>>, ScheduleError> {
+    upcoming_fires_in(schedule, after, count, &Local)
+}
+
+/// [`upcoming_fires`] with local times evaluated in `tz`.
+pub(crate) fn upcoming_fires_in<Tz: TimeZone>(
+    schedule: &ScriptSchedule,
+    after: DateTime<Utc>,
+    count: usize,
+    tz: &Tz,
+) -> Result<Vec<DateTime<Utc>>, ScheduleError> {
+    let mut fires = Vec::with_capacity(count);
+    let mut cursor = after;
+    while fires.len() < count {
+        match next_fire_after_in(schedule, cursor, tz)? {
+            Some(next) => {
+                fires.push(next);
+                cursor = next;
+            }
+            None => break,
+        }
+    }
+    Ok(fires)
+}
+
+/// Short English description of a schedule. Cron schedules return the raw
+/// expression; the web client renders those itself.
+pub fn describe_schedule(schedule: &ScriptSchedule) -> String {
+    match schedule {
+        ScriptSchedule::Manual => "Manual only".to_string(),
+        ScriptSchedule::Interval { every_seconds } => describe_interval(*every_seconds),
+        ScriptSchedule::Daily { time_local } => {
+            format!("Daily at {}", display_time(time_local))
+        }
+        ScriptSchedule::Weekly { days, time_local } => {
+            let mut days = days.clone();
+            days.sort();
+            days.dedup();
+            let time = display_time(time_local);
+            if days.len() == 7 {
+                return format!("Daily at {time}");
+            }
+            let names = days
+                .iter()
+                .map(|day| weekday_abbreviation(*day))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{names} at {time}")
+        }
+        ScriptSchedule::Cron { expression } => expression.trim().to_string(),
+    }
+}
+
+/// Parses a 24-hour `HH:MM` local time of day.
+pub(crate) fn parse_local_time_of_day(value: &str) -> Result<(u32, u32), ScheduleError> {
+    let (hour, minute) = value
+        .trim()
+        .split_once(':')
+        .ok_or_else(|| ScheduleError::new("time must use HH:MM format"))?;
+    let hour = hour
+        .parse::<u32>()
+        .map_err(|_| ScheduleError::new("time hour must be numeric"))?;
+    let minute = minute
+        .parse::<u32>()
+        .map_err(|_| ScheduleError::new("time minute must be numeric"))?;
+    if hour > 23 || minute > 59 {
+        return Err(ScheduleError::new("time must be between 00:00 and 23:59"));
+    }
+    Ok((hour, minute))
+}
+
+/// The host-local instant for `hour:minute` on `date`; see
+/// [`resolve_scheduled_time_in`].
+pub(crate) fn resolve_local_scheduled_time(
+    date: NaiveDate,
+    hour: u32,
+    minute: u32,
+) -> Option<DateTime<Local>> {
+    resolve_scheduled_time_in(&Local, date, hour, minute)
+}
+
+/// The instant in `tz` for `hour:minute` on `date`. A time inside a
+/// daylight-saving gap slides forward to the first minute that exists; an
+/// ambiguous time resolves to the earlier instant.
+pub(crate) fn resolve_scheduled_time_in<Tz: TimeZone>(
+    tz: &Tz,
+    date: NaiveDate,
+    hour: u32,
+    minute: u32,
+) -> Option<DateTime<Tz>> {
+    let naive = date.and_hms_opt(hour, minute, 0)?;
+    for minute_offset in 0..=DST_GAP_SEARCH_MINUTES {
+        let candidate = naive + TimeDelta::minutes(minute_offset);
+        match tz.from_local_datetime(&candidate) {
+            chrono::LocalResult::Single(value) => return Some(value),
+            chrono::LocalResult::Ambiguous(first, second) => {
+                return Some(if first <= second { first } else { second });
+            }
+            chrono::LocalResult::None => continue,
+        }
+    }
+    None
+}
+
+fn next_local_time_on_days<Tz: TimeZone>(
+    after: DateTime<Utc>,
+    tz: &Tz,
+    hour: u32,
+    minute: u32,
+    day_matches: impl Fn(Weekday) -> bool,
+) -> Result<DateTime<Utc>, ScheduleError> {
+    let mut date = after.with_timezone(tz).date_naive();
+    // Eight days covers "later today" through "same weekday next week".
+    for _ in 0..=7 {
+        if day_matches(date.weekday())
+            && let Some(candidate) = resolve_scheduled_time_in(tz, date, hour, minute)
+        {
+            let candidate = candidate.with_timezone(&Utc);
+            if candidate > after {
+                return Ok(candidate);
+            }
+        }
+        date = date
+            .succ_opt()
+            .ok_or_else(|| ScheduleError::new("schedule date is out of range"))?;
+    }
+    Err(ScheduleError::new(
+        "failed to resolve the scheduled local time",
+    ))
+}
+
+fn next_cron_occurrence<Tz: TimeZone>(
+    cron: &Cron,
+    after: DateTime<Utc>,
+    tz: &Tz,
+) -> Result<DateTime<Utc>, ScheduleError> {
+    cron.find_next_occurrence(&after.with_timezone(tz), false)
+        .map(|next| next.with_timezone(&Utc))
+        .map_err(|error| ScheduleError::new(format!("cron expression never runs: {error}")))
+}
+
+fn parse_cron(expression: &str) -> Result<Cron, ScheduleError> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        return Err(ScheduleError::new("cron expression is required"));
+    }
+    CronParser::builder()
+        .seconds(Seconds::Disallowed)
+        .year(Year::Disallowed)
+        .build()
+        .parse(expression)
+        .map_err(|error| ScheduleError::new(format!("invalid cron expression: {error}")))
+}
+
+fn describe_interval(every_seconds: i64) -> String {
+    const UNITS: [(i64, &str); 4] = [
+        (86_400, "day"),
+        (3_600, "hour"),
+        (60, "minute"),
+        (1, "second"),
+    ];
+    for (unit_seconds, unit) in UNITS {
+        if every_seconds > 0 && every_seconds % unit_seconds == 0 {
+            let count = every_seconds / unit_seconds;
+            return if count == 1 {
+                format!("Every {unit}")
+            } else {
+                format!("Every {count} {unit}s")
+            };
+        }
+    }
+    format!("Every {every_seconds} seconds")
+}
+
+fn display_time(time_local: &str) -> String {
+    match parse_local_time_of_day(time_local) {
+        Ok((hour, minute)) => format!("{hour:02}:{minute:02}"),
+        Err(_) => time_local.trim().to_string(),
+    }
+}
+
+fn weekday_abbreviation(day: ScheduleWeekday) -> &'static str {
+    match day {
+        ScheduleWeekday::Monday => "Mon",
+        ScheduleWeekday::Tuesday => "Tue",
+        ScheduleWeekday::Wednesday => "Wed",
+        ScheduleWeekday::Thursday => "Thu",
+        ScheduleWeekday::Friday => "Fri",
+        ScheduleWeekday::Saturday => "Sat",
+        ScheduleWeekday::Sunday => "Sun",
+    }
+}
+
+fn to_chrono_weekday(day: ScheduleWeekday) -> Weekday {
+    match day {
+        ScheduleWeekday::Monday => Weekday::Mon,
+        ScheduleWeekday::Tuesday => Weekday::Tue,
+        ScheduleWeekday::Wednesday => Weekday::Wed,
+        ScheduleWeekday::Thursday => Weekday::Thu,
+        ScheduleWeekday::Friday => Weekday::Fri,
+        ScheduleWeekday::Saturday => Weekday::Sat,
+        ScheduleWeekday::Sunday => Weekday::Sun,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, NaiveDate, Timelike};
+
+    use super::*;
+
+    /// A UTC instant for a host-local wall-clock time. Mid-January dates
+    /// keep these clear of daylight-saving transitions.
+    fn local_instant(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
+        let naive = NaiveDate::from_ymd_opt(year, month, day)
+            .and_then(|date| date.and_hms_opt(hour, minute, 0))
+            .expect("valid fixture date");
+        Local
+            .from_local_datetime(&naive)
+            .single()
+            .expect("unambiguous fixture local time")
+            .with_timezone(&Utc)
+    }
+
+    fn daily(time: &str) -> ScriptSchedule {
+        ScriptSchedule::Daily {
+            time_local: time.to_string(),
+        }
+    }
+
+    fn weekly(days: &[ScheduleWeekday], time: &str) -> ScriptSchedule {
+        ScriptSchedule::Weekly {
+            days: days.to_vec(),
+            time_local: time.to_string(),
+        }
+    }
+
+    fn cron(expression: &str) -> ScriptSchedule {
+        ScriptSchedule::Cron {
+            expression: expression.to_string(),
+        }
+    }
+
+    #[test]
+    fn manual_schedule_never_fires() {
+        let after = local_instant(2026, 1, 14, 10, 0);
+        assert_eq!(next_fire_after(&ScriptSchedule::Manual, after), Ok(None));
+        assert_eq!(
+            upcoming_fires(&ScriptSchedule::Manual, after, 3),
+            Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn interval_fires_after_the_interval_elapses() {
+        let after = local_instant(2026, 1, 14, 10, 0);
+        let schedule = ScriptSchedule::Interval { every_seconds: 900 };
+        assert_eq!(
+            next_fire_after(&schedule, after),
+            Ok(Some(after + Duration::seconds(900)))
+        );
+        assert_eq!(
+            upcoming_fires(&schedule, after, 3),
+            Ok(vec![
+                after + Duration::seconds(900),
+                after + Duration::seconds(1800),
+                after + Duration::seconds(2700),
+            ])
+        );
+    }
+
+    #[test]
+    fn interval_below_floor_is_rejected() {
+        let schedule = ScriptSchedule::Interval { every_seconds: 59 };
+        assert!(validate_schedule(&schedule).is_err());
+        assert!(next_fire_after(&schedule, Utc::now()).is_err());
+        assert!(validate_schedule(&ScriptSchedule::Interval { every_seconds: 60 }).is_ok());
+    }
+
+    #[test]
+    fn daily_later_today_fires_today() {
+        let after = local_instant(2026, 1, 14, 1, 0);
+        assert_eq!(
+            next_fire_after(&daily("03:30"), after),
+            Ok(Some(local_instant(2026, 1, 14, 3, 30)))
+        );
+    }
+
+    #[test]
+    fn daily_time_already_passed_fires_next_day() {
+        let after = local_instant(2026, 1, 14, 10, 0);
+        assert_eq!(
+            next_fire_after(&daily("03:30"), after),
+            Ok(Some(local_instant(2026, 1, 15, 3, 30)))
+        );
+    }
+
+    #[test]
+    fn daily_fire_is_strictly_after_the_given_instant() {
+        let after = local_instant(2026, 1, 14, 3, 30);
+        assert_eq!(
+            next_fire_after(&daily("03:30"), after),
+            Ok(Some(local_instant(2026, 1, 15, 3, 30)))
+        );
+    }
+
+    #[test]
+    fn daily_and_weekly_reject_malformed_times() {
+        for time in ["", "3", "24:00", "12:60", "ab:cd"] {
+            assert!(validate_schedule(&daily(time)).is_err(), "{time}");
+            assert!(
+                validate_schedule(&weekly(&[ScheduleWeekday::Monday], time)).is_err(),
+                "{time}"
+            );
+        }
+    }
+
+    #[test]
+    fn weekly_requires_a_day() {
+        assert!(validate_schedule(&weekly(&[], "03:30")).is_err());
+    }
+
+    #[test]
+    fn weekly_fires_on_the_next_listed_day() {
+        // 2026-01-14 is a Wednesday.
+        let after = local_instant(2026, 1, 14, 10, 0);
+        let schedule = weekly(&[ScheduleWeekday::Monday, ScheduleWeekday::Friday], "03:30");
+        assert_eq!(
+            next_fire_after(&schedule, after),
+            Ok(Some(local_instant(2026, 1, 16, 3, 30)))
+        );
+    }
+
+    #[test]
+    fn weekly_wraps_across_the_week_boundary() {
+        // 2026-01-17 is a Saturday; the next Monday is 2026-01-19.
+        let after = local_instant(2026, 1, 17, 10, 0);
+        let schedule = weekly(&[ScheduleWeekday::Monday], "03:30");
+        assert_eq!(
+            next_fire_after(&schedule, after),
+            Ok(Some(local_instant(2026, 1, 19, 3, 30)))
+        );
+    }
+
+    #[test]
+    fn weekly_same_day_after_the_time_waits_a_full_week() {
+        // 2026-01-19 is a Monday.
+        let after = local_instant(2026, 1, 19, 10, 0);
+        let schedule = weekly(&[ScheduleWeekday::Monday], "03:30");
+        assert_eq!(
+            next_fire_after(&schedule, after),
+            Ok(Some(local_instant(2026, 1, 26, 3, 30)))
+        );
+    }
+
+    #[test]
+    fn cron_rejects_invalid_expressions() {
+        for expression in [
+            "",
+            "not a cron",
+            "61 * * * *",
+            "* * * *",
+            "0 0 0 * * * 2026",
+        ] {
+            assert!(
+                validate_schedule(&cron(expression)).is_err(),
+                "{expression}"
+            );
+        }
+    }
+
+    #[test]
+    fn cron_every_fifteen_minutes_fires_on_the_next_quarter_hour() {
+        let after = local_instant(2026, 1, 14, 10, 7);
+        let next = next_fire_after(&cron("*/15 * * * *"), after)
+            .expect("valid cron")
+            .expect("cron fires");
+        assert_eq!(next, local_instant(2026, 1, 14, 10, 15));
+
+        let fires = upcoming_fires(&cron("*/15 * * * *"), after, 3).expect("valid cron");
+        assert_eq!(
+            fires,
+            vec![
+                local_instant(2026, 1, 14, 10, 15),
+                local_instant(2026, 1, 14, 10, 30),
+                local_instant(2026, 1, 14, 10, 45),
+            ]
+        );
+    }
+
+    #[test]
+    fn cron_weekly_expression_fires_on_monday_at_the_local_time() {
+        // 2026-01-14 is a Wednesday; `30 3 * * 1` is Mondays at 03:30.
+        let after = local_instant(2026, 1, 14, 10, 0);
+        let next = next_fire_after(&cron("30 3 * * 1"), after)
+            .expect("valid cron")
+            .expect("cron fires");
+        assert_eq!(next, local_instant(2026, 1, 19, 3, 30));
+        let next_local = next.with_timezone(&Local);
+        assert_eq!(next_local.weekday(), Weekday::Mon);
+        assert_eq!((next_local.hour(), next_local.minute()), (3, 30));
+    }
+
+    #[test]
+    fn cron_rejects_a_seconds_field() {
+        assert!(validate_schedule(&cron("0 */15 * * * *")).is_err());
+    }
+
+    #[test]
+    fn cron_that_never_fires_is_rejected() {
+        let schedule = cron("0 0 30 2 *");
+        assert!(validate_schedule(&schedule).is_err());
+        let check = check_schedule(&schedule, Utc::now());
+        assert!(!check.valid);
+        assert!(check.next_runs.is_empty());
+    }
+
+    #[test]
+    fn interval_above_one_year_is_rejected() {
+        assert!(
+            validate_schedule(&ScriptSchedule::Interval {
+                every_seconds: MAX_INTERVAL_SECONDS
+            })
+            .is_ok()
+        );
+        for every_seconds in [MAX_INTERVAL_SECONDS + 1, i64::MAX] {
+            let schedule = ScriptSchedule::Interval { every_seconds };
+            assert!(validate_schedule(&schedule).is_err());
+            assert!(next_fire_after(&schedule, Utc::now()).is_err());
+        }
+    }
+
+    #[test]
+    fn describes_non_cron_schedules_in_english() {
+        assert_eq!(describe_schedule(&ScriptSchedule::Manual), "Manual only");
+        assert_eq!(
+            describe_schedule(&ScriptSchedule::Interval { every_seconds: 900 }),
+            "Every 15 minutes"
+        );
+        assert_eq!(
+            describe_schedule(&ScriptSchedule::Interval {
+                every_seconds: 3600
+            }),
+            "Every hour"
+        );
+        assert_eq!(describe_schedule(&daily("3:30")), "Daily at 03:30");
+        assert_eq!(
+            describe_schedule(&weekly(
+                &[
+                    ScheduleWeekday::Friday,
+                    ScheduleWeekday::Monday,
+                    ScheduleWeekday::Wednesday,
+                ],
+                "03:30",
+            )),
+            "Mon, Wed, Fri at 03:30"
+        );
+        assert_eq!(describe_schedule(&cron(" 30 3 * * 1 ")), "30 3 * * 1");
+    }
+
+    mod daylight_saving {
+        use chrono_tz::America::New_York;
+
+        use super::*;
+
+        // 2026 in New York: clocks spring forward at 02:00 on Sunday 8 March
+        // and fall back at 02:00 on Sunday 1 November.
+        fn utc(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
+            Utc.with_ymd_and_hms(year, month, day, hour, minute, 0)
+                .single()
+                .expect("valid utc instant")
+        }
+
+        fn next(schedule: &ScriptSchedule, after: DateTime<Utc>) -> DateTime<Utc> {
+            next_fire_after_in(schedule, after, &New_York)
+                .expect("schedule evaluates")
+                .expect("schedule fires")
+        }
+
+        #[test]
+        fn daily_time_in_spring_forward_gap_slides_to_first_real_minute() {
+            // 00:00 EST on 8 March.
+            let fire = next(&daily("02:30"), utc(2026, 3, 8, 5, 0));
+            // 03:00 EDT.
+            assert_eq!(fire, utc(2026, 3, 8, 7, 0));
+        }
+
+        #[test]
+        fn daily_time_repeated_on_fall_back_fires_once_at_earlier_instance() {
+            let schedule = daily("01:30");
+            // 00:00 EDT on 1 November.
+            let first = next(&schedule, utc(2026, 11, 1, 4, 0));
+            // 01:30 EDT, the earlier of the two 01:30s.
+            assert_eq!(first, utc(2026, 11, 1, 5, 30));
+            // The second 01:30 (EST, 06:30Z) is skipped; the next fire is the
+            // following day at 01:30 EST.
+            assert_eq!(next(&schedule, first), utc(2026, 11, 2, 6, 30));
+        }
+
+        #[test]
+        fn weekly_schedule_keeps_wall_clock_across_both_transitions() {
+            let schedule = weekly(&[ScheduleWeekday::Sunday], "04:00");
+            let fires = upcoming_fires_in(&schedule, utc(2026, 3, 1, 12, 0), 2, &New_York)
+                .expect("schedule evaluates");
+            // 8 March 04:00 EDT, then 15 March 04:00 EDT.
+            assert_eq!(fires, vec![utc(2026, 3, 8, 8, 0), utc(2026, 3, 15, 8, 0)]);
+
+            let fires = upcoming_fires_in(&schedule, utc(2026, 10, 26, 12, 0), 2, &New_York)
+                .expect("schedule evaluates");
+            // 1 November 04:00 EST, then 8 November 04:00 EST.
+            assert_eq!(fires, vec![utc(2026, 11, 1, 9, 0), utc(2026, 11, 8, 9, 0)]);
+        }
+
+        #[test]
+        fn upcoming_fires_span_a_transition() {
+            let fires = upcoming_fires_in(&daily("02:30"), utc(2026, 3, 7, 5, 0), 3, &New_York)
+                .expect("schedule evaluates");
+            assert_eq!(
+                fires,
+                vec![
+                    // 7 March 02:30 EST.
+                    utc(2026, 3, 7, 7, 30),
+                    // 8 March: 02:30 does not exist, 03:00 EDT.
+                    utc(2026, 3, 8, 7, 0),
+                    // 9 March 02:30 EDT.
+                    utc(2026, 3, 9, 6, 30),
+                ]
+            );
+        }
+
+        #[test]
+        fn fixed_time_cron_on_fall_back_fires_once_at_earlier_instance() {
+            let schedule = cron("30 1 * * *");
+            let first = next(&schedule, utc(2026, 11, 1, 4, 0));
+            assert_eq!(first, utc(2026, 11, 1, 5, 30));
+            assert_eq!(next(&schedule, first), utc(2026, 11, 2, 6, 30));
+        }
+
+        #[test]
+        fn fixed_time_cron_in_spring_forward_gap_fires_after_the_gap() {
+            let fire = next(&cron("30 2 * * *"), utc(2026, 3, 8, 5, 0));
+            assert!(fire >= utc(2026, 3, 8, 7, 0) && fire < utc(2026, 3, 9, 0, 0));
+        }
+    }
+}

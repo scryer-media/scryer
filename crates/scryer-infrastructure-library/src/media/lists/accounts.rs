@@ -99,6 +99,22 @@ impl UserListAccountRepository for ListStore {
             .collect()
     }
 
+    async fn unlink(&self, id: &str, user_id: &str) -> AppResult<()> {
+        let id = id.to_string();
+        let user_id = user_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "unlink_user_list_account", move |tx| {
+            let id = id.clone();
+            let user_id = user_id.clone();
+            Box::pin(async move {
+                let owned = SqlRuntime::fetch_optional(crate::queries::sql_runtime::SqlExec::Tx(tx), "SELECT id FROM user_list_accounts WHERE id = {} AND user_id = {}", &[SqlArg::Text(id.clone()), SqlArg::Text(user_id.clone())]).await?;
+                if owned.is_none() { return Err(AppError::NotFound("list account not found".into())); }
+                SqlRuntime::execute(crate::queries::sql_runtime::SqlExec::Tx(tx), "DELETE FROM list_subscriptions WHERE credential_id = {} AND owner_user_id = {} AND scope = 'personal'", &[SqlArg::Text(id.clone()), SqlArg::Text(user_id.clone())]).await?;
+                SqlRuntime::execute(crate::queries::sql_runtime::SqlExec::Tx(tx), "DELETE FROM user_list_accounts WHERE id = {} AND user_id = {}", &[SqlArg::Text(id), SqlArg::Text(user_id)]).await?;
+                Ok(())
+            })
+        }).await
+    }
+
     async fn delete(&self, id: &str) -> AppResult<()> {
         let changed = SqlRuntime::execute_write(
             &self.datastore,

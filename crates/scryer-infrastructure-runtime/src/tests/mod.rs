@@ -168,6 +168,7 @@ fn test_descriptor_json(
     };
 
     serde_json::to_string(&scryer_plugin_sdk::PluginDescriptor {
+        settings: Vec::new(),
         id: plugin_id.to_string(),
         name: format!("{plugin_id} Plugin"),
         version: version.to_string(),

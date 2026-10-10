@@ -483,6 +483,8 @@ fn canonical_title_evidence_for_episode(
     title: &Title,
     episode: Option<&Episode>,
 ) -> CanonicalTitleEvidence {
+    let with_user_aliases = title.with_custom_search_aliases();
+    let title = &with_user_aliases;
     let lookup_keys = canonical_title_lookup_keys(title);
     let canonical_key = crate::title_matching::canonical_lookup_key(&title.name);
     let mut alias_release_years = HashMap::new();
@@ -886,6 +888,7 @@ pub(crate) fn match_parsed_release_with_asserted_ids(
     evidence: &CanonicalTitleEvidence,
     asserted_ids: Option<bool>,
 ) -> Option<TitleEvidenceMatch> {
+    let parsed_ids = evidence.spelling_identity.parsed_ids(parsed);
     let root_or_episode_year = parsed.year.is_some_and(|parsed_year| {
         evidence.year == Some(parsed_year) || evidence.episode_release_years.contains(&parsed_year)
     });
@@ -909,6 +912,50 @@ pub(crate) fn match_parsed_release_with_asserted_ids(
         }
     }
 
+    // A folded key match that the release only reaches through a spelling
+    // equivalence (an omitted accent, a locale collation) must not hide
+    // another local identity that claims the same spelling. A release that
+    // writes one of this title's names literally is kept: if another title
+    // carries the same literal name, both match and the caller sees the
+    // ambiguity instead of losing both candidates. The same indexed comparison
+    // guards RSS and foreign imports.
+    if asserted_ids != Some(true)
+        && parsed_ids != Some(true)
+        && let Some(index) = evidence.ambiguity.spelling_index.as_deref()
+    {
+        use scryer_domain::title_spelling::{
+            SpellingEquivalence, compare_title_spelling_for_resolution,
+        };
+        let (anchors, _) =
+            crate::title_matching::relaxed::neutral_spelling_forms(&parsed.raw_title);
+        let year = parsed
+            .year
+            .filter(|year| !evidence.episode_release_years.contains(year));
+        for (observed, raw) in anchors {
+            let kinds: Vec<_> = evidence
+                .spelling_identity
+                .names
+                .iter()
+                .filter(|name| name.key == evidence_match.matched_key)
+                .filter_map(|name| {
+                    compare_title_spelling_for_resolution(
+                        &observed,
+                        &name.text,
+                        name.language.as_deref(),
+                    )
+                })
+                .collect();
+            let only_equivalent = !kinds.contains(&SpellingEquivalence::Exact)
+                && kinds
+                    .iter()
+                    .any(|kind| matches!(kind, SpellingEquivalence::Locale(_)));
+            if only_equivalent
+                && index.has_competitor(&evidence.spelling_identity, &observed, &raw, year, 0)
+            {
+                return None;
+            }
+        }
+    }
     Some(evidence_match)
 }
 
@@ -3688,11 +3735,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multilingual_spelling_requires_corroboration_and_available_collision_index() {
+    async fn multilingual_spelling_requires_consistency_and_available_collision_index() {
         let title = spelling_title("Die zwei Päpste", "deu");
         let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;
+        assert!(
+            candidate_title_match(
+                &make_candidate("Die.zwei.Paepste.1080p.WEB.H265-GRP", None),
+                &evidence
+            )
+            .is_some()
+        );
         for raw in [
-            "Die.zwei.Paepste.1080p.WEB.H265-GRP",
             "Die.zwei.Paepste.2020.1080p.WEB.H265-GRP",
             "Die.zwei.Paepste.2.2019.1080p.WEB.H265-GRP",
             "Other.Die.zwei.Paepste.2019.1080p.WEB.H265-GRP",

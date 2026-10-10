@@ -41,6 +41,7 @@ import {
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
+import { episodeTitleOrTba } from "@/lib/utils/episode-title";
 import {
   metadataResultExternalIds,
   type KindedExternalIdInput,
@@ -240,13 +241,13 @@ function formatBindingEpisodeKey(
   return null;
 }
 
-function formatBindingEpisodeLabel(episode: PendingImportBindingEpisode): string {
-  return episode.episodeLabel?.trim() || episode.title?.trim() || episode.id;
+function formatBindingEpisodeLabel(episode: PendingImportBindingEpisode, t: Translate): string {
+  return episode.episodeLabel?.trim() || episodeTitleOrTba(episode.title, t);
 }
 
 function formatBindingEpisodeDisplay(episode: PendingImportBindingEpisode, t: Translate) {
   const key = formatBindingEpisodeKey(episode, t);
-  const label = formatBindingEpisodeLabel(episode);
+  const label = formatBindingEpisodeLabel(episode, t);
   return {
     key,
     label,
@@ -392,7 +393,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
       })
       .catch((error) => {
         if (!cancelled) {
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
         }
       })
       .finally(() => {
@@ -616,7 +617,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
           // Surfaced inline on the card too: a failed request must not read as
           // "no metadata matches found".
           setSearchError(message);
-          setGlobalStatus(message);
+          setGlobalStatus(message, { level: "ERROR" });
         })
         .finally(() => {
           if (active) {
@@ -692,7 +693,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
         .catch((err: unknown) => {
           const message = err instanceof Error ? err.message : t("pendingImports.bindPreviewLoadFailed");
           setBindingError(message);
-          setGlobalStatus(message);
+          setGlobalStatus(message, { level: "ERROR" });
         })
         .finally(() => setBindingLoading(false));
       return;
@@ -821,7 +822,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
       );
       clearActiveItem();
     } catch (err) {
-      setGlobalStatus(err instanceof Error ? err.message : t("pendingImports.resolveFailed"));
+      setGlobalStatus(err instanceof Error ? err.message : t("pendingImports.resolveFailed"), { level: "ERROR" });
     } finally {
       inFlightPendingImportActionsRef.current.delete(itemId);
       setResolvingItemId((current) => (current === itemId ? null : current));
@@ -867,7 +868,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
       );
       clearActiveItem();
     } catch (err) {
-      setGlobalStatus(err instanceof Error ? err.message : t("pendingImports.bindFailed"));
+      setGlobalStatus(err instanceof Error ? err.message : t("pendingImports.bindFailed"), { level: "ERROR" });
     } finally {
       inFlightPendingImportActionsRef.current.delete(itemId);
       setResolvingItemId((current) => (current === itemId ? null : current));
@@ -910,7 +911,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
         setIgnoreTargetItem(null);
       }
     } catch (err) {
-      setGlobalStatus(err instanceof Error ? err.message : t("pendingImports.ignoreFailed"));
+      setGlobalStatus(err instanceof Error ? err.message : t("pendingImports.ignoreFailed"), { level: "ERROR" });
     } finally {
       inFlightPendingImportActionsRef.current.delete(itemId);
       setIgnoringItemId((current) => (current === itemId ? null : current));

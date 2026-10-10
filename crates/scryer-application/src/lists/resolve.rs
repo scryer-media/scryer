@@ -22,6 +22,8 @@ pub struct ResolveInput {
 /// What the resolver found for one input, index-aligned with the inputs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResolveOutput {
+    pub series_movie: Option<scryer_domain::ListSeriesMovieTarget>,
+    pub resolution_reason: Option<String>,
     /// The gateway matched the item (or created a title for it).
     pub resolved: bool,
     pub smg_title_id: Option<i64>,
@@ -34,12 +36,35 @@ pub struct ResolveOutput {
 
 #[async_trait]
 pub trait ListItemResolver: Send + Sync {
+    async fn normalize_filters(
+        &self,
+        subscription: &ListSubscription,
+    ) -> AppResult<ListSubscription> {
+        Ok(subscription.clone())
+    }
     async fn resolve(&self, inputs: &[ResolveInput]) -> AppResult<Vec<ResolveOutput>>;
+    async fn enrich(&self, _items: &mut [ResolvedItem]) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ListMetadataFacts {
+    pub poster_url: Option<String>,
+    pub ratings: Vec<scryer_domain::TitleExternalRating>,
+    pub canonical_names: Vec<String>,
+    pub canonical_keys: Vec<String>,
+    pub original_language: Option<String>,
+    pub year: Option<i32>,
+    pub release_date: Option<chrono::NaiveDate>,
 }
 
 /// One fetched item after resolution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedItem {
+    pub series_movie: Option<scryer_domain::ListSeriesMovieTarget>,
+    pub resolution_reason: Option<String>,
+    pub facts: Option<ListMetadataFacts>,
     pub item: ListPluginItem,
     /// `None` when neither the item nor the subscription says what it is.
     pub kind: Option<MediaFacet>,
@@ -54,6 +79,9 @@ impl ResolvedItem {
     pub fn unresolved(item: ListPluginItem, kind: Option<MediaFacet>) -> Self {
         let external_ids = item_external_ids(&item);
         Self {
+            facts: None,
+            series_movie: None,
+            resolution_reason: None,
             item,
             kind,
             external_ids,
@@ -67,6 +95,10 @@ impl ResolvedItem {
 /// The item's kind: its own hint when it gives one, otherwise the
 /// subscription's only kind. A multi-kind list whose item carries no hint
 /// cannot be routed and stays unresolved.
+///
+/// Anime is a kind of series, and a source that has no anime kind of its own
+/// (the gateway's charts among them) hints every anime show as a series. On a
+/// list that follows anime but not series, such an item is the list's anime.
 pub fn item_kind(item: &ListPluginItem, subscription: &ListSubscription) -> Option<MediaFacet> {
     let hinted = item.kind_hint.map(|kind| match kind {
         ListMediaKind::Movie => MediaFacet::Movie,
@@ -77,7 +109,10 @@ pub fn item_kind(item: &ListPluginItem, subscription: &ListSubscription) -> Opti
         Some(kind) if subscription.kinds.is_empty() || subscription.kinds.contains(&kind) => {
             Some(kind)
         }
-        Some(_) => None,
+        Some(MediaFacet::Series) if subscription.kinds.contains(&MediaFacet::Anime) => {
+            Some(MediaFacet::Anime)
+        }
+        Some(kind) => Some(kind),
         None => match subscription.kinds.as_slice() {
             [only] => Some(only.clone()),
             _ => None,
@@ -152,12 +187,79 @@ pub async fn resolve_items(
     }
 
     let outputs = resolver.resolve(&inputs).await?;
+    if outputs.len() != inputs.len() {
+        return Err(crate::AppError::Repository(
+            "incomplete list resolution response".into(),
+        ));
+    }
     for (position, output) in positions.into_iter().zip(outputs) {
         let item = &mut resolved[position];
+        item.series_movie = output.series_movie;
+        item.resolution_reason = output.resolution_reason;
+        if item.series_movie.is_some() {
+            item.kind = Some(
+                if subscription.kinds.contains(&MediaFacet::Series)
+                    && !subscription.kinds.contains(&MediaFacet::Anime)
+                {
+                    MediaFacet::Series
+                } else {
+                    MediaFacet::Anime
+                },
+            );
+        }
         item.resolved = output.resolved || output.library_title_id.is_some();
         item.smg_title_id = output.smg_title_id;
         item.library_title_id = output.library_title_id;
         item.external_ids = merge_ids(std::mem::take(&mut item.external_ids), output.external_ids);
     }
+    let positions = resolved
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let required = subscription
+                .filters
+                .iter()
+                .filter(|filter| match filter {
+                    scryer_domain::ListFilter::Ratings { facet, .. }
+                    | scryer_domain::ListFilter::ExcludeCanonicalTags { facet, .. } => {
+                        item.kind.as_ref() == Some(facet)
+                    }
+                    _ => true,
+                })
+                .any(filter_requires_metadata);
+            required.then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if !positions.is_empty() {
+        let mut needed = positions
+            .iter()
+            .map(|index| resolved[*index].clone())
+            .collect::<Vec<_>>();
+        resolver.enrich(&mut needed).await?;
+        for (index, enriched) in positions.into_iter().zip(needed) {
+            resolved[index].facts = enriched.facts;
+        }
+    }
     Ok(resolved)
+}
+
+pub fn requires_metadata(filters: &[scryer_domain::ListFilter]) -> bool {
+    filters.iter().any(filter_requires_metadata)
+}
+
+fn filter_requires_metadata(filter: &scryer_domain::ListFilter) -> bool {
+    use scryer_domain::ListFilter;
+    match filter {
+        ListFilter::Ratings { minimums, .. } => !minimums.is_empty(),
+        ListFilter::ExcludeCanonicalTags {
+            keys,
+            unresolved_labels,
+            ..
+        } => !keys.is_empty() || !unresolved_labels.is_empty(),
+        ListFilter::RatingAtLeast { .. } | ListFilter::ReleasedOnly => true,
+        ListFilter::ReleaseYear { from, to } => from.is_some() || to.is_some(),
+        ListFilter::ExcludeGenres { genres } => !genres.is_empty(),
+        ListFilter::Language { languages } => !languages.is_empty(),
+        _ => false,
+    }
 }

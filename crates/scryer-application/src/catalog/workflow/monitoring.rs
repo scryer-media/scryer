@@ -1230,20 +1230,16 @@ impl AppUseCase {
             episode_type: parsed_episode_type,
             episode_number: normalize_show_text_opt(episode_number),
             season_number: normalize_show_text_opt(season_number),
-            episode_label: normalize_show_text_opt(episode_label),
-            title: normalize_show_text_opt(title),
-            air_date: normalize_show_text_opt(air_date),
+            episode_label: normalize_show_text_opt(episode_label).map(Some),
+            title: normalize_show_text_opt(title).map(Some),
+            air_date: normalize_show_text_opt(air_date).map(Some),
             duration_seconds,
             has_multi_audio,
             has_subtitle,
             monitored,
             collection_id,
-            overview,
-            tvdb_id: None,
-            tmdb_id: None,
-            image_url: None,
-            clear_image_url: false,
-            contiguous_absolute_number: None,
+            overview: overview.map(Some),
+            ..Default::default()
         };
         if !update.has_changes() {
             return Err(AppError::Validation(

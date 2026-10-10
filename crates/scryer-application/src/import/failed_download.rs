@@ -54,6 +54,23 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         return;
     }
 
+    if let Some(failure) = td.client_item.password_failure() {
+        if crate::acquisition_workflow::record_password_retry_failure(app, td, failure)
+            .await
+            .is_err()
+        {
+            td.status_messages = vec!["Could not record password failure; awaiting retry".into()];
+            return;
+        }
+        // Retain the existing release for an operator password retry. A
+        // credential failure is not evidence to blocklist or replace it.
+        td.state = TrackedDownloadState::Failed;
+        td.status = TrackedDownloadStatus::Error;
+        td.status_messages = vec![failure.message().into()];
+        td.skip_reacquire_on_failure = true;
+        return;
+    }
+
     let failure_reason = td
         .client_item
         .attention_reason
@@ -83,6 +100,12 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
                 .unwrap_or_else(|| td.client_item.title_name.clone()),
             reason: failure_reason.to_string(),
             remove_from_client_if_configured: false,
+            // Only the import gate routes a download here with this flag set
+            // (a download holding nothing but unwanted executables); the
+            // blocklist then names the import's verdict, not the client.
+            blocklist_reason: td
+                .burned_by_import_gate
+                .then(|| format!("import rejected: {failure_reason}")),
             skip_reacquire: td.skip_reacquire_on_failure,
         },
     )

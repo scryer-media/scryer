@@ -167,10 +167,6 @@ pub enum ListSourceOrigin {
     SmgChart { chart_key: String, scope: String },
     /// Fetched by the provider plugin with the subscription's parameters.
     ProviderFetch,
-    /// A public IMDb list the metadata gateway proxies; IMDb has no API and
-    /// the instance never reads it directly. The list id is the source's
-    /// `list_id` parameter.
-    SmgImdbList,
 }
 
 impl ListSourceOrigin {
@@ -178,13 +174,9 @@ impl ListSourceOrigin {
         match self {
             Self::SmgChart { .. } => "smg_chart",
             Self::ProviderFetch => "provider_fetch",
-            Self::SmgImdbList => "smg_imdb_list",
         }
     }
 }
-
-/// The source parameter naming a proxied IMDb list.
-pub const LIST_SOURCE_IMDB_LIST_ID_PARAM: &str = "list_id";
 
 /// A provider plus the concrete thing to read from it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -227,6 +219,30 @@ pub struct ListRoute {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "filter", rename_all = "snake_case")]
 pub enum ListFilter {
+    MonitorSpecials {
+        facet: MediaFacet,
+        enabled: bool,
+    },
+    FillerPolicy {
+        facet: MediaFacet,
+        skip: bool,
+    },
+    RecapPolicy {
+        facet: MediaFacet,
+        skip: bool,
+    },
+    Ratings {
+        facet: MediaFacet,
+        #[serde(default)]
+        match_any: bool,
+        minimums: Vec<ListRatingMinimum>,
+    },
+    ExcludeCanonicalTags {
+        facet: MediaFacet,
+        keys: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unresolved_labels: Vec<String>,
+    },
     RatingAtLeast {
         scale: String,
         value: f64,
@@ -250,6 +266,12 @@ pub enum ListFilter {
     ReleasedOnly,
     DirectorCreditsOnly,
     NotSequelWithoutBase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ListRatingMinimum {
+    pub source: String,
+    pub value: f64,
 }
 
 /// The sync bookkeeping a subscription carries.
@@ -401,9 +423,21 @@ impl ListMembershipState {
     }
 }
 
+/// A movie's series destination; the membership retains the movie's own IDs.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListSeriesMovieTarget {
+    pub parent_smg_id: i64,
+    pub parent_tvdb_id: i64,
+    pub parent_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
+}
+
 /// One row per (subscription, provider-native item).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListMembership {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_movie: Option<ListSeriesMovieTarget>,
     pub subscription_id: String,
     /// The provider's own id for the item, stable across syncs.
     pub item_key: String,
@@ -480,6 +514,14 @@ pub enum MediaRequestOrigin {
     PersonalList {
         subscription_id: String,
     },
+}
+
+impl crate::MediaRequest {
+    /// List movie requests own one movie, never the enclosing series.
+    pub fn is_list_series_movie(&self) -> bool {
+        self.origin.subscription_id().is_some()
+            && self.identity_fingerprint.starts_with("list-movie:")
+    }
 }
 
 impl MediaRequestOrigin {
@@ -597,9 +639,24 @@ impl UserListAccountStatus {
 /// The token material a member's provider link holds. Stored encrypted with
 /// the datastore key; decrypted only in memory for a fetch or a renewal, and
 /// never projected to any API.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListAccountCredential {
     pub access_token: String,
+    /// Opaque instance-bound gateway handle, never a provider refresh token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_handle: Option<String>,
+    /// Whether this credential was issued using the instance's provider app.
+    #[serde(default)]
+    pub direct: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_expires_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// Encrypted registration snapshot used to renew a direct credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_config: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -608,6 +665,26 @@ pub struct ListAccountCredential {
     pub token_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    /// Consecutive failed renewals of this credential. A renewed credential
+    /// starts without one, so a success clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_failures: Option<ListAccountRefreshFailures>,
+}
+
+/// A run of failed renewals with no answer that the grant is gone.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListAccountRefreshFailures {
+    pub count: u32,
+    pub since: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for ListAccountCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ListAccountCredential")
+            .field("tokens", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// A member's link to a list provider. Distinct from a login-provider account:

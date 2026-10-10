@@ -14,8 +14,8 @@ use scryer_domain::{
 use snapshot::{MediaRequestMetadataSnapshot, MediaRequestMetadataSnapshotExt};
 use std::collections::BTreeSet;
 
-const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
-const TITLE_MONITOR_TYPE_TAG_PREFIX: &str = "scryer:monitor-type:";
+pub(crate) const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
+pub(crate) const TITLE_MONITOR_TYPE_TAG_PREFIX: &str = "scryer:monitor-type:";
 
 impl AppUseCase {
     async fn prepare_request_approval_title(
@@ -139,6 +139,9 @@ pub struct ListMediaRequestsInput {
     pub facet: Option<MediaFacet>,
     pub library_ids: Option<Vec<String>>,
     pub status: Option<MediaRequestStatus>,
+    /// Restrict the queue to requests this user is a requester on. Only the
+    /// manager queue reads it; the caller's own list is always their own.
+    pub requester_user_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -258,14 +261,37 @@ impl AppUseCase {
 
         self.require_request_submission_permission(actor, &library.id, input.admission)
             .await?;
-        let metadata_enrichment = self.enrich_request_draft(&input.facet, external_ids).await;
-        external_ids = metadata_enrichment.external_ids;
-        self.ensure_request_subject_is_not_in_library(
-            &library.id,
-            library.facet.clone(),
-            &external_ids,
-        )
-        .await?;
+        let list_movie = input.origin.subscription_id().is_some()
+            && input.requested_monitor_type.as_deref() == Some("advanced")
+            && input
+                .requested_monitor_selection
+                .as_ref()
+                .is_some_and(|selection| {
+                    selection.seasons.is_empty() && selection.series_movies.len() == 1
+                });
+        let metadata_enrichment = if list_movie {
+            let movie = &input
+                .requested_monitor_selection
+                .as_ref()
+                .expect("movie selection checked above")
+                .series_movies[0];
+            self.enrich_request_draft(&MediaFacet::Movie, movie.external_ids.clone())
+                .await
+        } else {
+            self.enrich_request_draft(&input.facet, external_ids.clone())
+                .await
+        };
+        if !list_movie {
+            external_ids = metadata_enrichment.external_ids;
+        }
+        if !list_movie {
+            self.ensure_request_subject_is_not_in_library(
+                &library.id,
+                library.facet.clone(),
+                &external_ids,
+            )
+            .await?;
+        }
         let profile_reference_guard = self
             .runtime
             .catalog
@@ -308,7 +334,20 @@ impl AppUseCase {
             id: Id::new().0,
             library_id: library.id.clone(),
             facet: input.facet,
-            identity_fingerprint: media_request_identity_fingerprint(&external_ids),
+            identity_fingerprint: if list_movie {
+                format!(
+                    "list-movie:{}",
+                    media_request_identity_fingerprint(
+                        &requested_monitor_selection
+                            .as_ref()
+                            .expect("validated movie selection")
+                            .series_movies[0]
+                            .external_ids
+                    )
+                )
+            } else {
+                media_request_identity_fingerprint(&external_ids)
+            },
             title,
             sort_title: normalized_optional_string(input.sort_title),
             slug: normalized_optional_string(input.slug),
@@ -363,6 +402,13 @@ impl AppUseCase {
             )
             .await?;
         apply_admission_floor(&mut evaluation, input.admission);
+        self.add_list_request_tags(
+            &request.origin,
+            &request.facet,
+            &request.library_id,
+            &mut evaluation.tags,
+        )
+        .await;
 
         let submission = self
             .services
@@ -499,7 +545,10 @@ impl AppUseCase {
                 facet: input.facet,
                 library_ids: Some(library_ids),
                 status: input.status,
-                requester_user_id: None,
+                requester_user_id: input
+                    .requester_user_id
+                    .map(|user_id| user_id.trim().to_string())
+                    .filter(|user_id| !user_id.is_empty()),
             })
             .await
     }
@@ -611,17 +660,24 @@ impl AppUseCase {
             approved_monitor_type.as_deref(),
             monitor_selection.or_else(|| request.requested_monitor_selection.clone()),
         )?;
+        if request.is_list_series_movie()
+            && (approved_monitor_type.as_deref() != Some("advanced")
+                || approved_monitor_selection != request.requested_monitor_selection)
+        {
+            return Err(AppError::Validation(
+                "a list movie approval must retain its selected movie".into(),
+            ));
+        }
+        let mut new_title = media_request_to_new_title(
+            &request,
+            Some(&approved_quality_profile_id),
+            approved_monitor_type.as_deref(),
+            &approved_tags,
+        );
+        self.apply_list_route_to_request_title(&request, &mut new_title)
+            .await;
         let (title, _title_guard) = self
-            .prepare_request_approval_title(
-                actor,
-                media_request_to_new_title(
-                    &request,
-                    Some(&approved_quality_profile_id),
-                    approved_monitor_type.as_deref(),
-                    &approved_tags,
-                ),
-                request.library_id.clone(),
-            )
+            .prepare_request_approval_title(actor, new_title, request.library_id.clone())
             .await?;
         let provenance = RequestDecisionProvenance {
             decision_id: request.decision_id.clone(),
@@ -686,6 +742,20 @@ impl AppUseCase {
         }
         let outcome = self.finish_add_title_with_outcome(created).await?;
         let title_id = outcome.title.id.clone();
+        if request.is_list_series_movie() {
+            self.services
+                .catalog
+                .titles
+                .mark_title_metadata_hydration_due_now(&title_id)
+                .await?;
+            self.runtime.catalog.title_hydration_wake.notify_one();
+            return Ok(ApproveMediaRequestOutcome {
+                title_id,
+                wanted_search: None,
+                search_error: None,
+                claim_error: None,
+            });
+        }
         let claim_error = self
             .create_request_lifecycle_claims(actor, &request, &title_id, approved_lease_days)
             .await;
@@ -764,6 +834,70 @@ impl AppUseCase {
         Ok(resolution.updated)
     }
 
+    /// Put a dismissed (rejected) request back into the queue as pending.
+    ///
+    /// Only someone who could have resolved it may reopen it. The request keeps
+    /// its submitter, requesters, creation date, preferences and policy
+    /// provenance; the reopen itself is recorded as its own lifecycle event
+    /// naming who reopened it and when. Request rules are not run again: the
+    /// row is not a new submission, so it neither counts as one nor gets
+    /// approved or denied automatically. It simply waits for a person, and the
+    /// usual edit and approve paths apply from there.
+    pub async fn reopen_media_request(
+        &self,
+        actor: &User,
+        request_id: &str,
+    ) -> AppResult<MediaRequest> {
+        let request_id = request_id.trim();
+        if request_id.is_empty() {
+            return Err(AppError::Validation("media request id is required".into()));
+        }
+        let request = self
+            .services
+            .catalog
+            .media_requests
+            .get(request_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("media request not found".into()))?;
+        self.require_library_permission(
+            actor,
+            &request.library_id,
+            LibraryPermission::ManageTitles,
+        )
+        .await?;
+        if request.status != MediaRequestStatus::Rejected {
+            return Err(AppError::Validation(
+                "only a dismissed media request can be reopened".into(),
+            ));
+        }
+        // A pending request for something the library already holds is
+        // refused at submission; a reopened one is held to the same bar.
+        self.ensure_request_subject_is_not_in_library(
+            &request.library_id,
+            request.facet.clone(),
+            &request.external_ids,
+        )
+        .await?;
+
+        let reopened_event = new_global_domain_event(
+            actor,
+            DomainEventPayload::MediaRequestReopened(media_request_submitted_event_data(
+                &request,
+                request.requested_quality_profile_id.clone(),
+                request.requested_quality_profile_name.clone(),
+                request.requested_monitor_type.clone(),
+            )),
+        );
+        let reopened = self
+            .services
+            .catalog
+            .media_requests
+            .reopen_rejected(&request.id, reopened_event)
+            .await?;
+        self.publish_stored_domain_event(&reopened.event).await;
+        Ok(reopened.request)
+    }
+
     pub async fn update_my_media_request(
         &self,
         actor: &User,
@@ -797,6 +931,14 @@ impl AppUseCase {
             requested_monitor_type.as_deref(),
             input.requested_monitor_selection,
         )?;
+        if request.is_list_series_movie()
+            && (requested_monitor_type.as_deref() != Some("advanced")
+                || requested_monitor_selection != request.requested_monitor_selection)
+        {
+            return Err(AppError::Validation(
+                "a list movie request must retain its selected movie".into(),
+            ));
+        }
         let requested_lease_days = crate::request_rules::validate_lease_days(
             input
                 .requested_lease_days
@@ -840,7 +982,7 @@ impl AppUseCase {
         // submission was.
         let updated_request = update.request.clone();
         let snapshot = updated_request.metadata_snapshot();
-        let evaluation = self
+        let mut evaluation = self
             .evaluate_request_draft(
                 actor,
                 &library,
@@ -851,6 +993,15 @@ impl AppUseCase {
                 },
             )
             .await?;
+        // The stamp below replaces the row's tags, so the list's own labels
+        // are added again or an edit would drop them.
+        self.add_list_request_tags(
+            &updated_request.origin,
+            &updated_request.facet,
+            &updated_request.library_id,
+            &mut evaluation.tags,
+        )
+        .await;
         self.stamp_request_decision(&updated_request.id, &evaluation)
             .await;
         self.act_on_request_decision(actor, updated_request, &evaluation)
@@ -948,17 +1099,16 @@ impl AppUseCase {
             .quality_profile_reference_lock
             .lock()
             .await;
+        let mut new_title = media_request_to_new_title(
+            &request,
+            Some(&approved_quality_profile_id),
+            approved_monitor_type.as_deref(),
+            &provenance.policy_tags,
+        );
+        self.apply_list_route_to_request_title(&request, &mut new_title)
+            .await;
         let (title, _title_guard) = self
-            .prepare_request_approval_title(
-                actor,
-                media_request_to_new_title(
-                    &request,
-                    Some(&approved_quality_profile_id),
-                    approved_monitor_type.as_deref(),
-                    &provenance.policy_tags,
-                ),
-                request.library_id.clone(),
-            )
+            .prepare_request_approval_title(actor, new_title, request.library_id.clone())
             .await?;
         let mut event_data = media_request_resolved_event_data(
             &request,
@@ -1026,6 +1176,15 @@ impl AppUseCase {
         )
         .await;
 
+        if request.is_list_series_movie() {
+            self.services
+                .catalog
+                .titles
+                .mark_title_metadata_hydration_due_now(&outcome.title.id)
+                .await?;
+            self.runtime.catalog.title_hydration_wake.notify_one();
+            return Ok(());
+        }
         // Request policy already authorized this add; the requester usually
         // lacks ManageTitles, so the post-add search runs with system authority.
         if let Err(error) = self
@@ -1114,6 +1273,9 @@ impl AppUseCase {
         title_id: &str,
         approved_lease_days: Option<i64>,
     ) -> Option<String> {
+        if request.is_list_series_movie() {
+            return None;
+        }
         let mut errors: Vec<String> = Vec::new();
         let resolved = self
             .resolved_requests_for_title(request, title_id)
@@ -1853,6 +2015,7 @@ fn media_request_lifecycle_event_types() -> Vec<DomainEventType> {
     vec![
         DomainEventType::MediaRequestSubmitted,
         DomainEventType::MediaRequestUpdated,
+        DomainEventType::MediaRequestReopened,
         DomainEventType::MediaRequestApproved,
         DomainEventType::MediaRequestRejected,
         DomainEventType::MediaRequestCanceled,
@@ -1862,7 +2025,8 @@ fn media_request_lifecycle_event_types() -> Vec<DomainEventType> {
 fn media_request_lifecycle_event_request_id(event: &DomainEvent) -> Option<&str> {
     match &event.payload {
         DomainEventPayload::MediaRequestSubmitted(data)
-        | DomainEventPayload::MediaRequestUpdated(data) => Some(data.request_id.as_str()),
+        | DomainEventPayload::MediaRequestUpdated(data)
+        | DomainEventPayload::MediaRequestReopened(data) => Some(data.request_id.as_str()),
         DomainEventPayload::MediaRequestApproved(data)
         | DomainEventPayload::MediaRequestRejected(data)
         | DomainEventPayload::MediaRequestCanceled(data) => Some(data.request_id.as_str()),
@@ -1873,7 +2037,8 @@ fn media_request_lifecycle_event_request_id(event: &DomainEvent) -> Option<&str>
 fn media_request_lifecycle_event_library_id(event: &DomainEvent) -> Option<&str> {
     match &event.payload {
         DomainEventPayload::MediaRequestSubmitted(data)
-        | DomainEventPayload::MediaRequestUpdated(data) => Some(data.library_id.as_str()),
+        | DomainEventPayload::MediaRequestUpdated(data)
+        | DomainEventPayload::MediaRequestReopened(data) => Some(data.library_id.as_str()),
         DomainEventPayload::MediaRequestApproved(data)
         | DomainEventPayload::MediaRequestRejected(data)
         | DomainEventPayload::MediaRequestCanceled(data) => Some(data.library_id.as_str()),
@@ -2241,6 +2406,18 @@ fn media_request_to_new_title(
     if let Some(monitor_type) = monitor_type {
         tags.push(format!("{TITLE_MONITOR_TYPE_TAG_PREFIX}{monitor_type}"));
     }
+    if request.is_list_series_movie() {
+        // The request's facts and user tags describe the selected movie, not
+        // the series container. Hydration supplies the parent's own metadata.
+        return NewTitle {
+            name: request.title.clone(),
+            facet: request.facet.clone(),
+            monitored,
+            tags,
+            external_ids: request.external_ids.clone(),
+            ..NewTitle::default()
+        };
+    }
     // Policy and approver tags are plain labels beside the structured
     // `scryer:`-prefixed ones. The tag validator refuses that prefix, so a rule
     // can never mint a tag the resolver would read as a quality profile or a
@@ -2274,7 +2451,7 @@ fn media_request_to_new_title(
     }
 }
 
-fn normalize_requested_monitor_type(
+pub(crate) fn normalize_requested_monitor_type(
     facet: &MediaFacet,
     value: Option<String>,
 ) -> AppResult<Option<String>> {
@@ -2325,7 +2502,7 @@ pub(crate) fn normalize_requested_monitor_selection(
     Ok(Some(selection))
 }
 
-fn monitor_type_to_monitored(value: &str) -> bool {
+pub(crate) fn monitor_type_to_monitored(value: &str) -> bool {
     !matches!(value, "none" | "unmonitored")
 }
 

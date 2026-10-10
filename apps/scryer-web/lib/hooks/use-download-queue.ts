@@ -6,7 +6,7 @@ import {
   downloadQueueSubscription,
 } from "@/lib/graphql/queries";
 import type { DownloadQueueItem } from "@/lib/types";
-import { GlobalStatusContext } from "@/lib/context/global-status-context";
+import { GlobalStatusContext, type SetGlobalStatus } from "@/lib/context/global-status-context";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import {
   mergeAuthoritativeQueueItems,
@@ -22,7 +22,7 @@ type UseDownloadQueueArgs = {
   includeImportActivity?: boolean;
   titleId?: string | null;
   activityFilter: DownloadActivityFilter;
-  onErrorStatus?: (message: string) => void;
+  onErrorStatus?: SetGlobalStatus;
 };
 
 export type UseDownloadQueueResult = {
@@ -156,7 +156,7 @@ export function useDownloadQueue({
       setQueueError(message);
       if (lastReportedErrorRef.current !== message) {
         lastReportedErrorRef.current = message;
-        (onErrorStatus ?? contextGlobalStatus)?.(message);
+        (onErrorStatus ?? contextGlobalStatus)?.(message, { level: "ERROR" });
       }
     } finally {
       if (activeScopeKeyRef.current === requestScopeKey) {

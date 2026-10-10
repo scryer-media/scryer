@@ -68,7 +68,7 @@ export const CalendarContainer = memo(function CalendarContainer({
       .catch((error) => {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : t("status.failedToLoad");
-          setGlobalStatus(message);
+          setGlobalStatus(message, { level: "ERROR" });
         }
       })
       .finally(() => {
@@ -97,7 +97,7 @@ export const CalendarContainer = memo(function CalendarContainer({
         setCalendarEpisodes(data?.calendarEpisodes ?? []);
       } catch (error) {
         const message = error instanceof Error ? error.message : t("status.failedToLoad");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
       } finally {
         setCalendarLoading(false);
       }

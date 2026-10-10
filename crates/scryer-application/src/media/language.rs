@@ -204,6 +204,65 @@ pub fn normalize_metadata_language_code(code: &str) -> Option<String> {
     .then_some(normalized)
 }
 
+/// Languages a library or title may search release names under.
+///
+/// This is the option list of Scryer's language picker
+/// (`AUDIO_LANGUAGES` in `apps/scryer-web/lib/constants/audio-languages.ts`,
+/// the shared picker table under its terminological ISO 639-2 spelling), so
+/// the server accepts exactly what the picker offers and every stored code
+/// renders as a picker option. A guard test keeps the two lists in step.
+pub const SEARCH_LANGUAGE_CODES: &[&str] = &[
+    "sqi", "ara", "hye", "eus", "ben", "bos", "bul", "cat", "zho", "hrv", "ces", "dan", "nld",
+    "eng", "est", "fin", "fra", "kat", "deu", "ell", "heb", "hin", "hun", "isl", "ind", "ita",
+    "jpn", "kor", "lav", "lit", "mkd", "msa", "nor", "fas", "pol", "por", "ron", "rus", "srp",
+    "sin", "slk", "slv", "spa", "swe", "tha", "tur", "ukr", "urd", "vie",
+];
+
+/// Most search languages a library or title may list.
+pub const MAX_SEARCH_LANGUAGES: usize = 16;
+
+/// Resolve a search language to its picker code, or `None` when it is not one
+/// of [`SEARCH_LANGUAGE_CODES`]. Two-letter, bibliographic and English-name
+/// spellings of a picker language resolve; anything else, including valid ISO
+/// codes the picker does not offer, does not.
+pub fn normalize_search_language_code(code: &str) -> Option<String> {
+    let code = code.trim();
+    [
+        normalize_known_audio_language_code(code),
+        normalize_subtitle_language_code(code)
+            .and_then(|code| normalize_known_audio_language_code(&code)),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|code| SEARCH_LANGUAGE_CODES.contains(&code.as_str()))
+}
+
+/// Validate an ordered search-language list: every entry must be a picker
+/// language, duplicates collapse onto their first position and the list may
+/// hold at most [`MAX_SEARCH_LANGUAGES`] languages.
+pub fn normalize_search_languages(
+    languages: impl IntoIterator<Item = String>,
+) -> crate::AppResult<Vec<String>> {
+    let mut normalized = Vec::new();
+    for language in languages {
+        let code = normalize_search_language_code(&language).ok_or_else(|| {
+            crate::AppError::Validation(format!(
+                "unknown search language {:?}; choose a language offered by the search language picker",
+                language.trim()
+            ))
+        })?;
+        if !normalized.contains(&code) {
+            normalized.push(code);
+        }
+    }
+    if normalized.len() > MAX_SEARCH_LANGUAGES {
+        return Err(crate::AppError::Validation(format!(
+            "at most {MAX_SEARCH_LANGUAGES} search languages are allowed"
+        )));
+    }
+    Ok(normalized)
+}
+
 pub fn normalize_detected_audio_languages<'a>(
     languages: impl IntoIterator<Item = &'a str>,
 ) -> Vec<String> {
@@ -391,6 +450,87 @@ mod tests {
                 "{language}"
             );
         }
+    }
+
+    #[test]
+    fn search_languages_accept_only_picker_languages() {
+        for (input, expected) in [
+            ("swe", "swe"),
+            ("sv", "swe"),
+            ("Swedish", "swe"),
+            ("ger", "deu"),
+            ("de-DE", "deu"),
+            ("chi", "zho"),
+            ("zht", "zho"),
+            ("pob", "por"),
+            ("scc", "srp"),
+            (" NOR ", "nor"),
+        ] {
+            assert_eq!(
+                super::normalize_search_language_code(input).as_deref(),
+                Some(expected),
+                "{input}"
+            );
+        }
+        for input in ["", "und", "xyz", "@@", "tgl", "zxx", "zz-ZZ"] {
+            assert_eq!(
+                super::normalize_search_language_code(input),
+                None,
+                "{input}"
+            );
+        }
+        for code in super::SEARCH_LANGUAGE_CODES {
+            assert_eq!(
+                super::normalize_search_language_code(code).as_deref(),
+                Some(*code),
+                "every picker code is its own canonical form"
+            );
+        }
+    }
+
+    #[test]
+    fn search_language_lists_keep_order_and_reject_unknown_or_too_many() {
+        assert_eq!(
+            super::normalize_search_languages(["sv", "deu", "swe"].map(String::from)).unwrap(),
+            vec!["swe".to_string(), "deu".to_string()]
+        );
+        let error = super::normalize_search_languages(["swe", "xyz"].map(String::from))
+            .expect_err("an unknown code is refused");
+        assert!(error.to_string().contains("\"xyz\""), "{error}");
+        let too_many = super::SEARCH_LANGUAGE_CODES[..super::MAX_SEARCH_LANGUAGES + 1]
+            .iter()
+            .map(|code| code.to_string());
+        assert!(super::normalize_search_languages(too_many).is_err());
+    }
+
+    /// The server's search-language set is the web picker's option list.
+    /// The picker derives its options from the shared subtitle table, so
+    /// every entry there must canonicalize into the set, and the set must
+    /// hold nothing the table cannot produce.
+    #[test]
+    fn search_language_codes_match_the_web_language_picker() {
+        let table = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../apps/scryer-web/lib/constants/subtitle-languages.ts"),
+        )
+        .expect("the web picker table should be readable");
+        let mut picker = table
+            .split("code: \"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .map(|code| {
+                super::normalize_search_language_code(code)
+                    .unwrap_or_else(|| panic!("picker code {code} is not a search language"))
+            })
+            .collect::<Vec<_>>();
+        picker.sort();
+        picker.dedup();
+        let mut server = super::SEARCH_LANGUAGE_CODES
+            .iter()
+            .map(|code| code.to_string())
+            .collect::<Vec<_>>();
+        server.sort();
+        assert_eq!(picker, server);
     }
 
     #[test]

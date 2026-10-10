@@ -1212,6 +1212,7 @@ function AuthenticatedHomePage({
         setResolvedOverviewTarget(null);
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
         navigateTo(view, undefined, "overview", undefined, undefined);
       })
@@ -1300,6 +1301,7 @@ function AuthenticatedHomePage({
         }
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
         replaceWithOverviewList();
       })

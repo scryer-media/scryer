@@ -50,6 +50,8 @@ pub(crate) async fn run_pass(
         .chain(scryer_plugins::builtins::NOTIFICATION_BUILTINS)
     {
         bundled.push(RuntimePluginLoad {
+            installation_id: None,
+            settings: Default::default(),
             descriptor: serde_json::from_str(asset.descriptor_json)
                 .map_err(|error| error.to_string())?,
             wasm_bytes: scryer_plugins::builtins::decode_builtin_wasm(*asset)?,

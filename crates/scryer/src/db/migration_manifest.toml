@@ -902,6 +902,7 @@ scope = "all"
 # 0157 is quarantined (see storage/migrations/known_bad.rs): it is recorded as
 # applied but never executed. 0160 is its non-destructive replacement and runs on
 # every database, including those that already ran 0157.
+
 [[migration]]
 version = 160
 description = "single title folder ownership (non-destructive replacement for 0157)"
@@ -2763,6 +2764,323 @@ scope = "all"
 [[migration.steps]]
 kind = "sql"
 file = "postgres/migrations/0267_reopen_pre_air_episode_coverage.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 268
+description = "repair title folders recorded at or above a library root"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "repair_root_title_folders"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 269
+description = "download password candidates and retry recovery"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0269_download_password_candidates.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0269_download_password_candidates.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 270
+description = "foreign key child indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0270_foreign_key_child_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0270_foreign_key_child_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 271
+description = "scrub stored release url credentials"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "scrub_stored_release_url_credentials"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 272
+description = "import rejection skip reason projection"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0272_import_rejection_skip_reason.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0272_import_rejection_skip_reason.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "backfill_import_skip_reason_projection"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 273
+description = "ui catalog view device classes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0273_ui_catalog_view_device_classes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0273_ui_catalog_view_device_classes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 274
+description = "delete imdb user list follows"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0274_delete_imdb_user_list_follows.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0274_delete_imdb_user_list_follows.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 275
+description = "import artifact workspace relative path"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0275_import_artifact_workspace_relative_path.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0275_import_artifact_workspace_relative_path.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 276
+description = "discovery generation relevance and run cleanup indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0276_discovery_query_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0276_discovery_query_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 277
+description = "title lookup and download cleanup seed indexes and watermark"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0277_title_lookup_and_download_seed_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0277_title_lookup_and_download_seed_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 278
+description = "title search language variants"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0278_title_search_language_variants.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0278_title_search_language_variants.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 279
+description = "per-query title text search learning"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0279_freetext_search_learning_v3.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0279_freetext_search_learning_v3.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 280
+description = "relabel stored resolutions with the crop-tolerant ladder"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0280_cropped_resolution_relabel.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0280_cropped_resolution_relabel.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 281
+description = "canonical tag vocabulary cache"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0281_canonical_tag_vocabulary.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0281_canonical_tag_vocabulary.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 282
+description = "script triggers and schedules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0282_script_triggers.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0282_script_triggers.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 283
+description = "workflow operation type index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0283_workflow_operation_type_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0283_workflow_operation_type_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 284
+description = "indexer search strategy state"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0284_indexer_search_strategy_state.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0284_indexer_search_strategy_state.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 285
+description = "indexer search page cursor"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0285_indexer_search_page_cursor.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0285_indexer_search_page_cursor.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 286
+description = "list series movie targets"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0286_list_series_movie_targets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0286_list_series_movie_targets.sql"
 engine = "postgres"
 scope = "all"
 

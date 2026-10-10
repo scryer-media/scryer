@@ -227,7 +227,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
       return data.ruleSet as RuleSetRecord | null;
     } catch (error) {
       if (request === detailRequestRef.current) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
       }
       return null;
     }
@@ -327,7 +327,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
       if (error) throw error;
       setRuleSetRecords(data.ruleSets || []);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -338,7 +338,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
       setTrackedRulePacks(data.trackedRulePacks || []);
       setTrackedRulePacksLoaded(true);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -377,7 +377,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         await Promise.all([refreshRuleSets(), refreshTrackedRulePacks()]);
         return true;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
         return false;
       } finally {
         setMutatingRulePackId(null);
@@ -397,7 +397,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         if (error) throw error;
         await Promise.all([refreshRuleSets(), refreshTrackedRulePacks()]);
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       } finally {
         setMutatingRulePackId(null);
       }
@@ -416,10 +416,12 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         return data.previewTrackedRulePackUpdate;
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
+        const alreadyCurrent = /same version|no update|already (?:up to date|latest)/i.test(message);
         setGlobalStatus(
-          /same version|no update|already (?:up to date|latest)/i.test(message)
+          alreadyCurrent
             ? "This rule pack is already up to date."
             : message || t("status.failedToUpdate"),
+          alreadyCurrent ? undefined : { level: "ERROR" },
         );
         return null;
       } finally {
@@ -444,7 +446,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         if (error) throw error;
         await Promise.all([refreshRuleSets(), refreshTrackedRulePacks()]);
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       } finally {
         setMutatingRulePackId(null);
       }
@@ -465,7 +467,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         if (error) throw error;
         await Promise.all([refreshRuleSets(), refreshTrackedRulePacks()]);
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       } finally {
         setMutatingRulePackId(null);
       }
@@ -522,7 +524,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         );
         await refreshRuleSets();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       } finally {
         setMutatingRuleSetId(null);
       }
@@ -539,13 +541,13 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         .mutation(deleteRuleSetMutation, { id: record.id })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.ruleDeleted", { name: record.name }));
+      setGlobalStatus(t("status.ruleDeleted", { name: record.name }), { level: "SUCCESS" });
       await refreshRuleSets();
       if (editingRuleSetId === record.id) {
         closeRuleSetEditor();
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingRuleSetId(null);
       setPendingDeleteRuleSet(null);
@@ -630,7 +632,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
             .toPromise();
           if (toggleError) throw toggleError;
         }
-        setGlobalStatus(t("status.ruleUpdated"));
+        setGlobalStatus(t("status.ruleUpdated"), { level: "SUCCESS" });
       } else if (copyingTrackedRuleSetId) {
         const { error } = await client
           .mutation(copyTrackedRulePackRuleMutation, {
@@ -643,7 +645,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.ruleCreated"));
+        setGlobalStatus(t("status.ruleCreated"), { level: "SUCCESS" });
       } else {
         const { error } = await client
           .mutation(createRuleSetMutation, {
@@ -651,7 +653,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.ruleCreated"));
+        setGlobalStatus(t("status.ruleCreated"), { level: "SUCCESS" });
       }
       closeRuleSetEditor();
       await Promise.all([refreshRuleSets(), refreshTrackedRulePacks()]);
@@ -669,7 +671,7 @@ export function SettingsRulesContainer({ canManageCatalogSettings, canManageSyst
         });
         return;
       }
-      setGlobalStatus(message || t("status.failedToUpdate"));
+      setGlobalStatus(message || t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingRuleSetId(null);
     }

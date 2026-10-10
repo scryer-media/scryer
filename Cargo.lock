@@ -240,9 +240,9 @@ dependencies = [
 
 [[package]]
 name = "arbitrary"
-version = "1.4.2"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
 
 [[package]]
 name = "arc-swap"
@@ -1502,6 +1502,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "croner"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a59ed87528b2ee2b6d2b14d6767f6dbe41867dfc581433fc23a7c0fae847467a"
+dependencies = [
+ "chrono",
+ "derive_builder",
+ "strum",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1582,9 +1593,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+checksum = "03bb0e1cc970d482d121d9a1744999169b69a07470b3d644a7894e53fcaf4574"
 dependencies = [
  "cmov",
 ]
@@ -1640,6 +1651,16 @@ dependencies = [
 
 [[package]]
 name = "darling"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
+dependencies = [
+ "darling_core 0.20.11",
+ "darling_macro 0.20.11",
+]
+
+[[package]]
+name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
@@ -1656,6 +1677,20 @@ checksum = "ed17f5901b6630b993ca003def43f2f8ef4014fc13b047b57aad617ff32bc2ec"
 dependencies = [
  "darling_core 0.24.1",
  "darling_macro 0.24.1",
+]
+
+[[package]]
+name = "darling_core"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1682,6 +1717,17 @@ dependencies = [
  "quote",
  "strsim",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
+dependencies = [
+ "darling_core 0.20.11",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1832,6 +1878,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "derive_builder"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "507dfb09ea8b7fa618fcf76e953f4f5e192547945816d5358edffe39f6f94947"
+dependencies = [
+ "derive_builder_macro",
+]
+
+[[package]]
+name = "derive_builder_core"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d5bcf7b024d6835cfb3d473887cd966994907effbe9227e8c8219824d06c4e8"
+dependencies = [
+ "darling 0.20.11",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "derive_builder_macro"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab63b0e2bf4d5928aff72e83a7dace85d7bba5fe12dcc3c5a572d78caffd3f3c"
+dependencies = [
+ "derive_builder_core",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1996,23 +2073,23 @@ dependencies = [
 
 [[package]]
 name = "either"
-version = "1.18.0"
+version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
+checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "embed-resource"
-version = "3.0.11"
+version = "3.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbfdaacccebec3b28e4866b8973543c7647797db5ada1bdab552e48fe665fbbd"
+checksum = "6168487b5e7eb2673e6efe1200b1848016e436a6ca0b8031bf04bd9d493a249f"
 dependencies = [
  "cc",
  "memchr",
  "rustc_version",
- "toml 1.1.6+spec-1.1.0",
+ "toml 1.1.7+spec-1.1.0",
  "vswhom",
  "winreg",
 ]
@@ -2620,9 +2697,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.19"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef8e5e5a340588f4452631496976cf8636d4a7ecf600239fdc27615d2530bc16"
+checksum = "7d29020232d6aa3fb1daca64c1127cf662cf97f254ae16c18c05b8ab635fc118"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -2876,9 +2953,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.11.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27b501faa50e7a26c3d3560ca625132f4078a17771f4810baf70475ae48cbe43"
+checksum = "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -3231,9 +3308,9 @@ dependencies = [
 
 [[package]]
 name = "inventory"
-version = "0.3.24"
+version = "0.3.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+checksum = "6928282826c822ad91bf1c9a1cb90a30ba1c26770749929b4656cd6be829cd7c"
 dependencies = [
  "rustversion",
 ]
@@ -4039,9 +4116,9 @@ dependencies = [
 
 [[package]]
 name = "objc2"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a12a8ed07aefc768292f076dc3ac8c48f3781c8f2d5851dd3d98950e8c5a89f"
+checksum = "08849bbd4767dfae9457696856ae1c84fe4e0281bbe4a7abff2d0e06fb7981f8"
 dependencies = [
  "objc2-encode",
 ]
@@ -4534,9 +4611,9 @@ dependencies = [
 
 [[package]]
 name = "powerfmt"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
 
 [[package]]
 name = "ppv-lite86"
@@ -5407,7 +5484,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "application-updater",
  "async-graphql",
@@ -5468,7 +5545,7 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-util",
- "toml 1.1.6+spec-1.1.0",
+ "toml 1.1.7+spec-1.1.0",
  "tower",
  "tower-http",
  "tracing",
@@ -5483,7 +5560,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-application"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "application-updater",
  "argon2",
@@ -5496,7 +5573,9 @@ dependencies = [
  "bytes",
  "chardetng",
  "chrono",
+ "chrono-tz",
  "crc-fast",
+ "croner",
  "encoding_rs",
  "flate2",
  "futures-util",
@@ -5546,7 +5625,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-domain"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "blake3",
  "chrono",
@@ -5563,7 +5642,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-acquisition"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -5592,7 +5671,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
- "toml 1.1.6+spec-1.1.0",
+ "toml 1.1.7+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
@@ -5604,7 +5683,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-configuration"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5622,7 +5701,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-crypto"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -5632,7 +5711,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-datastore"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5657,7 +5736,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
- "toml 1.1.6+spec-1.1.0",
+ "toml 1.1.7+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -5668,7 +5747,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-identity"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5693,7 +5772,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "blake3",
@@ -5728,7 +5807,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library-search"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "scryer-application",
@@ -5745,7 +5824,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-metadata"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5772,7 +5851,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-notifications"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5789,7 +5868,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-runtime"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5825,7 +5904,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-sql"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "blake3",
  "chrono",
@@ -5842,7 +5921,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-workflow"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5864,7 +5943,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5891,7 +5970,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-acquisition"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5903,7 +5982,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-core"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -5914,7 +5993,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-import"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5932,7 +6011,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5948,7 +6027,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media-types"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -5960,7 +6039,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-metadata"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -5971,7 +6050,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-query"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "base64 0.22.1",
@@ -5988,7 +6067,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-security"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6000,7 +6079,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-settings"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6013,7 +6092,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-subscription"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6027,7 +6106,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-system"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6040,14 +6119,14 @@ dependencies = [
 
 [[package]]
 name = "scryer-launcher"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "scryer-logging"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "chrono",
  "serde",
@@ -6058,14 +6137,14 @@ dependencies = [
 
 [[package]]
 name = "scryer-media-types"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "scryer-mediainfo"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "bytes",
  "isolang",
@@ -6078,12 +6157,12 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "toml 1.1.6+spec-1.1.0",
+ "toml 1.1.7+spec-1.1.0",
 ]
 
 [[package]]
 name = "scryer-mock-apis"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "axum",
  "serde",
@@ -6095,7 +6174,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-outbound-http"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "chrono",
  "governor",
@@ -6111,7 +6190,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugin-sdk"
-version = "3.13.0"
+version = "3.14.0"
 dependencies = [
  "base64 0.22.1",
  "postcard",
@@ -6123,7 +6202,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugins"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -6164,7 +6243,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-release-parser"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "aho-corasick",
  "chrono",
@@ -6178,7 +6257,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-rules"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "blake3",
  "chrono",
@@ -6192,11 +6271,11 @@ dependencies = [
 
 [[package]]
 name = "scryer-runtime-info"
-version = "0.21.13"
+version = "0.21.15"
 
 [[package]]
 name = "scryer-webauthn"
-version = "0.21.13"
+version = "0.21.15"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -6410,9 +6489,9 @@ dependencies = [
 
 [[package]]
 name = "serde_spanned"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
 dependencies = [
  "serde_core",
 ]
@@ -6672,9 +6751,9 @@ dependencies = [
 
 [[package]]
 name = "spki"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d9efca8738c78ee9484207732f728b1ef517bbb1833d6fc0879ca898a522f6f"
+checksum = "7ef958a98b9d5da290cfc78946e9f3e61e1e62a18db0d92cac0b83cc161491a9"
 dependencies = [
  "base64ct",
  "der",
@@ -7462,14 +7541,14 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.6+spec-1.1.0"
+version = "1.1.7+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
+checksum = "7874cd34dd99040fc24e30923aa64a60a81ff3ddfe2b8129ccc84ba24949deed"
 dependencies = [
  "indexmap",
  "serde_core",
  "serde_spanned",
- "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
  "toml_writer",
  "winnow 1.0.4",
@@ -7486,21 +7565,21 @@ dependencies = [
 
 [[package]]
 name = "toml_datetime"
-version = "1.1.1+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
 dependencies = [
  "serde_core",
 ]
 
 [[package]]
 name = "toml_edit"
-version = "0.25.15+spec-1.1.0"
+version = "0.25.16+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614"
+checksum = "88f38f3af8bf71841c67a990f4e2b52143b2d0a1a994c72513ff4c14977fc722"
 dependencies = [
  "indexmap",
- "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
  "toml_writer",
  "winnow 1.0.4",
@@ -7508,18 +7587,18 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.1.3+spec-1.1.0"
+version = "1.1.4+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+checksum = "bed810ee007d8e7f9cf20b4774e7198142fa27186e0f805871da7f3c39eaf333"
 dependencies = [
  "winnow 1.0.4",
 ]
 
 [[package]]
 name = "toml_writer"
-version = "1.1.2+spec-1.1.0"
+version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "tough"
@@ -7775,9 +7854,9 @@ checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
 
 [[package]]
 name = "unicase"
-version = "2.9.0"
+version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-bidi"
@@ -8019,9 +8098,9 @@ dependencies = [
 
 [[package]]
 name = "want"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
+checksum = "ec4cdd0dd910afe868b7ef477227d8d538b46b3075031afee8a9f2acb0a2ed0b"
 dependencies = [
  "try-lock",
 ]
@@ -8941,12 +9020,12 @@ dependencies = [
 
 [[package]]
 name = "winreg"
-version = "0.55.0"
+version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb5a765337c50e9ec252c2069be9bf91c7df47afb103b642ba3a53bf8101be97"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9146,7 +9225,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
- "toml 1.1.6+spec-1.1.0",
+ "toml 1.1.7+spec-1.1.0",
  "toml_edit",
  "x509-cert",
  "xtask-support",
@@ -9191,18 +9270,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.59"
+version = "0.8.62"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6df92bf3d9227be3d53173901ddbffac2babc27ae50f397776ffd6dc33f800cb"
+checksum = "86502bf56ac7c77571a32e2647bb2a15894565e981fb2a48d7bde2d91c965a9d"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.59"
+version = "0.8.62"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac4f328cf2f05d084e496c3e9c3f33ed0a183656a16e1fcec4d464d8373aec82"
+checksum = "5457206954b06561e2608c7e19cf58b1926586d999c246eebe4502f7e2039d1a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9232,9 +9311,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 dependencies = [
  "zeroize_derive",
 ]

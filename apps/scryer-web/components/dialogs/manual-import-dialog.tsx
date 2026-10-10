@@ -37,6 +37,7 @@ import {
 import { selectorId } from "@/lib/utils/dom-ids";
 import { compareManualImportSeasonLabels } from "@/lib/utils/manual-import-actions";
 import { type ManualImportVideoFacts } from "@/lib/utils/manual-import-video-facts";
+import { episodeTitleOrTba } from "@/lib/utils/episode-title";
 import { buildViewPath } from "@/lib/utils/routing";
 import { useNavigate } from "react-router";
 import { useClient } from "urql";
@@ -124,17 +125,22 @@ function formatFileSize(bytes: number) {
   return `${val.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-function episodeLabel(ep: AvailableEpisode): string {
+/**
+ * The picker label for an episode. Without `t` (search matching) an untitled
+ * episode contributes only its numbers, so searching "TBA" matches nothing.
+ */
+function episodeLabel(ep: AvailableEpisode, t?: (key: string) => string): string {
   const season = ep.seasonNumber?.replace(/\D/g, "") ?? "";
   const episode = ep.episodeNumber?.replace(/\D/g, "") ?? "";
   const seasonTag = season ? season.padStart(2, "0") : "??";
   const episodeTag = episode ? episode.padStart(2, "0") : "??";
   const tag = `S${seasonTag}E${episodeTag}`;
   const absolute = ep.absoluteNumber?.trim();
+  const title = t ? episodeTitleOrTba(ep.title, t) : ep.title?.trim();
   if (absolute) {
-    return `${tag} (${absolute})${ep.title ? ` ${ep.title}` : ""}`;
+    return title ? `${tag} (${absolute}) ${title}` : `${tag} (${absolute})`;
   }
-  return ep.title ? `${tag} - ${ep.title}` : tag;
+  return title ? `${tag} - ${title}` : tag;
 }
 
 function seriesMovieLabel(movie: AvailableSeriesMovie): string {
@@ -226,6 +232,7 @@ function buildManualImportTargetRows(
   groupedEpisodes: ReadonlyMap<string, AvailableEpisode[]>,
   seriesMovies: readonly AvailableSeriesMovie[],
   query: string,
+  t: (key: string) => string,
 ): ManualImportTargetListRow[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const matches = (label: string, groupLabel = "") =>
@@ -264,7 +271,7 @@ function buildManualImportTargetRows(
     rows.push({ kind: "group", key: `group:${seasonLabel}`, label: seasonLabel });
     matchingEpisodes.forEach((episode) => {
       const value = episodeTargetValue([episode.id]);
-      rows.push({ kind: "option", key: value, label: episodeLabel(episode), value });
+      rows.push({ kind: "option", key: value, label: episodeLabel(episode, t), value });
     });
   });
 
@@ -309,8 +316,8 @@ function ManualImportTargetPickerContent({
   };
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const rows = React.useMemo(
-    () => buildManualImportTargetRows(groupedEpisodes, seriesMovies, query),
-    [groupedEpisodes, query, seriesMovies],
+    () => buildManualImportTargetRows(groupedEpisodes, seriesMovies, query, t),
+    [groupedEpisodes, query, seriesMovies, t],
   );
   React.useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
@@ -586,10 +593,10 @@ export function ManualImportDialog({
       );
     });
     episodes.forEach((episode) => {
-      labels.set(episodeTargetValue([episode.id]), episodeLabel(episode));
+      labels.set(episodeTargetValue([episode.id]), episodeLabel(episode, t));
     });
     return labels;
-  }, [episodes, seriesMovies]);
+  }, [episodes, seriesMovies, t]);
   const handleMappingChange = React.useCallback((candidateId: string, value: string) => {
     setMappings((previous) => {
       if (previous[candidateId] === value) {
@@ -651,7 +658,7 @@ export function ManualImportDialog({
         },
       }).toPromise();
       if (mutationError) throw mutationError;
-      setGlobalStatus(t("queue.manualImportQueued"));
+      setGlobalStatus(t("queue.manualImportQueued"), { level: "SUCCESS" });
       onImportQueued?.();
       onOpenChange(false);
     } catch (err: unknown) {
@@ -791,7 +798,7 @@ export function ManualImportDialog({
                             disc={file.videoFacts?.disc ?? null}
                             report={file.videoFacts?.report}
                             isMovie={facet === "MOVIE"}
-                            episodes={episodes.map((episode) => ({ id: episode.id, label: episodeLabel(episode) }))}
+                            episodes={episodes.map((episode) => ({ id: episode.id, label: episodeLabel(episode, t) }))}
                             value={discSelections[file.candidateId] ?? null}
                             onChange={(selection) => {
                               setDiscSelections((previous) => {

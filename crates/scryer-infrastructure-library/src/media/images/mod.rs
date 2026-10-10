@@ -57,23 +57,18 @@ pub fn normalize_title_image_source_url(source_url: &str) -> AppResult<String> {
     })
 }
 
-pub fn normalized_base_path_from_env() -> String {
-    let Some(raw) = std::env::var("SCRYER_BASE_PATH").ok() else {
-        return String::new();
-    };
+static BASE_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-    let segments = raw
-        .trim()
-        .replace('\\', "/")
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if segments.is_empty() {
-        String::new()
-    } else {
-        format!("/{}", segments.join("/"))
-    }
+/// Install the base path the server resolved at startup. Local image URLs are
+/// synthesized under it. The first installation wins; the composition root
+/// installs it once before any store is built.
+pub fn install_base_path(normalized: &str) {
+    let _ = BASE_PATH.set(normalized.trim_end_matches('/').to_string());
+}
+
+/// The installed base path, empty at the root or before installation.
+pub fn normalized_base_path() -> String {
+    BASE_PATH.get().cloned().unwrap_or_default()
 }
 
 pub fn synthesize_local_title_image_url(

@@ -161,6 +161,116 @@ async fn assert_lands_in(import_repo: &TestImportRepo, expected_title_id: &str) 
     result
 }
 
+const UNWANTED_EXECUTABLE: &str = "Fixture.Release.2020.1080p-GROUP.exe";
+
+/// A completed download with no video holding `files` (written empty).
+fn completed_holding(files: &[&str]) -> (tempfile::TempDir, CompletedDownload) {
+    let (dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
+    for file in files {
+        std::fs::write(dir.path().join(file), b"fixture").expect("write fixture file");
+    }
+    (dir, completed)
+}
+
+#[tokio::test]
+async fn download_of_only_an_executable_ends_as_unwanted_executables() {
+    let import_repo = Arc::new(TestImportRepo::default());
+    let app = app_for_import(
+        Arc::new(TestDownloadSubmissionRepo::default()),
+        import_repo.clone(),
+    );
+    let (_dir, completed) =
+        completed_holding(&[UNWANTED_EXECUTABLE, "Fixture.Release.2020.1080p-GROUP.nfo"]);
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
+
+    import_with_lookup(&app, &import_actor(), &mut td, &lookup).await;
+
+    let expected = format!("unwanted executable '{UNWANTED_EXECUTABLE}' — no video files");
+    let result = import_repo
+        .last_import_result()
+        .await
+        .expect("import must record a result");
+    assert_eq!(
+        result.skip_reason,
+        Some(ImportSkipReason::UnwantedExecutables),
+        "{result:?}"
+    );
+    assert_eq!(result.error_message.as_deref(), Some(expected.as_str()));
+    assert_eq!(td.status_messages, vec![expected]);
+    assert_eq!(
+        td.no_video_import_retry, None,
+        "no no-video retry is scheduled"
+    );
+    let statuses = import_repo.status_updates.lock().await;
+    assert!(
+        statuses
+            .iter()
+            .all(|(_, status, _)| *status != ImportStatus::Pending),
+        "an unwanted executable never waits in the review queue: {statuses:?}"
+    );
+}
+
+#[tokio::test]
+async fn scryer_grab_of_only_an_executable_is_routed_to_failure_handling() {
+    let import_repo = Arc::new(TestImportRepo::default());
+    let app = app_for_import(
+        Arc::new(TestDownloadSubmissionRepo::default()),
+        import_repo.clone(),
+    );
+    let (dir, completed) =
+        completed_holding(&[UNWANTED_EXECUTABLE, "Fixture.Release.2020.1080p-GROUP.nfo"]);
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
+    td.client_item.is_scryer_origin = true;
+
+    import_with_lookup(&app, &import_actor(), &mut td, &lookup).await;
+
+    let expected = format!("unwanted executable '{UNWANTED_EXECUTABLE}' — no video files");
+    assert_eq!(td.state, TrackedDownloadState::FailedPending);
+    assert_eq!(td.status, TrackedDownloadStatus::Error);
+    assert_eq!(
+        td.client_item.attention_reason.as_deref(),
+        Some(expected.as_str())
+    );
+    assert_eq!(td.status_messages, vec![expected]);
+    assert!(
+        td.burned_by_import_gate,
+        "the failure is the import gate's, so terminal cleanup removes the files too"
+    );
+    assert_eq!(td.no_video_import_retry, None);
+    // Routing alone deletes nothing: the download's files are still on disk
+    // until terminal cleanup runs under the remove-failed setting.
+    assert!(dir.path().join(UNWANTED_EXECUTABLE).is_file());
+    let statuses = import_repo.status_updates.lock().await;
+    assert!(
+        statuses
+            .iter()
+            .all(|(_, status, _)| *status != ImportStatus::Pending),
+        "{statuses:?}"
+    );
+}
+
+#[tokio::test]
+async fn executable_beside_an_extensionless_file_keeps_the_no_video_review() {
+    let import_repo = Arc::new(TestImportRepo::default());
+    let app = app_for_import(
+        Arc::new(TestDownloadSubmissionRepo::default()),
+        import_repo.clone(),
+    );
+    let (_dir, completed) = completed_holding(&[UNWANTED_EXECUTABLE, "abcdef0123456789"]);
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
+
+    import_with_lookup(&app, &import_actor(), &mut td, &lookup).await;
+
+    assert_lands_in(&import_repo, "title-a").await;
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+}
+
 // ── A2: the tracked download's validated title is the import target ──
 
 #[tokio::test]
@@ -303,6 +413,35 @@ async fn attempted_import_does_not_reopen_when_durable_reason_is_stale() {
 }
 
 #[tokio::test]
+async fn explicit_retry_resolves_previously_unmatched_swedish_release() {
+    let release = "Over.Atlanten.S11E02.SWEDiSH.1080p.WEB.h264-INGRID";
+    let (_dir, mut completed) = completed_without_video(Some(release));
+    completed.category = Some("series".into());
+    let mut title = build_title("swedish-show", "Over the Atlantic", MediaFacet::Series);
+    title.tagged_aliases = vec![scryer_domain::TaggedAlias {
+        name: "Över Atlanten".into(),
+        language: "swe".into(),
+    }];
+    let mut record = test_import_record(
+        "swedish-retry",
+        &source_identity(),
+        ImportStatus::Skipped,
+        completed_request_payload(&completed, observation_evidence_json(release), None),
+    );
+    record.result_json =
+        Some(r#"{"decision":"rejected","error_message":"could not match title"}"#.into());
+    let repo = Arc::new(TestImportRepo::with_records(vec![record]));
+    let app = build_app(vec![title], vec![], vec![], vec![])
+        .with_test_overrides(|services| services.with_imports(repo));
+    let result =
+        crate::import_workflow::retry_failed_import(&app, &import_actor(), "swedish-retry", None)
+            .await
+            .unwrap();
+    assert_eq!(result.title_id.as_deref(), Some("swedish-show"));
+    assert_eq!(result.skip_reason, Some(ImportSkipReason::NoVideoFiles));
+}
+
+#[tokio::test]
 async fn retry_skipped_import_reevaluates_instead_of_replaying_rejection() {
     let (_dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
     let mut record = test_import_record(
@@ -329,6 +468,75 @@ async fn retry_skipped_import_reevaluates_instead_of_replaying_rejection() {
     assert_eq!(result.skip_reason, Some(ImportSkipReason::NoVideoFiles));
     assert_eq!(result.title_id.as_deref(), Some("title-a"));
     assert!(!result.release_burned);
+}
+
+#[tokio::test]
+async fn password_retry_requires_and_persists_replacement_before_execution() {
+    let (_dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
+    let mut record = test_import_record(
+        "import-password",
+        &source_identity(),
+        ImportStatus::Failed,
+        completed_request_payload(
+            &completed,
+            observation_evidence_json(PAPER_LANTERN_RELEASE),
+            Some("title-a"),
+        ),
+    );
+    record.result_json = Some(serde_json::json!({
+        "import_id": "import-password", "decision": "failed", "skip_reason": "password_required",
+        "source_path": completed.dest_dir, "episode_ids": [],
+        "started_at": Utc::now(), "completed_at": Utc::now()
+    }).to_string());
+    let original = record.result_json.clone();
+    let imports = Arc::new(TestImportRepo::with_records(vec![record]));
+    let submissions = Arc::new(TestDownloadSubmissionRepo::default());
+    let app = app_for_import(submissions.clone(), imports.clone());
+    for password in [None, Some("")] {
+        let error = crate::import_workflow::retry_failed_import(
+            &app,
+            &import_actor(),
+            "import-password",
+            password,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, AppError::ArchivePasswordRequired { .. }));
+        assert!(imports.retry_claims.lock().await.is_empty());
+        assert!(imports.status_updates.lock().await.is_empty());
+        assert_eq!(imports.records.lock().await[0].result_json, original);
+    }
+    submissions
+        .fail_password_save
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = crate::import_workflow::retry_failed_import(
+        &app,
+        &import_actor(),
+        "import-password",
+        Some(" new synthetic 密碼 "),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, AppError::Repository(_)));
+    assert!(imports.retry_claims.lock().await.is_empty());
+    assert!(imports.status_updates.lock().await.is_empty());
+    submissions
+        .fail_password_save
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    crate::import_workflow::retry_failed_import(
+        &app,
+        &import_actor(),
+        "import-password",
+        Some(" new synthetic 密碼 "),
+    )
+    .await
+    .unwrap();
+    let saved = submissions.passwords.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        saved.values().next().unwrap().first(),
+        Some(" new synthetic 密碼 ")
+    );
 }
 
 #[tokio::test]

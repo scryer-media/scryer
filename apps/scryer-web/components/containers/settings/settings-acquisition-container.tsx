@@ -45,7 +45,7 @@ export function SettingsAcquisitionContainer() {
       if (error) throw error;
       setSettings(data?.acquisitionSettings ?? null);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     } finally {
       setLoading(false);
     }
@@ -67,9 +67,9 @@ export function SettingsAcquisitionContainer() {
           .toPromise();
         if (error) throw error;
         setSettings(data?.updateAcquisitionSettings ?? next);
-        setGlobalStatus(t("settings.acquisitionSaved"));
+        setGlobalStatus(t("settings.acquisitionSaved"), { level: "SUCCESS" });
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       } finally {
         setSaving(false);
       }

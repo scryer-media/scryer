@@ -3,29 +3,19 @@ import {
   ChevronDown,
   ChevronRight,
   Edit,
-  FolderOpen,
   Plus,
   Power,
   Terminal,
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
-import { FacetSelect, FacetTags } from "@/components/common/facet-select";
-import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
-import { Button } from "@/components/ui/button";
+import { FacetTags } from "@/components/common/facet-select";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Input,
-  integerInputProps,
-  sanitizeDigits,
-} from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { LazyCodeEditor } from "@/components/common/lazy-code-editor";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
-import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
+import { ScriptEditorForm } from "@/components/common/script-editor-form";
+import { ScriptRunsTable } from "@/components/common/script-runs-table";
 import {
   Table,
   TableBody,
@@ -62,123 +52,6 @@ type SettingsPostProcessingSectionProps = {
   loadRunsForScript: (scriptId: string) => Promise<void> | void;
 };
 
-function statusColor(status: string): string {
-  switch (status) {
-    case "success":
-      return "text-[var(--scry-success-text-soft)]";
-    case "failed":
-      return "text-[var(--scry-danger-text-soft)]";
-    case "timeout":
-      return "text-[var(--scry-warning-text)]";
-    case "running":
-      return "text-[var(--scry-info-text-soft)]";
-    default:
-      return "text-muted-foreground";
-  }
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms == null) return "--";
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function ScriptRunsTable({
-  scriptId,
-  runs,
-  noRunsLabel,
-  outputNotCapturedLabel,
-}: {
-  scriptId: string;
-  runs: PPScriptRun[];
-  noRunsLabel: string;
-  outputNotCapturedLabel: string;
-}) {
-  if (runs.length === 0) {
-    return (
-      <p
-        id={selectorId("settings-post-processing-no-runs", scriptId)}
-        className="px-3 py-4 text-xs text-muted-foreground"
-      >
-        {noRunsLabel}
-      </p>
-    );
-  }
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Title</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Duration</TableHead>
-          <TableHead>Output</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {runs.map((run) => {
-          const hasOutput = run.stdoutTail || run.stderrTail;
-          return (
-            <TableRow
-              data-ui="settings-table-row"
-              key={run.id}
-              id={selectorId(
-                "settings-post-processing-run-row",
-                run.status,
-                run.titleName || run.titleId || "unknown-title",
-                run.id,
-              )}
-            >
-              <TableCell className="text-xs">
-                {run.titleName || run.titleId || "--"}
-              </TableCell>
-              <TableCell>
-                <span
-                  id={selectorId("settings-post-processing-run-status", run.id)}
-                  className={`text-xs font-medium capitalize ${statusColor(run.status)}`}
-                >
-                  {run.status}
-                  {run.exitCode != null && run.status === "failed"
-                    ? ` (exit ${run.exitCode})`
-                    : ""}
-                </span>
-              </TableCell>
-              <TableCell className="text-xs">
-                {formatDuration(run.durationMs)}
-              </TableCell>
-              <TableCell className="max-w-[400px]">
-                {hasOutput ? (
-                  <div className="space-y-1">
-                    {run.stdoutTail ? (
-                      <pre
-                        id={selectorId("settings-post-processing-run-stdout", run.id)}
-                        className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-1.5 font-[var(--font-code)] text-[10px] leading-relaxed text-muted-foreground"
-                      >
-                        {run.stdoutTail}
-                      </pre>
-                    ) : null}
-                    {run.stderrTail ? (
-                      <pre
-                        id={selectorId("settings-post-processing-run-stderr", run.id)}
-                        className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-[var(--scry-danger-bg)] p-1.5 font-[var(--font-code)] text-[10px] leading-relaxed text-[var(--scry-danger-text)]"
-                      >
-                        {run.stderrTail}
-                      </pre>
-                    ) : null}
-                  </div>
-                ) : (
-                  <span className="text-[10px] text-muted-foreground">
-                    {outputNotCapturedLabel}
-                  </span>
-                )}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
-  );
-}
-
 export const SettingsPostProcessingSection = React.memo(
   function SettingsPostProcessingSection({
     scripts,
@@ -200,7 +73,6 @@ export const SettingsPostProcessingSection = React.memo(
     loadRunsForScript,
   }: SettingsPostProcessingSectionProps) {
     const t = useTranslate();
-    const [folderBrowserOpen, setFolderBrowserOpen] = React.useState(false);
 
     const handleToggleExpand = React.useCallback(
       (scriptId: string) => {
@@ -373,272 +245,17 @@ export const SettingsPostProcessingSection = React.memo(
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <form id="settings-post-processing-form" className="space-y-4" onSubmit={submitScript}>
-              {/* Name + Description */}
-              <div className="grid gap-3 md:grid-cols-2">
-                <label>
-                  <Label className="mb-2 block">{t("settings.pp.name")}</Label>
-                  <Input
-                    id="settings-post-processing-name"
-                    value={scriptDraft.name}
-                    onChange={(e) =>
-                      setScriptDraft((prev) => ({ ...prev, name: e.target.value }))
-                    }
-                    required
-                    placeholder={t("settings.pp.namePlaceholder")}
-                  />
-                </label>
-                <label>
-                  <Label className="mb-2 block">
-                    {t("settings.pp.descriptionLabel")}
-                  </Label>
-                  <Input
-                    id="settings-post-processing-description"
-                    value={scriptDraft.description}
-                    onChange={(e) =>
-                      setScriptDraft((prev) => ({
-                        ...prev,
-                        description: e.target.value,
-                      }))
-                    }
-                    placeholder={t("settings.pp.descriptionPlaceholder")}
-                  />
-                </label>
-              </div>
-
-              {/* Script Type */}
-              <div>
-                <Label className="mb-2 block">
-                  {t("settings.pp.scriptType")}
-                </Label>
-                <div className="flex gap-2">
-                  <Button
-                    id="settings-post-processing-script-type-inline"
-                    type="button"
-                    size="sm"
-                    variant={scriptDraft.scriptType === "inline" ? "default" : "secondary"}
-                    onClick={() =>
-                      setScriptDraft((prev) => ({ ...prev, scriptType: "inline" }))
-                    }
-                  >
-                    {t("settings.pp.inline")}
-                  </Button>
-                  <Button
-                    id="settings-post-processing-script-type-file"
-                    type="button"
-                    size="sm"
-                    variant={scriptDraft.scriptType === "file" ? "default" : "secondary"}
-                    onClick={() =>
-                      setScriptDraft((prev) => ({ ...prev, scriptType: "file" }))
-                    }
-                  >
-                    {t("settings.pp.filePath")}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Script Content */}
-              <div>
-                {scriptDraft.scriptType === "inline" ? (
-                  <>
-                    <Label className="mb-2 block">
-                      {t("settings.pp.inlineHelp")}
-                    </Label>
-                    <LazyCodeEditor
-                      id="settings-post-processing-script-content"
-                      value={scriptDraft.scriptContent}
-                      onChange={(value) =>
-                        setScriptDraft((prev) => ({ ...prev, scriptContent: value }))
-                      }
-                      language="shell"
-                      minLines={10}
-                      maxLines={35}
-                    />
-                  </>
-                ) : (
-                  <>
-                    <Label className="mb-2 block">
-                      {t("settings.pp.filePathHelp")}
-                    </Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="settings-post-processing-script-path"
-                        value={scriptDraft.scriptContent}
-                        onChange={(e) =>
-                          setScriptDraft((prev) => ({
-                            ...prev,
-                            scriptContent: e.target.value,
-                          }))
-                        }
-                        className="font-[var(--font-code)]"
-                        placeholder="/usr/local/bin/post-process.sh"
-                      />
-                      <Button
-                        id="settings-post-processing-browse"
-                        type="button"
-                        variant="outline"
-                        onClick={() => setFolderBrowserOpen(true)}
-                      >
-                        <FolderOpen className="mr-1 h-4 w-4" />
-                        Browse
-                      </Button>
-                    </div>
-                    <FolderBrowserDialog
-                      open={folderBrowserOpen}
-                      onOpenChange={setFolderBrowserOpen}
-                      onSelect={(path) =>
-                        setScriptDraft((prev) => ({ ...prev, scriptContent: path }))
-                      }
-                      selectionTypes={["file"]}
-                      initialPath={
-                        scriptDraft.scriptContent.startsWith("/")
-                          ? scriptDraft.scriptContent.replace(/\/[^/]+$/, "") || "/"
-                          : "/"
-                      }
-                      title="Select script file"
-                    />
-                  </>
-                )}
-              </div>
-
-              {/* Facets */}
-              <div>
-                <Label className="mb-2 block">{t("settings.pp.facets")}</Label>
-                <FacetSelect
-                  idPrefix="settings-post-processing-facet"
-                  values={LOWERCASE_FACET_IDS}
-                  selected={scriptDraft.appliedFacets}
-                  onChange={(next) => {
-                    setScriptDraft((prev) => ({ ...prev, appliedFacets: next }));
-                  }}
-                />
-              </div>
-
-              {/* Execution Mode */}
-              <div>
-                <Label className="mb-2 block">
-                  {t("settings.pp.executionMode")}
-                </Label>
-                <RadioGroup
-                  value={scriptDraft.executionMode}
-                  onValueChange={(value) =>
-                    setScriptDraft((prev) => ({
-                      ...prev,
-                      executionMode: value,
-                    }))
-                  }
-                >
-                  <label
-                    htmlFor="settings-post-processing-execution-blocking"
-                    className="flex items-center gap-2"
-                  >
-                    <RadioGroupItem
-                      id="settings-post-processing-execution-blocking"
-                      value="BLOCKING"
-                    />
-                    <span className="text-sm">{t("settings.pp.blocking")}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {t("settings.pp.blockingHelp")}
-                    </span>
-                  </label>
-                  <label
-                    htmlFor="settings-post-processing-execution-fire-and-forget"
-                    className="flex items-center gap-2"
-                  >
-                    <RadioGroupItem
-                      id="settings-post-processing-execution-fire-and-forget"
-                      value="FIRE_AND_FORGET"
-                    />
-                    <span className="text-sm">
-                      {t("settings.pp.fireAndForget")}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {t("settings.pp.fireAndForgetHelp")}
-                    </span>
-                  </label>
-                </RadioGroup>
-              </div>
-
-              {/* Timeout + Priority (only for blocking) */}
-              {scriptDraft.executionMode === "BLOCKING" ? (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label>
-                    <Label className="mb-2 block">
-                      {t("settings.pp.timeout")}
-                    </Label>
-                    <Input
-                      id="settings-post-processing-timeout"
-                      {...integerInputProps}
-                      value={scriptDraft.timeoutSecs}
-                      onChange={(e) =>
-                        setScriptDraft((prev) => ({
-                          ...prev,
-                          timeoutSecs:
-                            Number(sanitizeDigits(e.target.value)) || 0,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    <Label className="mb-2 block">
-                      {t("settings.pp.priority")}
-                    </Label>
-                    <Input
-                      id="settings-post-processing-priority"
-                      {...integerInputProps}
-                      value={scriptDraft.priority}
-                      onChange={(e) =>
-                        setScriptDraft((prev) => ({
-                          ...prev,
-                          priority:
-                            Number(sanitizeDigits(e.target.value)) || 0,
-                        }))
-                      }
-                    />
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t("settings.pp.priorityHelp")}
-                    </p>
-                  </label>
-                </div>
-              ) : null}
-
-              {/* Debug */}
-              <label className="flex items-center gap-2">
-                <Checkbox
-                  id="settings-post-processing-debug"
-                  checked={scriptDraft.debug}
-                  onCheckedChange={(checked) =>
-                    setScriptDraft((prev) => ({
-                      ...prev,
-                      debug: checked === true,
-                    }))
-                  }
-                />
-                <span className="text-sm">{t("settings.pp.debug")}</span>
-              </label>
-              <p className="-mt-2 pl-6 text-xs text-muted-foreground">
-                {t("settings.pp.debugHelp")}
-              </p>
-
-              {/* Actions */}
-              <div className="flex gap-2">
-                <Button id="settings-post-processing-save" type="submit" disabled={mutatingScriptId !== null}>
-                  {mutatingScriptId !== null
-                    ? t("label.saving")
-                    : editingScriptId
-                      ? t("label.update")
-                      : t("label.create")}
-                </Button>
-                <Button
-                  id="settings-post-processing-cancel"
-                  type="button"
-                  variant="secondary"
-                  onClick={resetDraft}
-                >
-                  {t("label.cancel")}
-                </Button>
-              </div>
-            </form>
+            <ScriptEditorForm
+              trigger="POST_IMPORT"
+              formId="settings-post-processing-form"
+              legacyIdPrefix="settings-post-processing"
+              draft={scriptDraft}
+              setDraft={setScriptDraft}
+              isEditing={editingScriptId !== null}
+              isSaving={mutatingScriptId !== null}
+              onSubmit={submitScript}
+              onCancel={resetDraft}
+            />
           </CardContent>
         </Card>
         {editorMode === "edit" ? (

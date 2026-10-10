@@ -1431,6 +1431,20 @@ type CanonicalMediaTagPayload {
 }
 
 """
+Registry category of a canonical tag.
+"""
+enum CanonicalTagCategoryValue {
+	"""
+	A genre.
+	"""
+	GENRE
+	"""
+	A theme.
+	"""
+	THEME
+}
+
+"""
 Canonical tag key and display name used by discovery filters.
 """
 type CanonicalTagFilterOptionPayload {
@@ -1442,6 +1456,42 @@ type CanonicalTagFilterOptionPayload {
 	Display name associated with the canonical key.
 	"""
 	name: String!
+}
+
+"""
+A registered canonical genre or theme available to list filters.
+"""
+type CanonicalTagVocabularyEntryPayload {
+	"""
+	Stable canonical key stored in saved filters.
+	"""
+	key: String!
+	"""
+	Registry category.
+	"""
+	category: CanonicalTagCategoryValue!
+	"""
+	Display name of the canonical entry.
+	"""
+	name: String!
+	"""
+	Registered aliases usable for search and unambiguous legacy-label conversion.
+	"""
+	aliases: [String!]!
+}
+
+"""
+Cached canonical genre and theme vocabulary supplied by the metadata gateway.
+"""
+type CanonicalTagVocabularyPayload {
+	"""
+	BLAKE3 content version of the canonical registry snapshot.
+	"""
+	version: String!
+	"""
+	Complete canonical vocabulary in deterministic order.
+	"""
+	entries: [CanonicalTagVocabularyEntryPayload!]!
 }
 
 """
@@ -1861,6 +1911,24 @@ type CompleteSetupPayload {
 	Whether setup is now complete.
 	"""
 	completed: Boolean!
+}
+
+"""
+Where an effective addressing value comes from.
+"""
+enum ConfigValueSourceValue {
+	"""
+	An environment variable.
+	"""
+	ENVIRONMENT
+	"""
+	The saved setting.
+	"""
+	SETTINGS
+	"""
+	The built-in default.
+	"""
+	DEFAULT
 }
 
 """
@@ -2363,6 +2431,26 @@ input CreatePostProcessingScriptInput {
 	Whether debug output is enabled, or null for the service default.
 	"""
 	debug: Boolean
+	"""
+	Whether the script starts enabled, or null for true.
+	"""
+	enabled: Boolean
+	"""
+	Language of inline script content, or null for `SHELL`.
+	"""
+	language: ScriptLanguageValue
+	"""
+	What starts the script, or null for `POST_IMPORT`.
+	"""
+	trigger: ScriptTriggerValue
+	"""
+	Schedule, required when the trigger is `SCHEDULE`.
+	"""
+	schedule: ScriptScheduleInput
+	"""
+	Whether a scheduled script also runs once at host start, or null for false.
+	"""
+	runOnStartup: Boolean
 }
 
 """
@@ -4582,6 +4670,10 @@ enum DomainEventTypeValue {
 	"""
 	MEDIA_REQUEST_UPDATED
 	"""
+	A dismissed media request was reopened.
+	"""
+	MEDIA_REQUEST_REOPENED
+	"""
 	A media request was approved.
 	"""
 	MEDIA_REQUEST_APPROVED
@@ -5235,6 +5327,52 @@ type DownloadImportPagePayload {
 }
 
 """
+Password-related reason a download failed; never contains credentials.
+"""
+enum DownloadPasswordFailureCodeValue {
+	"""
+	The archive needs a new password.
+	"""
+	ARCHIVE_PASSWORD_REQUIRED
+	"""
+	The password may be incorrect or the archive may be damaged.
+	"""
+	ARCHIVE_PASSWORD_OR_CORRUPTION
+}
+
+"""
+Result of a download password retry.
+"""
+type DownloadPasswordRetryPayload {
+	"""
+	Whether the download client accepted, refused, or has not confirmed the retry.
+	"""
+	status: DownloadPasswordRetryStatusValue!
+	"""
+	Client-side item ID of the retried job when the client accepted it; null otherwise.
+	"""
+	downloadClientItemId: String
+}
+
+"""
+Outcome of a single password retry dispatch to the download client.
+"""
+enum DownloadPasswordRetryStatusValue {
+	"""
+	The download client accepted the retry.
+	"""
+	ACCEPTED
+	"""
+	The download client refused the retry.
+	"""
+	REFUSED
+	"""
+	The outcome is unknown; the retry stays claimed until reconciliation resolves it.
+	"""
+	AWAITING_RECONCILIATION
+}
+
+"""
 Action represented by a download queue mutation response.
 """
 enum DownloadQueueActionKindValue {
@@ -5433,6 +5571,10 @@ type DownloadQueueItemPayload {
 	"""
 	attentionReason: String
 	"""
+	Stable password-related download failure classification; never contains credentials.
+	"""
+	passwordFailureCode: DownloadPasswordFailureCodeValue
+	"""
 	Client-local item identifier; together with `client_id` it identifies the remote item.
 	"""
 	downloadClientItemId: String!
@@ -5508,6 +5650,14 @@ type DownloadQueueItemPayload {
 	Import actions this download currently offers; every client surface renders from this.
 	"""
 	importActions: DownloadImportActionsPayload!
+	"""
+	Failed local extraction attempt that can accept a replacement password.
+	"""
+	passwordRetryImportId: ID
+	"""
+	Held sources of this download, with every title and the reason they are held, when the viewer may release them.
+	"""
+	heldImportSources: HeldImportSourcesPayload
 	"""
 	Acquisition scope for this queue item, or its episode scope when no more specific scope is available.
 	"""
@@ -7400,6 +7550,178 @@ type GeneralSettingsPayload {
 }
 
 """
+What the download client's removal policy does with the download after release.
+"""
+enum HeldDownloadClientPolicyValue {
+	"""
+	The client removes the completed download.
+	"""
+	REMOVES
+	"""
+	The client removes the completed download once its seeding requirements are met.
+	"""
+	REMOVES_AFTER_SEEDING
+	"""
+	The policy keeps the download, or no configured client can act on it.
+	"""
+	KEEPS
+	"""
+	The download's title could not be resolved, so the policy is unknown.
+	"""
+	UNKNOWN
+}
+
+"""
+Held sources of a download the viewer may release.
+"""
+type HeldImportSourcesPayload {
+	"""
+	Completed import record ID the release is requested through.
+	"""
+	importId: ID!
+	"""
+	Every import of the download the release covers.
+	"""
+	importIds: [ID!]!
+	"""
+	Distinct titles those imports belong to.
+	"""
+	titleNames: [String!]!
+	"""
+	The most severe reason the sources are held.
+	"""
+	reason: HeldImportSourcesReasonValue!
+	"""
+	What the download client's removal policy does with the download after release.
+	"""
+	clientPolicy: HeldDownloadClientPolicyValue!
+}
+
+"""
+Why a completed import kept its download's sources.
+"""
+enum HeldImportSourcesReasonValue {
+	"""
+	Subtitle discovery or delivery is still pending.
+	"""
+	SUBTITLES_PENDING
+	"""
+	The import finished, but removing its replaced sources did not.
+	"""
+	SOURCE_CLEANUP_INCOMPLETE
+	"""
+	The hold has no recorded reason.
+	"""
+	UNKNOWN
+	"""
+	Archive extraction failed; the unextracted archives were never imported.
+	"""
+	ARCHIVE_EXTRACTION_FAILED
+}
+
+"""
+Outcome of releasing a download's held sources.
+"""
+type HeldImportSourcesReleasedPayload {
+	"""
+	Import record ID the release was requested through.
+	"""
+	importId: ID!
+	"""
+	Every import of the download whose hold was released.
+	"""
+	releasedImportIds: [ID!]!
+	"""
+	What the release did to the tracked download.
+	"""
+	settlement: HeldImportSourcesSettlementValue!
+	"""
+	The download client's removal policy that now applies.
+	"""
+	clientPolicy: HeldDownloadClientPolicyValue!
+	"""
+	Whether every identified extraction workspace was removed and none could have been missed.
+	"""
+	workspaceRemoved: Boolean!
+	"""
+	Number of extraction workspaces removed.
+	"""
+	workspacesRemoved: Int!
+	"""
+	Distinct reasons extraction workspaces were preserved; preserved workspaces are never removed later by inference.
+	"""
+	preservedWorkspaceReasons: [HeldWorkspacePreservedValue!]!
+	"""
+	Whether a released import's workspaces could not be searched for in full; any not found are preserved.
+	"""
+	workspaceLookupIncomplete: Boolean!
+}
+
+"""
+What releasing held sources did to the tracked download.
+"""
+enum HeldImportSourcesSettlementValue {
+	"""
+	Verification proved the download complete; it is imported and the client's policy applies.
+	"""
+	IMPORTED
+	"""
+	Verification did not prove the download complete; it returned to import and nothing was cleaned up.
+	"""
+	AWAITING_IMPORT
+	"""
+	The download was not blocked on the hold; its own workflow decides.
+	"""
+	UNCHANGED
+	"""
+	The download is no longer tracked; it is settled when next observed.
+	"""
+	UNTRACKED
+	"""
+	The holds were released but the tracked download could not be reached; releasing again resumes.
+	"""
+	NOT_SETTLED
+	"""
+	A held import may hold content never extracted or imported, and nothing proved every expected file imported; not marked imported, no retry scheduled and nothing cleaned up.
+	"""
+	UNPROVEN
+}
+
+"""
+Why a released import's extraction workspace was preserved.
+"""
+enum HeldWorkspacePreservedValue {
+	"""
+	The workspace's ownership marker could not be authenticated.
+	"""
+	NOT_OWNED
+	"""
+	It contains a symlink, special file, unreadable entry, or too many entries.
+	"""
+	UNSAFE
+	"""
+	A video in it is not recorded, by its path, as imported by the import that owns it.
+	"""
+	HOLDS_UNIMPORTED_VIDEO
+	"""
+	An unfinished import or open manual-import selection may still need it.
+	"""
+	IN_USE
+	"""
+	What was imported from it could not be established.
+	"""
+	UNVERIFIED
+	"""
+	Removal was attempted and the workspace remains.
+	"""
+	REMOVAL_FAILED
+	"""
+	The download was not proven imported, so nothing of it was removed.
+	"""
+	DOWNLOAD_NOT_IMPORTED
+}
+
+"""
 Result of ignoring one pending import.
 """
 type IgnorePendingImportPayload {
@@ -7653,6 +7975,10 @@ enum ImportSkipReasonValue {
 	No video files were found.
 	"""
 	NO_VIDEO_FILES
+	"""
+	No video files were found and the download held only executables.
+	"""
+	UNWANTED_EXECUTABLES
 	"""
 	The download client is still writing or unpacking the source file.
 	"""
@@ -8605,7 +8931,9 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	status: InteractiveReleaseSearchIndexerStatusValue!
 	"""
-	The indexer's own result count (before cross-indexer dedup).
+	The indexer's result count. A title search counts its own batch, before
+	cross-indexer dedup; a query search counts what it contributed to the
+	listing, after exact duplicates are removed.
 	"""
 	resultCount: Int!
 	"""
@@ -8621,6 +8949,14 @@ type InteractiveReleaseSearchIndexerPayload {
 	Searching resumes on its own, so this reads as a cooldown, not an error.
 	"""
 	rateLimited: Boolean!
+	"""
+	Why a skipped indexer was not asked, or null when it was not skipped.
+	"""
+	skipReason: InteractiveReleaseSearchSkipReasonValue
+	"""
+	UTC time a skip that lifts on its own ends, when known.
+	"""
+	skippedUntil: DateTime
 }
 
 """
@@ -8680,6 +9016,28 @@ type InteractiveReleaseSearchPayload {
 }
 
 """
+Why an interactive release search did not ask an indexer.
+"""
+enum InteractiveReleaseSearchSkipReasonValue {
+	"""
+	The indexer is switched off.
+	"""
+	INDEXER_DISABLED
+	"""
+	The indexer's configuration disables it for a while.
+	"""
+	TEMPORARILY_DISABLED
+	"""
+	The indexer is in a backoff after recent failures.
+	"""
+	BACKED_OFF
+	"""
+	The indexer takes no text query.
+	"""
+	NO_TEXT_SEARCH
+}
+
+"""
 Lifecycle state of a background interactive release search.
 """
 enum InteractiveReleaseSearchStateValue {
@@ -8695,29 +9053,6 @@ enum InteractiveReleaseSearchStateValue {
 	Search was canceled before completion.
 	"""
 	CANCELLED
-}
-
-"""
-What a title-less interactive search looks for; picks the search facet and
-the default newznab categories.
-"""
-enum InteractiveSearchKindValue {
-	"""
-	Movie facet search.
-	"""
-	MOVIE
-	"""
-	Series facet search.
-	"""
-	SERIES
-	"""
-	Anime facet search.
-	"""
-	ANIME
-	"""
-	Plain text search with no facet.
-	"""
-	RAW
 }
 
 """
@@ -8807,6 +9142,11 @@ type JobDefinitionPayload {
 	Stable job key.
 	"""
 	key: JobKeyValue!
+	"""
+	ID of the scheduled script behind a `CUSTOM_JOB` definition, or null
+	for built-in jobs.
+	"""
+	customJobId: ID
 	"""
 	Display name of the job.
 	"""
@@ -8965,6 +9305,11 @@ enum JobKeyValue {
 	Location operation: a root move, transfer, or other placement change.
 	"""
 	LOCATION_OPERATION
+	"""
+	A user-defined scheduled script; each script is told apart by its
+	`customJobId`.
+	"""
+	CUSTOM_JOB
 }
 
 """
@@ -8979,6 +9324,11 @@ type JobRunPayload {
 	Stable key of the job being run.
 	"""
 	jobKey: JobKeyValue!
+	"""
+	ID of the scheduled script a `CUSTOM_JOB` run executes, or null for
+	built-in jobs.
+	"""
+	customJobId: ID
 	"""
 	Display name of the job.
 	"""
@@ -9105,6 +9455,14 @@ enum JobScheduleKindValue {
 	Runs once per day at a configured local time.
 	"""
 	DAILY_AT_TIME
+	"""
+	Runs on a five-field crontab expression in host-local time.
+	"""
+	CRON
+	"""
+	Runs on chosen weekdays at a configured local time.
+	"""
+	WEEKLY_AT_TIME
 }
 
 """
@@ -9441,6 +9799,10 @@ Acquisition, import, routing, and filesystem settings for a library.
 """
 input LibrarySettingsInput {
 	"""
+	Ordered release-search languages, independent of metadata and audio.
+	"""
+	searchLanguages: [String!]
+	"""
 	Required audio-language codes; use `original` to resolve per title.
 	"""
 	requiredAudioLanguages: [String!]
@@ -9526,6 +9888,10 @@ input LibrarySettingsInput {
 Effective library settings together with nullable per-library overrides.
 """
 type LibrarySettingsPayload {
+	"""
+	Ordered release-search languages whose localized titles are also queried; empty searches only the primary name.
+	"""
+	searchLanguages: [String!]!
 	"""
 	Library override for required audio language codes; `original` resolves per title.
 	"""
@@ -9856,6 +10222,178 @@ type LinkedAccountPayload {
 }
 
 """
+A short-lived account-link session bound to the current member.
+"""
+type ListAccountLinkPayload {
+	"""
+	Opaque local session identifier.
+	"""
+	sessionId: ID!
+	"""
+	State that must match the callback before completion.
+	"""
+	state: String!
+	"""
+	Provider authorization URL to open.
+	"""
+	authorizeUrl: String!
+	"""
+	Exact origin allowed to send the authorization result.
+	"""
+	authorizationOrigin: String!
+	"""
+	Session expiry time.
+	"""
+	expiresAt: DateTime!
+	"""
+	Whether this provider completes by polling.
+	"""
+	pollRequired: Boolean!
+}
+
+"""
+A linked account visible only to its owner, without credentials.
+"""
+type ListAccountPayload {
+	"""
+	Local account identifier.
+	"""
+	id: ID!
+	"""
+	Provider identifier.
+	"""
+	provider: String!
+	"""
+	Stable account identity returned by the provider.
+	"""
+	externalUserId: String!
+	"""
+	Provider username.
+	"""
+	username: String!
+	"""
+	Optional provider display name.
+	"""
+	displayName: String
+	"""
+	Account health; anything other than ACTIVE needs a reconnect.
+	"""
+	status: UserListAccountStatusValue!
+	"""
+	Safe explanation of an account problem.
+	"""
+	errorMessage: String
+	"""
+	When this account was first linked.
+	"""
+	linkedAt: DateTime!
+	"""
+	When a list last used this account.
+	"""
+	lastUsedAt: DateTime
+	"""
+	Lists owned by this account, populated by the account detail query.
+	"""
+	ownedLists: [ListAccountSourcePayload!]!
+	"""
+	Personal status collections, populated by the account detail query.
+	"""
+	statuses: [ListAccountStatusPayload!]!
+}
+
+"""
+The result of polling a personal account-link session.
+"""
+type ListAccountPollPayload {
+	"""
+	Whether the link completed, is still pending, or should be polled again later.
+	"""
+	status: ListAccountPollStatusValue!
+	"""
+	The linked account when authorization completed.
+	"""
+	account: ListAccountPayload
+}
+
+"""
+The answer to one poll of an account-link session.
+"""
+enum ListAccountPollStatusValue {
+	"""
+	The member has not finished authorizing yet; poll again.
+	"""
+	PENDING
+	"""
+	The account is linked and returned with this answer.
+	"""
+	LINKED
+	"""
+	Another request for the same link is checking the provider; poll again.
+	"""
+	BUSY
+	"""
+	The provider or this instance could not answer just now; poll again more slowly.
+	"""
+	UNAVAILABLE
+	"""
+	The provider asked for fewer requests; poll again later.
+	"""
+	RATE_LIMITED
+}
+
+"""
+One list owned by the linked provider account.
+"""
+type ListAccountSourcePayload {
+	"""
+	The provider's list identifier.
+	"""
+	id: String!
+	"""
+	Display name of the list.
+	"""
+	name: String!
+	"""
+	Media kinds the list contains.
+	"""
+	kinds: [MediaFacetValue!]!
+	"""
+	Source type to use when following this list.
+	"""
+	sourceType: String!
+	"""
+	Provider parameters to use when following this list.
+	"""
+	params: [ListParamPayload!]!
+}
+
+"""
+A personal status collection offered by a provider account.
+"""
+type ListAccountStatusPayload {
+	"""
+	The provider's status identifier.
+	"""
+	key: String!
+	"""
+	Display name of the status.
+	"""
+	label: String!
+	"""
+	Media kinds the status contains.
+	"""
+	kinds: [MediaFacetValue!]!
+	"""
+	Source type to use when following this status.
+	"""
+	sourceType: String!
+	"""
+	Provider parameters to use when following this status.
+	"""
+	params: [ListParamPayload!]!
+}
+
+"""
 The account a provider group's lists need.
 """
 enum ListAuthBadge {
@@ -9976,6 +10514,22 @@ One list filter, as entered. Fields its kind does not use are ignored.
 """
 input ListFilterInput {
 	"""
+	Required Movie, Series, or Anime scope for ratings and canonical exclusions.
+	"""
+	facet: MediaFacetValue
+	"""
+	Whether any rating minimum may pass; defaults to requiring every minimum.
+	"""
+	matchAny: Boolean! = false
+	"""
+	Attributed minimum ratings; an empty group imposes no restriction.
+	"""
+	minimums: [ListRatingMinimumInput!]! = []
+	"""
+	Legacy genre labels without an unambiguous canonical match, retained for correction.
+	"""
+	unresolvedLabels: [String!]! = []
+	"""
 	The filter's kind.
 	"""
 	kind: ListFilterKind!
@@ -10005,6 +10559,26 @@ input ListFilterInput {
 The kind of one list filter.
 """
 enum ListFilterKind {
+	"""
+	Existing specials monitoring policy for new Series or Anime titles.
+	"""
+	MONITOR_SPECIALS
+	"""
+	Existing Anime filler policy: DOWNLOAD_ALL or SKIP_FILLER in values.
+	"""
+	FILLER_POLICY
+	"""
+	Existing Anime recap policy: DOWNLOAD_ALL or SKIP_RECAP in values.
+	"""
+	RECAP_POLICY
+	"""
+	Per-facet rating minimums, matching all sources or at least one source.
+	"""
+	RATINGS
+	"""
+	Exclude titles matching selected canonical genre or theme keys in a facet.
+	"""
+	EXCLUDE_CANONICAL_TAGS
 	"""
 	The provider's rating is at least `value` on `scale`.
 	"""
@@ -10047,6 +10621,22 @@ enum ListFilterKind {
 One list filter. Only the fields its kind uses are set.
 """
 type ListFilterPayload {
+	"""
+	Movie, Series, or Anime scope for ratings and canonical exclusions.
+	"""
+	facet: MediaFacetValue
+	"""
+	Whether any rating minimum may pass; false requires every minimum.
+	"""
+	matchAny: Boolean!
+	"""
+	Attributed minimum ratings; an empty group imposes no restriction.
+	"""
+	minimums: [ListRatingMinimumPayload!]!
+	"""
+	Legacy genre labels without an unambiguous canonical match, retained for correction.
+	"""
+	unresolvedLabels: [String!]!
 	"""
 	The filter's kind.
 	"""
@@ -10327,6 +10917,22 @@ One title the next sync would act on.
 """
 type ListPreviewItemPayload {
 	"""
+	Provider-attributed ratings for the preview flyout.
+	"""
+	externalRatings: [DiscoveryExternalRatingPayload!]!
+	"""
+	Canonical genre and theme display names.
+	"""
+	genresAndThemes: [String!]!
+	"""
+	Original language, when known.
+	"""
+	originalLanguage: String
+	"""
+	Release or first-air date, when known.
+	"""
+	releaseDate: Date
+	"""
 	The provider's own key for the title.
 	"""
 	itemKey: String!
@@ -10403,6 +11009,32 @@ type ListPreviewPayload {
 }
 
 """
+Write-only provider application settings, with secret presence only.
+"""
+type ListProviderAppPayload {
+	"""
+	Provider identifier.
+	"""
+	provider: String!
+	"""
+	Configured OAuth application client identifier.
+	"""
+	clientId: String
+	"""
+	Configured callback URL on this instance.
+	"""
+	redirectUri: String
+	"""
+	Whether a secret is configured; its value is never returned.
+	"""
+	clientSecretSet: Boolean!
+	"""
+	Whether the operator's application overrides the default linking flow.
+	"""
+	enabled: Boolean!
+}
+
+"""
 A group of a provider's lists that need the same account.
 """
 type ListProviderGroupPayload {
@@ -10473,7 +11105,7 @@ type ListProviderNotePayload {
 }
 
 """
-A provider public lists can be followed from.
+A provider public or personal lists can be followed from.
 """
 type ListProviderPayload {
 	"""
@@ -10611,6 +11243,34 @@ type ListProviderTilePayload {
 }
 
 """
+A minimum rating to require from one supported rating source.
+"""
+input ListRatingMinimumInput {
+	"""
+	Supported rating source identifier; registered aliases are normalized.
+	"""
+	source: String!
+	"""
+	Inclusive minimum on the named source's native rating scale.
+	"""
+	value: Float!
+}
+
+"""
+A minimum rating from one attributed rating source.
+"""
+type ListRatingMinimumPayload {
+	"""
+	Canonical identifier of the rating source.
+	"""
+	source: String!
+	"""
+	Inclusive minimum on the named source's native rating scale.
+	"""
+	value: Float!
+}
+
+"""
 Where a list's titles of one kind go, as entered.
 """
 input ListRouteInput {
@@ -10714,6 +11374,10 @@ A list source to preview.
 """
 input ListSourceInput {
 	"""
+	Linked account owned by the caller, required for personal source previews.
+	"""
+	credentialId: ID
+	"""
 	Provider key; with `sourceType`, names the source directly.
 	"""
 	provider: String
@@ -10798,7 +11462,7 @@ type ListSourcePayload {
 }
 
 """
-A followed public list.
+A followed public list or a personal list owned by the current member.
 """
 type ListSubscriptionPayload {
 	"""
@@ -10806,7 +11470,7 @@ type ListSubscriptionPayload {
 	"""
 	id: ID!
 	"""
-	Always `PUBLIC` here.
+	`PUBLIC` for an instance list or `PERSONAL` for the current member's list.
 	"""
 	scope: ListScope!
 	"""
@@ -15659,6 +16323,11 @@ type MediaRenamePlanPayload {
 	"""
 	errors: Int!
 	"""
+	Number of titles with nothing to move whose recorded folder is not a
+	title folder; applying the plan records the planned folder for them.
+	"""
+	folderRepairs: Int!
+	"""
 	Plan items in deterministic service order.
 	"""
 	items: [MediaRenamePlanItemPayload!]!
@@ -17505,6 +18174,15 @@ type MutationRoot {
 		input: UpdateSeriesMovieTagsInput!
 	): [SeriesMovieLinkPayload!]!
 	"""
+	Retry a failed download client job once with a new archive password; requires import-resolution permission on the download's library.
+	"""
+	retryDownloadPassword(
+		"""
+		Download and client job to retry, with the replacement password.
+		"""
+		input: RetryDownloadPasswordInput!
+	): DownloadPasswordRetryPayload!
+	"""
 	Evaluate an external announcement using normal automatic acquisition rules.
 	"""
 	submitExternalRelease(
@@ -17589,6 +18267,15 @@ type MutationRoot {
 		input: RetryImportInput!
 	): ImportResultPayload!
 	"""
+	Release the sources a completed import is holding.
+	"""
+	releaseHeldImportSources(
+		"""
+		Completed import that is holding its download's sources. Clears the holds of every import of that download together, settles the download through import verification so the download client's removal policy applies only once it is proven imported, and removes the released imports' extraction workspaces only when every video in them was imported and nothing else uses them; any other workspace is preserved.
+		"""
+		input: ReleaseHeldImportSourcesInput!
+	): HeldImportSourcesReleasedPayload!
+	"""
 	Cancel a queued or copying import operation by its server-issued stream identity.
 	"""
 	cancelActiveImport(
@@ -17652,13 +18339,18 @@ type MutationRoot {
 		input: DeleteDownloadInput!
 	): DownloadQueueActionPayload!
 	"""
-	Start the configured background job and return its accepted run snapshot.
+	Start the configured background job, or a scheduled script when the key is
+	`CUSTOM_JOB`, and return its accepted run snapshot.
 	"""
 	triggerJob(
 		"""
 		Job key identifying the server-side job to start.
 		"""
-		jobKey: JobKeyValue!
+		jobKey: JobKeyValue!,
+		"""
+		Scheduled script to run; required with `CUSTOM_JOB` and rejected with any other key.
+		"""
+		customJobId: ID
 	): JobRunPayload!
 	"""
 	Create an indexer configuration with provider, routing, and search defaults.
@@ -17907,9 +18599,18 @@ type MutationRoot {
 	"""
 	setMyUiSettings(
 		"""
-		Complete UI settings to save; omitted or null date_time_format keeps its current value.
+		Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value.
 		"""
 		input: SetMyUiSettingsInput!
+	): UiSettingsPayload!
+	"""
+	Saves the authenticated actor's catalog view mode and columns for one device class and facet, leaving every other layout unchanged.
+	"""
+	setMyCatalogView(
+		"""
+		Layout to save; a null view mode or column list keeps the saved value.
+		"""
+		input: SetMyCatalogViewInput!
 	): UiSettingsPayload!
 	"""
 	Saves subtitle preferences after checking the catalog-settings permission.
@@ -18834,6 +19535,15 @@ type MutationRoot {
 		requestId: ID!
 	): MediaRequestActionPayload!
 	"""
+	Put a dismissed media request back into the queue as pending, keeping its requester and creation date.
+	"""
+	reopenMediaRequest(
+		"""
+		Request identity to reopen.
+		"""
+		requestId: ID!
+	): MediaRequestActionPayload!
+	"""
 	Update the caller's pending request preferences and return the current request.
 	"""
 	updateMyMediaRequest(
@@ -19341,6 +20051,19 @@ type MutationRoot {
 		input: ReleaseTitleClaimInput!
 	): TitleClaim!
 	"""
+	Replace or clear explicitly supplied installation-wide settings.
+	"""
+	updateInstalledPluginSettings(
+		"""
+		Installed plugin ID whose settings are changed.
+		"""
+		pluginId: ID!,
+		"""
+		Object mapping declared setting keys to a new value, or null to clear the stored value; omitted keys are unchanged and unknown keys are rejected.
+		"""
+		changes: JSON!
+	): JSON!
+	"""
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
 	refreshPluginCatalog: [RegistryPluginPayload!]!
@@ -19602,7 +20325,7 @@ type MutationRoot {
 		input: ExecuteExternalImportInput!
 	): ExternalImportResultPayload!
 	"""
-	Create an enabled post-processing script after validating its type and content.
+	Create a post-processing script, enabled unless the input says otherwise, after validating its type, content, and schedule.
 	"""
 	createPostProcessingScript(
 		"""
@@ -19641,6 +20364,15 @@ type MutationRoot {
 		"""
 		inlineShellAcknowledged: Boolean
 	): PostProcessingScriptPayload!
+	"""
+	Replace the interpreters operator scripts are launched with; null or an empty string restores the default command.
+	"""
+	updateScriptInterpreterSettings(
+		"""
+		Interpreter path or command for each script language.
+		"""
+		input: ScriptInterpreterSettingsInput!
+	): ScriptInterpreterSettingsPayload!
 	"""
 	Search configured providers for subtitles matching a media file, and
 	report why the search returned what it did.
@@ -19730,7 +20462,7 @@ type MutationRoot {
 	"""
 	startInteractiveReleaseSearch(
 		"""
-		Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit.
+		Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query, plus an optional indexer restriction, categories and limit.
 		"""
 		input: SearchReleasesInput!
 	): InteractiveReleaseSearchPayload!
@@ -19763,21 +20495,102 @@ type MutationRoot {
 		input: QueueUnlinkedReleaseInput!
 	): QueueUnlinkedReleasePayload!
 	"""
-	Follow a public list. Its first sync is due at once.
+	Start linking a provider account to the current member from an approved instance origin.
+	"""
+	startListAccountLink(
+		"""
+		Provider whose account is being linked.
+		"""
+		provider: String!,
+		"""
+		Exact browser origin approved by the instance public URL or local listening address.
+		"""
+		origin: String!
+	): ListAccountLinkPayload!
+	"""
+	Poll an account authorization session owned by the current member.
+	"""
+	pollListAccountLink(
+		"""
+		Opaque session returned when linking started.
+		"""
+		sessionId: ID!
+	): ListAccountPollPayload!
+	"""
+	Consume an owned authorization session and link the verified provider identity.
+	"""
+	completeListAccountLink(
+		"""
+		Opaque session returned when linking started.
+		"""
+		sessionId: ID!,
+		"""
+		State returned by authorization.
+		"""
+		state: String!,
+		"""
+		Provider bound to this session.
+		"""
+		provider: String!,
+		"""
+		One-use authorization code or sealed exchange receipt.
+		"""
+		code: String!,
+		"""
+		Provider issuer, required for Simkl.
+		"""
+		issuer: String
+	): ListAccountPayload!
+	"""
+	Remove an owned account and its follows while preserving library media.
+	"""
+	unlinkListAccount(
+		"""
+		ID of an account owned by the current member.
+		"""
+		id: ID!
+	): ID!
+	"""
+	Save an optional OAuth application for Trakt, AniList or MyAnimeList.
+	"""
+	updateListProviderApp(
+		"""
+		Provider whose OAuth application is being configured.
+		"""
+		provider: String!,
+		"""
+		Application client identifier; omitted retains the current value.
+		"""
+		clientId: String,
+		"""
+		Write-only application secret; omitted retains the current value.
+		"""
+		clientSecret: String,
+		"""
+		Callback URL on this instance.
+		"""
+		redirectUri: String,
+		"""
+		Whether to use this application instead of the default flow.
+		"""
+		enabled: Boolean!
+	): ListProviderAppPayload!
+	"""
+	Follow a public list or a personal list from an owned account. Its first sync is due at once.
 	"""
 	subscribeList(
 		"""
-		The list to follow and how its titles are handled.
+		The public or personal list to follow and how its titles are handled.
 		"""
 		input: SubscribeListInput!
 	): ListSubscriptionPayload!
 	"""
-	Change a followed public list's settings. Omitted fields stay as they
+	Change a followed public list or an owned personal list. Omitted fields stay as they
 	are.
 	"""
 	updateListSubscription(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!,
 		"""
@@ -19786,12 +20599,12 @@ type MutationRoot {
 		input: UpdateListSubscriptionInput!
 	): ListSubscriptionPayload!
 	"""
-	Turn a followed public list off or back on. Turning it on makes it due
+	Turn a followed public list or an owned personal list off or back on. Turning it on makes it due
 	at once.
 	"""
 	setListSubscriptionEnabled(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!,
 		"""
@@ -19800,30 +20613,31 @@ type MutationRoot {
 		enabled: Boolean!
 	): ListSubscriptionPayload!
 	"""
-	Make one followed public list due now and start a sync.
+	Make one followed public list or an owned personal list due now and start a sync.
 	"""
 	syncListSubscription(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!
 	): ListSyncEnqueuedPayload!
 	"""
-	Make every enabled public list due now and start a sync.
+	Make every enabled list in the selected scope due now and start a sync.
+	Personal scope includes only lists owned by the current member.
 	"""
 	syncAllLists(
 		"""
-		Must be `PUBLIC` or omitted.
+		PUBLIC or omitted syncs instance public lists; PERSONAL syncs only the current member's personal lists.
 		"""
 		scope: ListScope
 	): ListSyncEnqueuedPayload!
 	"""
-	Stop following a public list. Every title and request it made stays.
+	Stop following a public list or an owned personal list. Every title and request it made stays.
 	Returns the ID of the list.
 	"""
 	unsubscribeList(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!
 	): ID!
@@ -20285,6 +21099,46 @@ type ParsedStereoscopyPayload {
 	Optional stereoscopic encoding, independent of packing layout.
 	"""
 	encoding: StereoEncodingValue
+}
+
+"""
+What saving a public URL would do to passkeys after the next restart.
+"""
+enum PasskeyImpactValue {
+	"""
+	Passkeys do not come from the public URL, so the change cannot affect them.
+	"""
+	UNAFFECTED
+	"""
+	The relying party stays the same.
+	"""
+	UNCHANGED
+	"""
+	Passkeys move to a different domain; existing passkeys stop working.
+	"""
+	CHANGED
+	"""
+	The new value cannot carry passkeys; passkeys turn off.
+	"""
+	DISABLED
+}
+
+"""
+Where the running passkey relying party comes from.
+"""
+enum PasskeyRelyingPartySourceValue {
+	"""
+	The SCRYER_WEBAUTHN_RP_ID and SCRYER_WEBAUTHN_RP_ORIGIN variables.
+	"""
+	ENVIRONMENT
+	"""
+	Derived from the public URL because both variables were unset.
+	"""
+	PUBLIC_URL
+	"""
+	Passkeys are not configured.
+	"""
+	NONE
 }
 
 """
@@ -21252,6 +22106,26 @@ type PostProcessingScriptPayload {
 	"""
 	debug: Boolean!
 	"""
+	Language of inline script content.
+	"""
+	language: ScriptLanguageValue!
+	"""
+	What starts the script.
+	"""
+	trigger: ScriptTriggerValue!
+	"""
+	Schedule of a scheduled script, or null for import-triggered scripts.
+	"""
+	schedule: ScriptSchedulePayload
+	"""
+	Whether a scheduled script also runs once when the host starts.
+	"""
+	runOnStartup: Boolean!
+	"""
+	Short description of the schedule, or null when the script has none.
+	"""
+	scheduleDescription: String
+	"""
 	Creation time in UTC.
 	"""
 	createdAt: DateTime!
@@ -21755,6 +22629,90 @@ type ProxyTestResultPayload {
 }
 
 """
+What saving a proposed public URL would do, without saving it.
+"""
+type PublicUrlChangePreviewPayload {
+	"""
+	The value as it would be stored; null for a reset or a rejected value.
+	"""
+	normalizedPublicUrl: String
+	"""
+	Why the value would be refused.
+	"""
+	error: String
+	"""
+	Stable reason for error, for localized messages.
+	"""
+	errorCode: PublicUrlErrorCodeValue
+	"""
+	Effect on passkeys after the next restart.
+	"""
+	passkeyImpact: PasskeyImpactValue!
+	"""
+	Passkey relying-party ID in effect now.
+	"""
+	currentPasskeyRpId: String
+	"""
+	Passkey relying-party ID after the next restart; null when passkeys would be off.
+	"""
+	nextPasskeyRpId: String
+	"""
+	Users with at least one passkey; null when the count could not be read.
+	"""
+	passkeyUserCount: Int
+	"""
+	Users whose only second factor is a passkey; null when unknown.
+	"""
+	passkeyOnlyUserCount: Int
+	"""
+	Whether the save must set acknowledgePasskeyImpact.
+	"""
+	acknowledgementRequired: Boolean!
+}
+
+"""
+Stable reason a public URL is rejected, for localized messages.
+"""
+enum PublicUrlErrorCodeValue {
+	"""
+	Not an absolute http or https URL with a host.
+	"""
+	INVALID_URL
+	"""
+	The host contains a wildcard.
+	"""
+	WILDCARD_HOST
+	"""
+	The URL carries a username or password.
+	"""
+	CREDENTIALS
+	"""
+	The URL carries a query or fragment.
+	"""
+	QUERY_OR_FRAGMENT
+	"""
+	A path was given while the instance is served at the root.
+	"""
+	PATH_NOT_ALLOWED
+	"""
+	The path differs from the base path the instance serves under.
+	"""
+	PATH_MISMATCH
+	"""
+	SCRYER_PUBLIC_URL sets the public URL, so it cannot be changed here.
+	"""
+	ENVIRONMENT_LOCKED
+	"""
+	A save and a reset were requested together.
+	"""
+	SAVE_AND_RESET
+	"""
+	The change breaks registered passkeys and was not acknowledged.
+	"""
+	PASSKEY_ACKNOWLEDGEMENT_REQUIRED
+}
+
+"""
 Quality constraints and scoring rules for release selection.
 """
 input QualityProfileCriteriaInput {
@@ -22128,7 +23086,11 @@ type QueryRoot {
 		"""
 		Restrict requests to one status; omitted includes all statuses.
 		"""
-		status: MediaRequestStatusValue
+		status: MediaRequestStatusValue,
+		"""
+		Restrict requests to those this user is a requester on; omitted includes every requester.
+		"""
+		requesterUserId: ID
 	): [MediaRequestPayload!]!
 	"""
 	List only the caller's media requests, optionally filtered by facet, libraries, and status.
@@ -22686,13 +23648,18 @@ type QueryRoot {
 	"""
 	activeJobRuns: [JobRunPayload!]!
 	"""
-	List recent runs for one job key; the limit defaults to 10 and values below 1 become 1.
+	List recent runs for one job key, or for one scheduled script when the key is
+	`CUSTOM_JOB`; the limit defaults to 10 and values below 1 become 1.
 	"""
 	jobRuns(
 		"""
 		Job key whose runs should be listed.
 		"""
 		jobKey: JobKeyValue!,
+		"""
+		Scheduled script whose runs should be listed; required with `CUSTOM_JOB` and rejected with any other key.
+		"""
+		customJobId: ID,
 		"""
 		Maximum runs to return; defaults to 10 and values below 1 become 1.
 		"""
@@ -23030,6 +23997,21 @@ type QueryRoot {
 	Returns service TLS configuration and related settings.
 	"""
 	serviceSettings: ServiceSettingsPayload!
+	"""
+	Previews saving a public URL, or clearing it, without saving: the
+	stored form, any refusal, and the effect on passkeys after the next
+	restart.
+	"""
+	publicUrlChangePreview(
+		"""
+		Proposed public URL; omit it and set reset to preview clearing.
+		"""
+		publicUrl: String,
+		"""
+		Preview clearing the saved public URL.
+		"""
+		reset: Boolean
+	): PublicUrlChangePreviewPayload!
 	"""
 	Returns quality profiles and the current global and facet selections.
 	"""
@@ -23483,9 +24465,23 @@ type QueryRoot {
 		titleId: ID!
 	): [TitleClaim!]!
 	"""
-	List post-processing scripts visible to the caller.
+	List post-processing scripts visible to the caller, optionally only those with one trigger.
 	"""
-	postProcessingScripts: [PostProcessingScriptPayload!]!
+	postProcessingScripts(
+		"""
+		Only return scripts started by this trigger; null returns every script.
+		"""
+		trigger: ScriptTriggerValue
+	): [PostProcessingScriptPayload!]!
+	"""
+	Check a script schedule before saving it and preview its next three fire times.
+	"""
+	validateScriptSchedule(
+		"""
+		Schedule to check.
+		"""
+		schedule: ScriptScheduleInput!
+	): ScriptScheduleValidationPayload!
 	"""
 	List runs for one post-processing script; the limit defaults to 50 and is clamped to 1 through 500.
 	"""
@@ -23499,6 +24495,19 @@ type QueryRoot {
 		"""
 		limit: Int
 	): [PostProcessingScriptRunPayload!]!
+	"""
+	Interpreters operator scripts are launched with; null fields use the default command.
+	"""
+	scriptInterpreterSettings: ScriptInterpreterSettingsPayload!
+	"""
+	Read the installed plugin's settings declaration and redacted values.
+	"""
+	installedPluginSettings(
+		"""
+		Installed plugin ID whose settings are returned.
+		"""
+		pluginId: ID!
+	): JSON!
 	"""
 	List available registry plugins visible to the caller.
 	"""
@@ -23725,7 +24734,37 @@ type QueryRoot {
 		id: ID!
 	): IndexerErrorDetailPayload
 	"""
-	Every provider a public list can be followed from, with the lists each
+	Read the canonical vocabulary, refreshing stale snapshots on demand.
+	"""
+	canonicalTagVocabulary(
+		"""
+		Explicitly refresh the snapshot, bypassing retry delay while sharing any in-flight request.
+		"""
+		retry: Boolean! = false
+	): CanonicalTagVocabularyPayload!
+	"""
+	Linked accounts owned by the current member. Credentials are never returned.
+	"""
+	myListAccounts: [ListAccountPayload!]!
+	"""
+	Refresh an owned account's provider identity and available personal lists.
+	"""
+	listAccount(
+		"""
+		ID of an account owned by the current member.
+		"""
+		id: ID!
+	): ListAccountPayload!
+	"""
+	Optional operator-owned OAuth applications. Secrets are write-only.
+	"""
+	listProviderApps: [ListProviderAppPayload!]!
+	"""
+	Personal lists followed by the current member.
+	"""
+	myListSubscriptions: [ListSubscriptionPayload!]!
+	"""
+	Every provider public or personal lists can be followed from, with the lists each
 	offers and the link shapes it is recognised by.
 	"""
 	listProviders: [ListProviderPayload!]!
@@ -23741,20 +24780,21 @@ type QueryRoot {
 	"""
 	listSubscriptions: [ListSubscriptionPayload!]!
 	"""
-	One followed public list, or null when there is none with that ID.
+	One followed public list or a personal list owned by the current member.
+	Returns null when no list has that ID.
 	"""
 	listSubscription(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!
 	): ListSubscriptionPayload
 	"""
-	A page of the titles currently on a followed public list, in list order.
+	A page of titles on a followed public list or an owned personal list, in list order.
 	"""
 	listSubscriptionMemberships(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!,
 		"""
@@ -23767,27 +24807,39 @@ type QueryRoot {
 		offset: Int
 	): ListMembershipPagePayload!
 	"""
-	A followed public list's recent syncs, newest first.
+	Recent syncs of a followed public list or an owned personal list, newest first.
 	"""
 	listSyncRuns(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		subscriptionId: ID!,
 		"""
-		Most syncs to return, from 1 through 100; defaults to 20.
+		Most syncs to return, from 1 through 1000; defaults to 20.
 		"""
 		limit: Int
 	): [ListSyncRunPayload!]!
 	"""
-	What the next sync of a followed public list would do. Requires list
-	management permission.
+	What the next sync of a followed public list or an owned personal list would do.
+	Public-list previews require list management permission.
 	"""
 	listSubscriptionPreview(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
-		id: ID!
+		id: ID!,
+		"""
+		Draft filter override for this preview; omitted uses the saved filters.
+		"""
+		filters: [ListFilterInput!],
+		"""
+		Draft facet override for this preview; omitted uses the saved facets.
+		"""
+		kinds: [MediaFacetValue!],
+		"""
+		Draft per-sync cap; omitted keeps the saved cap, null removes it.
+		"""
+		maxPerSync: Int
 	): ListPreviewPayload!
 	"""
 	What following the list at a link would do. An unknown link answers
@@ -23800,14 +24852,26 @@ type QueryRoot {
 		url: String!
 	): ListPreviewPayload!
 	"""
-	What following a list source would do. Requires list management
-	permission.
+	What following a public source or a source from an owned account would do.
+	Public-source previews require list management permission.
 	"""
 	listSourcePreview(
 		"""
-		The provider, source type and parameters, or a link.
+		The provider, source type and parameters, or a link; personal sources also require an owned linked account.
 		"""
-		input: ListSourceInput!
+		input: ListSourceInput!,
+		"""
+		Draft filters to evaluate before following the list; defaults to no filters.
+		"""
+		filters: [ListFilterInput!]! = [],
+		"""
+		Draft facets to preview; omitted uses the source's available facets.
+		"""
+		kinds: [MediaFacetValue!],
+		"""
+		Draft per-sync cap; omitted or null means unlimited.
+		"""
+		maxPerSync: Int
 	): ListPreviewPayload!
 	"""
 	Titles no list may add.
@@ -24477,6 +25541,16 @@ type ReleaseDecisionsPagePayload {
 	Whether another page exists after this page.
 	"""
 	hasMore: Boolean!
+}
+
+"""
+Requests releasing the sources a completed import is holding.
+"""
+input ReleaseHeldImportSourcesInput {
+	"""
+	Completed import record ID whose held sources are released.
+	"""
+	importId: ID!
 }
 
 """
@@ -25261,6 +26335,32 @@ type ResumeWantedItemPayload {
 }
 
 """
+Replacement archive password for one failed download client job.
+"""
+input RetryDownloadPasswordInput {
+	"""
+	Canonical Scryer download ID of the submission whose job is retried.
+	"""
+	downloadId: ID!
+	"""
+	Download client ID that owns the failed job; required for a retry.
+	"""
+	clientId: ID!
+	"""
+	Download client type; only `sabnzbd`, `nzbget`, and `weaver` support password retries.
+	"""
+	clientType: String!
+	"""
+	Client-side item ID of the failed job.
+	"""
+	downloadClientItemId: String!
+	"""
+	New archive password to try; must not be empty. Write-only: it is never returned or logged.
+	"""
+	password: String!
+}
+
+"""
 Requests retrying one import record, optionally supplying an archive password.
 """
 input RetryImportInput {
@@ -25898,6 +26998,40 @@ input ScanLibraryInput {
 }
 
 """
+Day of the week for weekly schedules.
+"""
+enum ScheduleWeekdayValue {
+	"""
+	Monday.
+	"""
+	MONDAY
+	"""
+	Tuesday.
+	"""
+	TUESDAY
+	"""
+	Wednesday.
+	"""
+	WEDNESDAY
+	"""
+	Thursday.
+	"""
+	THURSDAY
+	"""
+	Friday.
+	"""
+	FRIDAY
+	"""
+	Saturday.
+	"""
+	SATURDAY
+	"""
+	Sunday.
+	"""
+	SUNDAY
+}
+
+"""
 One scoring rule contribution used in a quality decision.
 """
 type ScoringEntryPayload {
@@ -25998,6 +27132,191 @@ enum ScoringPersonaValue {
 }
 
 """
+Interpreter pin changes for operator scripts. An omitted field keeps the
+current pin; null or an empty string clears it.
+"""
+input ScriptInterpreterSettingsInput {
+	"""
+	Python interpreter path or command, or null to use `python3`.
+	"""
+	python: String
+	"""
+	PowerShell interpreter path or command, or null to use `pwsh`.
+	"""
+	powershell: String
+	"""
+	Batch interpreter path or command, or null to use `COMSPEC` or `cmd.exe`.
+	"""
+	batch: String
+	"""
+	Go toolchain path or command, or null to use `go`.
+	"""
+	go: String
+}
+
+"""
+Interpreters operator scripts are launched with.
+"""
+type ScriptInterpreterSettingsPayload {
+	"""
+	Python interpreter path or command, or null to use `python3`.
+	"""
+	python: String
+	"""
+	PowerShell interpreter path or command, or null to use `pwsh`.
+	"""
+	powershell: String
+	"""
+	Batch interpreter path or command, or null to use `COMSPEC` or `cmd.exe`.
+	"""
+	batch: String
+	"""
+	Go toolchain path or command, or null to use `go`.
+	"""
+	go: String
+}
+
+"""
+Language an inline script is written in; selects its interpreter.
+"""
+enum ScriptLanguageValue {
+	"""
+	Shell script.
+	"""
+	SHELL
+	"""
+	Python 3.
+	"""
+	PYTHON
+	"""
+	PowerShell.
+	"""
+	POWERSHELL
+	"""
+	Windows batch file.
+	"""
+	BATCH
+	"""
+	Go source file.
+	"""
+	GO
+}
+
+"""
+Schedule for a scheduled script. Only the fields of the chosen kind are read.
+"""
+input ScriptScheduleInput {
+	"""
+	Schedule shape.
+	"""
+	kind: ScriptScheduleKindValue!
+	"""
+	Interval length in seconds, at least 60. Required for `INTERVAL`.
+	"""
+	everySeconds: Int
+	"""
+	Host-local time of day as 24-hour `HH:MM`. Required for `DAILY` and `WEEKLY`.
+	"""
+	timeLocal: String
+	"""
+	Days to run on. Required for `WEEKLY`.
+	"""
+	days: [ScheduleWeekdayValue!]
+	"""
+	Five-field crontab expression in host-local time. Required for `CRON`.
+	"""
+	expression: String
+}
+
+"""
+Shape of a script schedule.
+"""
+enum ScriptScheduleKindValue {
+	"""
+	Runs only when started by hand.
+	"""
+	MANUAL
+	"""
+	Repeats every `everySeconds` seconds.
+	"""
+	INTERVAL
+	"""
+	Runs once a day at `timeLocal`.
+	"""
+	DAILY
+	"""
+	Runs on each of `days` at `timeLocal`.
+	"""
+	WEEKLY
+	"""
+	Runs on a five-field crontab `expression`.
+	"""
+	CRON
+}
+
+"""
+Stored schedule of a scheduled script.
+"""
+type ScriptSchedulePayload {
+	"""
+	Schedule shape.
+	"""
+	kind: ScriptScheduleKindValue!
+	"""
+	Interval length in seconds, for `INTERVAL`.
+	"""
+	everySeconds: Int
+	"""
+	Host-local time of day as `HH:MM`, for `DAILY` and `WEEKLY`.
+	"""
+	timeLocal: String
+	"""
+	Days to run on, for `WEEKLY`.
+	"""
+	days: [ScheduleWeekdayValue!]
+	"""
+	Crontab expression, for `CRON`.
+	"""
+	expression: String
+}
+
+"""
+Result of checking a schedule before saving it.
+"""
+type ScriptScheduleValidationPayload {
+	"""
+	Whether the schedule can be saved.
+	"""
+	valid: Boolean!
+	"""
+	Why the schedule is invalid, or null when it is valid.
+	"""
+	error: String
+	"""
+	Short description of the schedule; the raw expression for cron schedules.
+	"""
+	description: String
+	"""
+	The next three fire times, empty for manual or invalid schedules.
+	"""
+	nextRuns: [DateTime!]!
+}
+
+"""
+What starts a script.
+"""
+enum ScriptTriggerValue {
+	"""
+	The import pipeline, after a file lands in the library.
+	"""
+	POST_IMPORT
+	"""
+	The job scheduler, on the script's own schedule.
+	"""
+	SCHEDULE
+}
+
+"""
 Filters for an interactive release search. Exactly one of `titleId` and
 `query` names the subject.
 """
@@ -26021,23 +27340,21 @@ input SearchReleasesInput {
 	"""
 	episode: String
 	"""
-	Optional result limit; the resolver applies its own default and cap.
+	Optional limit. A title search lists at most this many results
+	(default 50, max 200); a `query` search asks each indexer for this many
+	(default 100, 1 to 500) and lists everything returned.
 	"""
 	limit: Int
 	"""
-	Raw operator query searched without a catalog title.
+	Raw operator query sent as typed to each indexer, without a catalog title.
 	"""
 	query: String
-	"""
-	Search kind; required with `query`.
-	"""
-	kind: InteractiveSearchKindValue
 	"""
 	Optional indexer configuration identities to restrict the search to.
 	"""
 	indexerIds: [ID!]
 	"""
-	Optional newznab categories; the kind's defaults apply when omitted.
+	Optional newznab categories a `query` search sends as given; none when omitted.
 	"""
 	categories: [String!]
 }
@@ -26333,6 +27650,66 @@ type ServiceSettingsPayload {
 	Whether the effective policy comes from settings or environment.
 	"""
 	trustedProxySource: String!
+	"""
+	Effective public URL; null when unset or invalid.
+	"""
+	publicUrl: String
+	"""
+	Where the public URL comes from.
+	"""
+	publicUrlSource: ConfigValueSourceValue!
+	"""
+	Saved public URL, shown even while the environment overrides it.
+	"""
+	publicUrlSaved: String
+	"""
+	Why the configured public URL is not in effect, when it is invalid.
+	"""
+	publicUrlError: String
+	"""
+	Stable reason for public_url_error, for localized messages.
+	"""
+	publicUrlErrorCode: PublicUrlErrorCodeValue
+	"""
+	False while SCRYER_PUBLIC_URL is set, because the environment wins.
+	"""
+	publicUrlEditable: Boolean!
+	"""
+	Base path the instance serves under; empty at the root.
+	"""
+	basePath: String!
+	"""
+	Where the base path comes from; never the saved settings.
+	"""
+	basePathSource: ConfigValueSourceValue!
+	"""
+	Listening address and port.
+	"""
+	bindAddress: String!
+	"""
+	Where the listening address comes from; never the saved settings.
+	"""
+	bindSource: ConfigValueSourceValue!
+	"""
+	Passkey relying-party ID in effect since startup.
+	"""
+	passkeyRpId: String
+	"""
+	Passkey relying-party origin in effect since startup.
+	"""
+	passkeyRpOrigin: String
+	"""
+	Where the passkey relying party comes from.
+	"""
+	passkeyRpSource: PasskeyRelyingPartySourceValue!
+	"""
+	Users with at least one passkey; null when the count could not be read.
+	"""
+	passkeyUserCount: Int
+	"""
+	Users whose only second factor is a passkey; null when unknown.
+	"""
+	passkeyOnlyUserCount: Int
 }
 
 """
@@ -26504,6 +27881,28 @@ input SetMinimumSeedersFloorInput {
 }
 
 """
+The caller's catalog layout for one device class and facet.
+"""
+input SetMyCatalogViewInput {
+	"""
+	Device class the layout was chosen on.
+	"""
+	deviceClass: UiDeviceClassValue!
+	"""
+	Media facet the layout applies to.
+	"""
+	facet: UiSettingsFacetValue!
+	"""
+	Optional view mode; null preserves the saved value.
+	"""
+	viewMode: UiCatalogViewModeValue
+	"""
+	Optional complete column list for this device class and facet; null preserves the saved columns.
+	"""
+	columns: [UiCatalogColumnInput!]
+}
+
+"""
 Complete caller presentation-preferences update.
 """
 input SetMyUiSettingsInput {
@@ -26548,9 +27947,13 @@ input SetMyUiSettingsInput {
 	"""
 	defaultLandingView: UiDefaultLandingViewValue!
 	"""
-	Complete table-column setting list; empty clears all saved column settings.
+	Optional interface language code; null preserves the saved value and an empty string clears it.
 	"""
-	tableColumns: [UiTableColumnSettingInput!]!
+	language: String
+	"""
+	Optional complete table-column setting list; null preserves the saved columns and an empty list clears them.
+	"""
+	tableColumns: [UiTableColumnSettingInput!]
 }
 
 """
@@ -27022,6 +28425,10 @@ enum StreamKindValue {
 	"""
 	GLOBAL
 	"""
+	Private events for the authenticated member.
+	"""
+	USER
+	"""
 	Events for one title.
 	"""
 	TITLE
@@ -27185,11 +28592,15 @@ type SubmitMediaRequestPayload {
 }
 
 """
-A public list to follow.
+A public or owner-linked personal list to follow.
 """
 input SubscribeListInput {
 	"""
-	Must be `PUBLIC`.
+	Linked account owned by the caller, required when scope is PERSONAL.
+	"""
+	credentialId: ID
+	"""
+	`PERSONAL` requires an account owned by the caller.
 	"""
 	scope: ListScope!
 	"""
@@ -28484,6 +29895,10 @@ enum TitleHistoryEventTypeValue {
 	"""
 	IMPORT_SKIPPED
 	"""
+	A post-download rule refused the import.
+	"""
+	IMPORT_REJECTED_BY_RULE
+	"""
 	Existing file was upgraded.
 	"""
 	FILE_UPGRADED
@@ -28874,6 +30289,14 @@ type TitleMediaFilePayload {
 Optional title settings used when creating or updating a title.
 """
 input TitleOptionsInput {
+	"""
+	Search-language override: omitted preserves, null inherits the library, empty searches only the primary name and custom aliases.
+	"""
+	searchLanguages: [String!]
+	"""
+	User-owned search aliases: omitted preserves, null or empty clears. Metadata refresh preserves these aliases.
+	"""
+	searchAliases: [String!]
 	"""
 	Quality profile identity; omission preserves the current value, null clears it, and a value replaces it.
 	"""
@@ -29782,6 +31205,64 @@ type TriggerTitleMismatchRecoverySearchPayload {
 }
 
 """
+One column of a catalog layout saved with setMyCatalogView.
+"""
+input UiCatalogColumnInput {
+	"""
+	Table mode to which the setting applies.
+	"""
+	tableViewMode: UiTableViewModeValue!
+	"""
+	Stable column identifier.
+	"""
+	columnId: String!
+	"""
+	Zero-based display order.
+	"""
+	columnOrder: Int!
+	"""
+	Whether the column should be visible.
+	"""
+	visible: Boolean!
+}
+
+"""
+Catalog presentation mode.
+"""
+enum UiCatalogViewModeValue {
+	"""
+	Compact table.
+	"""
+	COMPACT
+	"""
+	Table with posters.
+	"""
+	POSTER_TABLE
+	"""
+	Poster grid.
+	"""
+	POSTER
+}
+
+"""
+The catalog view mode saved for one device class and facet.
+"""
+type UiCatalogViewSettingPayload {
+	"""
+	Device class the view mode was chosen on.
+	"""
+	deviceClass: UiDeviceClassValue!
+	"""
+	Media facet the view mode applies to.
+	"""
+	facet: UiSettingsFacetValue!
+	"""
+	Saved view mode.
+	"""
+	viewMode: UiCatalogViewModeValue!
+}
+
+"""
 Date and time display format preference.
 """
 enum UiDateTimeFormatValue {
@@ -29852,6 +31333,20 @@ enum UiDensityValue {
 }
 
 """
+Screen class a catalog layout was chosen on; each class keeps its own layout.
+"""
+enum UiDeviceClassValue {
+	"""
+	Desktop and tablet-sized screens.
+	"""
+	DESKTOP
+	"""
+	Phone-sized screens.
+	"""
+	MOBILE
+}
+
+"""
 Media facet used by table-column settings.
 """
 enum UiSettingsFacetValue {
@@ -29914,9 +31409,17 @@ type UiSettingsPayload {
 	"""
 	defaultLandingView: UiDefaultLandingViewValue!
 	"""
+	Interface language code saved on the caller's profile, or null to follow the browser.
+	"""
+	language: String
+	"""
 	Persisted table-column settings.
 	"""
 	tableColumns: [UiTableColumnSettingPayload!]!
+	"""
+	Persisted catalog view modes, per device class and facet.
+	"""
+	catalogViews: [UiCatalogViewSettingPayload!]!
 }
 
 """
@@ -29937,6 +31440,10 @@ enum UiSidebarModeValue {
 Input form for one table-column preference.
 """
 input UiTableColumnSettingInput {
+	"""
+	Device class to which the setting applies; null means desktop.
+	"""
+	deviceClass: UiDeviceClassValue
 	"""
 	Media facet to which the setting applies.
 	"""
@@ -29960,9 +31467,13 @@ input UiTableColumnSettingInput {
 }
 
 """
-One persisted table-column preference for a facet and table mode.
+One persisted table-column preference for a device class, facet and table mode.
 """
 type UiTableColumnSettingPayload {
+	"""
+	Device class to which the column setting applies.
+	"""
+	deviceClass: UiDeviceClassValue!
 	"""
 	Media facet to which the column setting applies.
 	"""
@@ -30331,7 +31842,7 @@ input UpdateLibraryRootInput {
 }
 
 """
-Changes to a followed public list. Omitted fields stay as they are.
+Changes to a followed public list or an owned personal list. Omitted fields stay as they are.
 """
 input UpdateListSubscriptionInput {
 	"""
@@ -30798,6 +32309,24 @@ input UpdatePostProcessingScriptInput {
 	Replacement debug state, or null to leave unchanged.
 	"""
 	debug: Boolean
+	"""
+	Replacement inline script language, or null to leave unchanged.
+	"""
+	language: ScriptLanguageValue
+	"""
+	The trigger is fixed when a script is created. Omit this field, or
+	pass the stored trigger; any other value is rejected with a validation
+	error.
+	"""
+	trigger: ScriptTriggerValue
+	"""
+	Replacement schedule, or null to leave unchanged.
+	"""
+	schedule: ScriptScheduleInput
+	"""
+	Replacement startup-run setting, or null to leave unchanged.
+	"""
+	runOnStartup: Boolean
 }
 
 """
@@ -31114,6 +32643,20 @@ input UpdateServiceSettingsInput {
 	Clear the saved override and use environment configuration.
 	"""
 	resetTrustedProxyIps: Boolean
+	"""
+	Save the instance public URL. Omission preserves the saved value.
+	"""
+	publicUrl: String
+	"""
+	Clear the saved public URL.
+	"""
+	resetPublicUrl: Boolean
+	"""
+	Confirm that registered passkeys stop working after the next restart.
+	Required when the public URL change moves or disables passkeys while
+	any are registered.
+	"""
+	acknowledgePasskeyImpact: Boolean
 }
 
 """
@@ -31310,6 +32853,24 @@ type UserLibraryPermissionGrantPayload {
 	Permissions granted within that library.
 	"""
 	permissions: [LibraryPermissionValue!]!
+}
+
+"""
+Health of a linked list account.
+"""
+enum UserListAccountStatusValue {
+	"""
+	The account works.
+	"""
+	ACTIVE
+	"""
+	The provider grant expired; the member must reconnect.
+	"""
+	EXPIRED
+	"""
+	The provider grant was revoked; the member must reconnect.
+	"""
+	REVOKED
 }
 
 """

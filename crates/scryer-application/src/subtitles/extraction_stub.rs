@@ -44,6 +44,15 @@ pub async fn normalize_downloaded_subtitle_with_archive_provider(
     Ok(file)
 }
 
+pub async fn normalize_downloaded_subtitle_with_passwords(
+    file: SubtitleFile,
+    context: SubtitleExtractionContext,
+    archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
+    _settings: &str,
+) -> AppResult<SubtitleFile> {
+    normalize_downloaded_subtitle_with_archive_provider(file, context, archive_provider).await
+}
+
 fn final_subtitle_format(file: &SubtitleFile) -> Option<String> {
     extension_for_filename(file.filename.as_deref())
         .filter(|format| is_supported_subtitle_format(format))

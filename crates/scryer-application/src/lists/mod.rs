@@ -6,6 +6,8 @@
 //! act → leave, driven by `sync`. `runtime` binds the engine's action and
 //! resolver ports to the application's use cases.
 
+pub mod account_transport;
+pub mod accounts;
 pub mod act;
 pub mod catalog;
 pub mod evaluate;
@@ -13,14 +15,19 @@ pub mod fetch;
 pub mod gateway;
 pub mod leave;
 pub mod null_repositories;
+pub mod personal;
 pub mod plugin;
 pub mod ports;
 pub mod privacy;
+pub mod provider_apps;
 pub mod provider_settings;
 pub mod public;
+pub mod refusal;
 pub mod rejection;
 pub mod resolve;
+mod route_options;
 mod runtime;
+pub mod vocabulary;
 #[cfg(test)]
 pub(crate) use runtime::AppListActions;
 pub mod sync;
@@ -33,7 +40,10 @@ pub use ports::{
     ListExclusionRepository, ListMembershipRepository, ListSubscriptionQuery,
     ListSubscriptionRepository, UserListAccountRepository, UserListPolicyRepository,
 };
-pub use provider_settings::{ListProviderConfigs, ListProviderSettingField, ListProviderSettings};
+pub use provider_settings::{
+    GATEWAY_LIST_CLIENT_ID_PROVIDERS, ListProviderConfigs, ListProviderSettingField,
+    ListProviderSettings, gateway_list_client_id_setting_key,
+};
 pub use public::{
     ListExclusionView, ListMembershipPage, ListPreview, ListPreviewItem, ListSourceDraft,
     MemberListPolicy, NewListExclusionInput, PublicListInput, PublicListPatch,

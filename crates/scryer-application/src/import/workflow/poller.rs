@@ -631,6 +631,8 @@ async fn finalize_completed_import_error(
     let result = ImportResult {
         decision: if cancelled {
             ImportDecision::Skipped
+        } else if matches!(&error, AppError::ArchiveExtractionFailed { .. }) {
+            ImportDecision::Rejected
         } else {
             ImportDecision::Failed
         },

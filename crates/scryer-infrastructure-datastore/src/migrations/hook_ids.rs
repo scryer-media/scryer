@@ -5,6 +5,7 @@ pub fn is_known_migration_hook_id(hook_id: &str) -> bool {
         "migrate_title_catalog_sort_keys" => true,
         "migrate_title_folder_ownership" => true,
         "migrate_title_folder_ownership_safe" => true,
+        "repair_root_title_folders" => true,
         "migrate_title_image_blobs" => true,
         "converge_post_0_16_6_prerelease_schema" => true,
         "backfill_canonical_download_identity" => true,
@@ -14,6 +15,8 @@ pub fn is_known_migration_hook_id(hook_id: &str) -> bool {
         "migrate_synthetic_root_ids" => true,
         "adopt_existing_title_tag_definitions" => true,
         "compress_post_processing_output" => true,
+        "backfill_import_skip_reason_projection" => true,
+        "scrub_stored_release_url_credentials" => true,
         #[cfg(test)]
         "test_insert_hook_marker" => true,
         _ => false,

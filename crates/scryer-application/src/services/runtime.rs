@@ -2280,6 +2280,14 @@ pub struct AppRuntimeJobState {
         Arc<std::sync::RwLock<Option<application_updater::macos_bundle::BundleSignatureCheck>>>,
     /// Single-flight guard for the interactive acquisition-search job — mirrors `title_deletion_lock`.
     pub acquisition_search_lock: Arc<tokio::sync::Mutex<()>>,
+    /// In-memory schedule of enabled scheduled scripts; the jobs query reads
+    /// each script's next run from it.
+    pub custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler,
+    /// Serializes the overlap check and run start for scheduled scripts.
+    pub(crate) custom_job_start_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes schedule reloads so a slower, older read is never applied
+    /// over a newer one.
+    pub(crate) custom_job_reload_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -2289,6 +2297,7 @@ pub struct AppRuntimeHealthState {
 
 #[derive(Clone)]
 pub struct AppRuntimePluginState {
+    pub(crate) settings_write_lock: Arc<tokio::sync::Mutex<()>>,
     pub plugin_operation_guards: PluginOperationGuardTable,
     pub plugin_install_orchestrator: PluginInstallOrchestrator,
     pub(crate) compatibility_blockers: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
@@ -2474,6 +2483,7 @@ pub struct AppRuntimeSecurityState {
     pub(crate) default_admin_disabled: Arc<std::sync::atomic::AtomicBool>,
     pub(super) recovery_admin_login_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) trusted_proxies: crate::rate_limit_proxy_policy::TrustedProxyRuntime,
+    pub(crate) public_url: crate::public_url::PublicUrlRuntime,
     pub(crate) service_settings_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -2521,6 +2531,7 @@ impl AppRuntimeState {
                 default_admin_disabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 recovery_admin_login_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 trusted_proxies: Default::default(),
+                public_url: Default::default(),
                 service_settings_lock: Default::default(),
             },
             events: AppRuntimeEventState {
@@ -2624,11 +2635,15 @@ impl AppRuntimeState {
                 #[cfg(not(windows))]
                 application_upgrade_bundle_signature_check: Arc::new(std::sync::RwLock::new(None)),
                 acquisition_search_lock: Arc::new(tokio::sync::Mutex::new(())),
+                custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler::default(),
+                custom_job_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                custom_job_reload_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             health: AppRuntimeHealthState {
                 results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             },
             plugins: AppRuntimePluginState {
+                settings_write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 plugin_operation_guards: PluginOperationGuardTable::default(),
                 plugin_install_orchestrator: PluginInstallOrchestrator::default(),
                 compatibility_blockers: Arc::new(tokio::sync::RwLock::new(HashMap::new())),

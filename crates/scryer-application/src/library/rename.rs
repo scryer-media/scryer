@@ -144,6 +144,27 @@ pub struct RenamePlan {
     pub conflicts: usize,
     pub errors: usize,
     pub items: Vec<RenamePlanItem>,
+    /// The folder each planned title's files are placed under, resolved once
+    /// from the title, its root and the folder template when the plan was
+    /// built. Applying records this value rather than reconstructing a folder
+    /// from individual file moves.
+    ///
+    /// Optional and defaulted so a plan serialized before it existed still
+    /// round-trips; such a plan leaves the recorded folders alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub title_folders: Vec<RenamePlanTitleFolder>,
+    /// Titles with nothing to move whose record is not a title folder (a
+    /// library root, say) while every one of their media files already sits
+    /// inside the planned folder. Applying records that folder for them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder_repairs: Vec<RenamePlanTitleFolder>,
+}
+
+/// The destination folder a rename plan places one title's files under.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenamePlanTitleFolder {
+    pub title_id: String,
+    pub folder_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +251,9 @@ pub const RENAME_TITLE_OUTSIDE_LIBRARY_ROOTS: &str = "title_outside_library_root
 /// A planned item whose destination left the root its source is under. Always a
 /// planning bug; never executed.
 pub const RENAME_CROSS_ROOT_REFUSED: &str = "cross_root_rename_refused";
+/// An applied item of a title whose new folder could not be recorded. The file
+/// moved; the title still records its previous folder.
+pub const RENAME_FOLDER_RECORD_FAILED: &str = "folder_record_failed";
 /// A sidecar (external subtitle, `.nfo`) following its media file.
 pub const RENAME_COMPANION_MOVE: &str = "rename_companion_move";
 const GENERATED_COMPONENT_MAX_BYTES: usize = 240;
@@ -729,6 +753,42 @@ impl AppUseCase {
             }
         }
 
+        let unrecorded_titles = self
+            .persist_rename_title_folders(&preview, &item_results)
+            .await;
+
+        // The files did move and their rows say so, so subtitle rows and
+        // notifications follow them before the items are reported failed.
+        self.repoint_rename_external_subtitles(&item_results).await;
+        self.emit_rename_notifications(actor, &item_results).await;
+        self.fail_rename_items_of_unrecorded_titles(
+            &preview,
+            &mut item_results,
+            &unrecorded_titles,
+        )
+        .await;
+
+        // A title whose folder could not be recorded still records its old
+        // folder, which may now be empty: none of its folders are cleaned up.
+        let (cleanup_folders, kept_folders): (Vec<_>, Vec<_>) = planned_title_folders
+            .into_iter()
+            .partition(|folder| !unrecorded_titles.contains(&folder.title_id));
+        let cleanup_folders = cleanup_folders
+            .into_iter()
+            .map(|folder| folder.folder_path)
+            .collect::<Vec<_>>();
+        let kept_folders = kept_folders
+            .into_iter()
+            .map(|folder| folder.folder_path)
+            .chain(
+                preview
+                    .title_folders
+                    .iter()
+                    .filter(|folder| unrecorded_titles.contains(&folder.title_id))
+                    .map(|folder| folder.folder_path.clone()),
+            )
+            .collect::<Vec<_>>();
+
         let mut applied = 0usize;
         let mut skipped = 0usize;
         let mut failed = 0usize;
@@ -749,12 +809,68 @@ impl AppUseCase {
             items: item_results,
         };
 
-        self.repoint_rename_external_subtitles(&result.items).await;
-        self.emit_rename_notifications(actor, &result.items).await;
-        self.remove_emptied_rename_source_folders(&result.items, &planned_title_folders)
+        self.remove_emptied_rename_source_folders(&result.items, &cleanup_folders, &kept_folders)
             .await;
 
         Ok(result)
+    }
+
+    /// Report every applied item of a title whose folder could not be
+    /// recorded as failed. Its files moved, but the title still records its
+    /// old folder, so the next scan would not find them there.
+    async fn fail_rename_items_of_unrecorded_titles(
+        &self,
+        preview: &RenamePlan,
+        item_results: &mut [RenameApplyItemResult],
+        unrecorded_titles: &HashSet<String>,
+    ) {
+        if unrecorded_titles.is_empty() {
+            return;
+        }
+        // Companions carry no identity of their own; they belong to the
+        // title of the media file they travel with.
+        let primary_of_companion = preview
+            .items
+            .iter()
+            .filter_map(|item| Some((item.current_path.as_str(), item.companion_of.as_deref()?)))
+            .collect::<HashMap<_, _>>();
+        let mut title_by_path: HashMap<String, Option<String>> = HashMap::new();
+        for item in item_results.iter() {
+            if item.status != RenameApplyStatus::Applied
+                || primary_of_companion.contains_key(item.current_path.as_str())
+            {
+                continue;
+            }
+            let title_id = self
+                .resolve_title_for_rename_item(item)
+                .await
+                .ok()
+                .flatten()
+                .map(|title| title.id);
+            title_by_path.insert(item.current_path.clone(), title_id);
+        }
+
+        for item in item_results.iter_mut() {
+            if item.status != RenameApplyStatus::Applied {
+                continue;
+            }
+            let owning_path = primary_of_companion
+                .get(item.current_path.as_str())
+                .copied()
+                .unwrap_or(item.current_path.as_str());
+            let Some(Some(title_id)) = title_by_path.get(owning_path) else {
+                continue;
+            };
+            if !unrecorded_titles.contains(title_id) {
+                continue;
+            }
+            item.status = RenameApplyStatus::Failed;
+            item.reason_code = RENAME_FOLDER_RECORD_FAILED.into();
+            item.error_message = Some(
+                "the file moved, but the title's new folder could not be recorded; its previous folder is kept"
+                    .to_string(),
+            );
+        }
     }
 
     /// Take a rolled-back media file's already-moved companions back with it.
@@ -827,7 +943,10 @@ impl AppUseCase {
     ///
     /// Returns each planned title's folder path as it stood *before* the rename,
     /// which bounds the emptied-folder cleanup below.
-    async fn heal_rename_plan_title_roots(&self, preview: &RenamePlan) -> Vec<String> {
+    async fn heal_rename_plan_title_roots(
+        &self,
+        preview: &RenamePlan,
+    ) -> Vec<RenamePlanTitleFolder> {
         let mut healed = HashSet::new();
         let mut title_folders = Vec::new();
         for item in &preview.items {
@@ -844,7 +963,10 @@ impl AppUseCase {
                 .map(str::trim)
                 .filter(|folder_path| !folder_path.is_empty())
             {
-                title_folders.push(folder_path.to_string());
+                title_folders.push(RenamePlanTitleFolder {
+                    title_id: title.id.clone(),
+                    folder_path: folder_path.to_string(),
+                });
             }
             if let Err(error) = self
                 .heal_title_root_folder_id_for_owned_folder(
@@ -869,11 +991,13 @@ impl AppUseCase {
     /// season) folder and leaves the husk behind (#224). Only directories that
     /// are genuinely empty and strictly *inside* a configured library root are
     /// removed — never a root itself, and never a directory still holding
-    /// anything this rename did not move.
+    /// anything this rename did not move. Nothing in or under `kept_folders`
+    /// is removed.
     async fn remove_emptied_rename_source_folders(
         &self,
         items: &[RenameApplyItemResult],
         planned_title_folders: &[String],
+        kept_folders: &[String],
     ) {
         if planned_title_folders.is_empty() {
             return;
@@ -923,6 +1047,9 @@ impl AppUseCase {
                 if !path_is_within_a_planned_title_folder(&current, planned_title_folders) {
                     break;
                 }
+                if path_is_within_a_planned_title_folder(&current, kept_folders) {
+                    break;
+                }
                 if !directory_is_empty(&current).await {
                     break;
                 }
@@ -946,38 +1073,482 @@ impl AppUseCase {
         }
     }
 
+    /// Refuse a plan whose destination folder another title owns, or that is
+    /// not a folder any title may own. Checked once per title that has a file
+    /// to move, against the folder the plan resolved for it.
     async fn preflight_rename_folder_ownership(&self, preview: &RenamePlan) -> AppResult<()> {
+        self.preflight_rename_title_folder_overlap(preview).await?;
+        let mut checked = HashSet::new();
         for item in &preview.items {
             if !matches!(
                 item.write_action,
                 RenameWriteAction::Move | RenameWriteAction::Replace
-            ) {
+            ) || item.proposed_path.is_none()
+            {
                 continue;
             }
-            let Some(proposed_path) = item.proposed_path.as_deref() else {
-                continue;
-            };
             let probe = rename_apply_probe_for_item(item);
             let Some(title) = self.resolve_title_for_rename_item(&probe).await? else {
                 continue;
             };
-            let use_season_folders = self.resolve_use_season_folders(&title).await?;
-            let Some(folder_path) = infer_title_folder_path_after_rename(
-                &title,
-                use_season_folders,
-                &item.current_path,
-                proposed_path,
-            ) else {
+            if !checked.insert(title.id.clone()) {
+                continue;
+            }
+            let Some(folder_path) = planned_rename_title_folder(preview, &title.id) else {
                 continue;
             };
+            if let Some(violation) = self
+                .rename_title_folder_root_violation(&title, folder_path)
+                .await?
+            {
+                return Err(AppError::Validation(format!(
+                    "refusing to rename {}: its destination folder {} is not a title folder ({})",
+                    title.name,
+                    folder_path,
+                    violation.as_str()
+                )));
+            }
             crate::folder_ownership::ensure_folder_move_available_to_title(
                 self,
                 &title,
-                &stored_path_to_path_buf(&folder_path),
+                &stored_path_to_path_buf(folder_path),
             )
             .await?;
         }
         Ok(())
+    }
+
+    /// Refuse a plan that would leave two titles sharing a folder, or one
+    /// title's folder inside another's. Only titles the rename puts files in
+    /// are judged, against each other and against the folders the titles it
+    /// leaves alone are recorded at; two untouched titles that already overlap
+    /// are not this rename's doing and do not hold it back.
+    async fn preflight_rename_title_folder_overlap(&self, preview: &RenamePlan) -> AppResult<()> {
+        let title_ids = preview
+            .title_folders
+            .iter()
+            .map(|folder| folder.title_id.as_str())
+            .collect::<HashSet<_>>();
+        if title_ids.len() < 2 {
+            return Ok(());
+        }
+        let titles = self
+            .services
+            .catalog
+            .titles
+            .list(Some(preview.facet.clone()), None)
+            .await?
+            .into_iter()
+            .filter(|title| title_ids.contains(title.id.as_str()))
+            .map(|title| (title.id.clone(), title))
+            .collect::<HashMap<_, _>>();
+        let recorded_folders = |include: &dyn Fn(&str) -> bool| {
+            titles
+                .values()
+                .filter(|title| include(&title.id))
+                .filter_map(|title| {
+                    let folder_path = title.folder_path.as_deref()?.trim();
+                    (!folder_path.is_empty()).then(|| RenamePlanTitleFolder {
+                        title_id: title.id.clone(),
+                        folder_path: folder_path.to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        // Counting every title as moving can only find more overlaps, so a
+        // plan clear on that count needs no per-item lookups.
+        if planned_title_folder_overlap(&preview.title_folders, &recorded_folders(&|_| true))
+            .is_none()
+        {
+            return Ok(());
+        }
+        let planned = match self.rename_plan_titles_with_work(preview).await? {
+            Some(moving) => preview
+                .title_folders
+                .iter()
+                .filter(|folder| moving.contains(&folder.title_id))
+                .cloned()
+                .collect::<Vec<_>>(),
+            None => preview.title_folders.clone(),
+        };
+        if planned.is_empty() {
+            return Ok(());
+        }
+        let planned_ids = planned
+            .iter()
+            .map(|folder| folder.title_id.clone())
+            .collect::<HashSet<_>>();
+        let mut standing = recorded_folders(&|title_id| !planned_ids.contains(title_id));
+        loop {
+            let Some(overlap) = planned_title_folder_overlap(&planned, &standing) else {
+                return Ok(());
+            };
+            // A record at or above a library root is not a title folder at
+            // all; every title folder in the library sits under it, so it
+            // cannot be what a planned folder collides with.
+            let mut not_a_title_folder = None;
+            for claim in [overlap.outer, overlap.inner] {
+                if claim.planned {
+                    continue;
+                }
+                if let Some(title) = titles.get(&claim.folder.title_id)
+                    && self
+                        .rename_title_folder_root_violation(title, &claim.folder.folder_path)
+                        .await?
+                        .is_some()
+                {
+                    not_a_title_folder = Some(claim.folder.title_id.clone());
+                }
+            }
+            if let Some(title_id) = not_a_title_folder {
+                standing.retain(|folder| folder.title_id != title_id);
+                continue;
+            }
+            let describe = |claim: TitleFolderClaim<'_>, name: &str| {
+                if claim.planned {
+                    format!("the folder planned for {name}")
+                } else {
+                    format!("the current folder of {name}")
+                }
+            };
+            let outer = describe(
+                overlap.outer,
+                &self
+                    .rename_title_display_name(&overlap.outer.folder.title_id)
+                    .await,
+            );
+            let inner = describe(
+                overlap.inner,
+                &self
+                    .rename_title_display_name(&overlap.inner.folder.title_id)
+                    .await,
+            );
+            return Err(AppError::Validation(if overlap.nested {
+                format!(
+                    "refusing to rename: {inner} ({}) is inside {outer} ({})",
+                    overlap.inner.folder.folder_path, overlap.outer.folder.folder_path
+                )
+            } else {
+                format!(
+                    "refusing to rename: {outer} and {inner} are the same folder ({})",
+                    overlap.outer.folder.folder_path
+                )
+            }));
+        }
+    }
+
+    /// The titles a plan moves or replaces files of, or would but for another
+    /// title in the plan taking the destination, or `None` when a moving
+    /// item's title cannot be told; the caller then counts every title in the
+    /// plan as moving.
+    async fn rename_plan_titles_with_work(
+        &self,
+        preview: &RenamePlan,
+    ) -> AppResult<Option<HashSet<String>>> {
+        let media_items = preview
+            .items
+            .iter()
+            .filter(|item| item.companion_of.is_none())
+            .map(|item| (item.current_path.as_str(), item))
+            .collect::<HashMap<_, _>>();
+        let mut owners = Vec::new();
+        let mut seen = HashSet::new();
+        // An item skipped because another title in this plan claimed its
+        // destination wants that folder just as much as the item that got it.
+        for item in preview.items.iter().filter(|item| {
+            matches!(
+                item.write_action,
+                RenameWriteAction::Move | RenameWriteAction::Replace
+            ) || (item.write_action == RenameWriteAction::Skip
+                && item.reason_code == "collision_within_plan")
+        }) {
+            // A sidecar belongs to the title of the media file it follows.
+            let owner = match item.companion_of.as_deref() {
+                Some(primary) => media_items.get(primary).copied(),
+                None => Some(item),
+            };
+            let Some(owner) = owner else {
+                return Ok(None);
+            };
+            if seen.insert(owner.current_path.as_str()) {
+                owners.push(owner);
+            }
+        }
+        let mut moving = HashSet::new();
+        for owner in owners {
+            let title_id = if let Some(media_file_id) = owner.media_file_id.as_deref() {
+                self.services
+                    .library
+                    .media_files
+                    .get_media_file_by_id(media_file_id)
+                    .await?
+                    .map(|file| file.title_id)
+            } else if let Some(collection_id) = owner.collection_id.as_deref() {
+                self.services
+                    .catalog
+                    .shows
+                    .get_collection_by_id(collection_id)
+                    .await?
+                    .map(|collection| collection.title_id)
+            } else {
+                None
+            };
+            let Some(title_id) = title_id else {
+                return Ok(None);
+            };
+            moving.insert(title_id);
+        }
+        // A folder repair records the planned folder, claiming it as surely as
+        // a move into it would.
+        moving.extend(
+            preview
+                .folder_repairs
+                .iter()
+                .map(|repair| repair.title_id.clone()),
+        );
+        Ok(Some(moving))
+    }
+
+    /// A title's name for a refusal message, or its id when it cannot be read.
+    async fn rename_title_display_name(&self, title_id: &str) -> String {
+        match self.services.catalog.titles.get_by_id(title_id).await {
+            Ok(Some(title)) => title.name,
+            _ => title_id.to_string(),
+        }
+    }
+
+    /// Check a planned title folder against the configured roots.
+    async fn rename_title_folder_root_violation(
+        &self,
+        title: &Title,
+        folder_path: &str,
+    ) -> AppResult<Option<crate::title_folder_rules::TitleFolderRootViolation>> {
+        let all_roots = self
+            .all_library_root_folders()
+            .await?
+            .into_iter()
+            .map(|root| root.path)
+            .collect::<Vec<_>>();
+        let mut library_roots = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&title.library_id)
+            .await?
+            .map(|library| {
+                library
+                    .roots
+                    .into_iter()
+                    .map(|root| root.path)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if library_roots.is_empty() {
+            // A library without roots planned against the facet default root,
+            // which is the folder's parent by construction; only the checks
+            // against configured roots apply.
+            if let Some(parent) = stored_path_to_path_buf(folder_path).parent() {
+                library_roots.push(path_to_stored_string(parent));
+            }
+        }
+        Ok(crate::title_folder_rules::title_folder_root_violation(
+            folder_path,
+            &library_roots,
+            &all_roots,
+        ))
+    }
+
+    /// Record each renamed title's planned folder, once, after its files moved.
+    ///
+    /// The record follows the title's files: the folder is recorded when at
+    /// least as many of them sit inside it as outside it. A scan treats files
+    /// outside the recorded folder as a second copy and detaches them, so after
+    /// a partial apply (skipped, failed or rolled-back items) the record goes
+    /// wherever that costs the fewest. Files left behind are logged. A folder that cannot be
+    /// determined leaves the record unchanged.
+    ///
+    /// Returns the titles whose folder could not be recorded because the
+    /// attempt failed.
+    async fn persist_rename_title_folders(
+        &self,
+        preview: &RenamePlan,
+        item_results: &[RenameApplyItemResult],
+    ) -> HashSet<String> {
+        if preview.title_folders.is_empty() {
+            return HashSet::new();
+        }
+        let mut moved_titles = HashSet::new();
+        for item in item_results {
+            if item.status != RenameApplyStatus::Applied
+                || !matches!(
+                    item.write_action,
+                    RenameWriteAction::Move | RenameWriteAction::Replace
+                )
+            {
+                continue;
+            }
+            if let Ok(Some(title)) = self.resolve_title_for_rename_item(item).await {
+                moved_titles.insert(title.id);
+            }
+        }
+
+        let mut unrecorded = HashSet::new();
+        for planned in &preview.title_folders {
+            if !moved_titles.contains(&planned.title_id) {
+                continue;
+            }
+            if let Err(error) = self.persist_rename_title_folder(planned).await {
+                warn!(
+                    title_id = %planned.title_id,
+                    folder_path = %planned.folder_path,
+                    error = %error,
+                    "failed to record the renamed title's folder; the previous folder is kept"
+                );
+                unrecorded.insert(planned.title_id.clone());
+            }
+        }
+        for planned in &preview.folder_repairs {
+            if moved_titles.contains(&planned.title_id) {
+                continue;
+            }
+            if let Err(error) = self.repair_rename_title_folder(planned).await {
+                warn!(
+                    title_id = %planned.title_id,
+                    folder_path = %planned.folder_path,
+                    error = %error,
+                    "failed to repair the title's folder record; the previous folder is kept"
+                );
+                unrecorded.insert(planned.title_id.clone());
+            }
+        }
+        unrecorded
+    }
+
+    /// Record the planned folder for a title none of whose files moved, when
+    /// its current record is not a title folder and every one of its files
+    /// and collection paths is already inside the planned one, so a later scan
+    /// detaches nothing. Checked again here because the plan
+    /// may have been built a while ago.
+    async fn repair_rename_title_folder(&self, planned: &RenamePlanTitleFolder) -> AppResult<()> {
+        let Some(title) = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&planned.title_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        if !self.rename_folder_repair_applies(&title, planned).await? {
+            return Ok(());
+        }
+        if let Some(owner) =
+            crate::folder_ownership::find_other_folder_owner(self, &title, &planned.folder_path)
+                .await?
+        {
+            warn!(
+                title_id = %title.id,
+                folder_path = %planned.folder_path,
+                owner_title_id = %owner.id,
+                "not repairing the title's folder record: another title owns the planned folder"
+            );
+            return Ok(());
+        }
+        tracing::info!(
+            title_id = %title.id,
+            previous_folder = %title.folder_path.as_deref().unwrap_or_default(),
+            folder_path = %planned.folder_path,
+            "repaired a title folder record that was not a title folder"
+        );
+        self.services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, &planned.folder_path)
+            .await
+    }
+
+    async fn persist_rename_title_folder(&self, planned: &RenamePlanTitleFolder) -> AppResult<()> {
+        let Some(title) = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&planned.title_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        let folder_path = planned.folder_path.as_str();
+        if title
+            .folder_path
+            .as_deref()
+            .is_some_and(|current| crate::stored_paths::folder_paths_match(current, folder_path))
+        {
+            return Ok(());
+        }
+        if let Some(violation) = self
+            .rename_title_folder_root_violation(&title, folder_path)
+            .await?
+        {
+            warn!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                violation = violation.as_str(),
+                "not recording a renamed title folder that is not a title folder"
+            );
+            return Ok(());
+        }
+        // A file linked to several episodes is listed once per episode; it is
+        // still one file, so it is counted once.
+        let mut counted_files = HashSet::new();
+        let (inside, outside): (Vec<_>, Vec<_>) = self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await?
+            .into_iter()
+            .filter(|file| file.role.is_primary() && counted_files.insert(file.id.clone()))
+            .partition(|file| {
+                crate::title_folder_rules::stored_path_is_inside_folder(
+                    folder_path,
+                    &file.file_path,
+                )
+            });
+        if inside.len() < outside.len() || inside.is_empty() {
+            warn!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                moved = inside.len(),
+                left_behind = outside.len(),
+                "keeping the title's previous folder: most of its media files are not in the renamed folder"
+            );
+            return Ok(());
+        }
+        if let Some(left_behind) = outside.first() {
+            warn!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                left_behind = outside.len(),
+                file_path = %left_behind.file_path,
+                "recording the renamed title folder although some media files did not move into it"
+            );
+        }
+        if let Some(owner) =
+            crate::folder_ownership::find_other_folder_owner(self, &title, folder_path).await?
+        {
+            warn!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                owner_title_id = %owner.id,
+                "keeping the title's previous folder: another title owns the renamed folder"
+            );
+            return Ok(());
+        }
+        self.services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, folder_path)
+            .await
     }
 
     async fn library_id_for_rename_item(&self, item: &RenameApplyItemResult) -> Option<String> {
@@ -1229,31 +1800,9 @@ impl AppUseCase {
             return Err(RenamePersistenceFailure { error, state });
         }
 
-        let title = match self.resolve_title_for_rename_item(item).await {
-            Ok(title) => title,
-            Err(error) => return Err(RenamePersistenceFailure { error, state }),
-        };
-        if let Some(title) = title {
-            let use_season_folders = match self.resolve_use_season_folders(&title).await {
-                Ok(value) => value,
-                Err(error) => return Err(RenamePersistenceFailure { error, state }),
-            };
-            if let Some(folder_path) = infer_title_folder_path_after_rename(
-                &title,
-                use_season_folders,
-                &item.current_path,
-                final_path,
-            ) && let Err(error) = self
-                .services
-                .catalog
-                .titles
-                .set_folder_path(&title.id, &folder_path)
-                .await
-            {
-                return Err(RenamePersistenceFailure { error, state });
-            }
-        }
-
+        // The title's folder is recorded once per title after every item has
+        // been applied (`persist_rename_title_folders`), never from a single
+        // file's move.
         Ok(())
     }
 
@@ -1325,12 +1874,14 @@ impl AppUseCase {
     ) -> AppResult<RenamePlan> {
         let mut planning = RenamePlanningState::default();
         let mut items = Vec::new();
+        let mut title_folders = Vec::new();
+        let mut folder_repairs = Vec::new();
         for title in titles {
             let effective_language = effective_languages
                 .get(&title.id)
                 .map(String::as_str)
                 .unwrap_or("eng");
-            let mut title_items = self
+            let (mut title_items, title_folder) = self
                 .build_rename_plan_items_for_title(
                     title,
                     effective_language,
@@ -1338,17 +1889,97 @@ impl AppUseCase {
                     &mut planning,
                 )
                 .await?;
+            if let Some(planned) = title_folder.as_ref()
+                && !title_items.is_empty()
+                && title_items
+                    .iter()
+                    .all(|item| item.write_action == RenameWriteAction::Noop)
+                && self.rename_folder_repair_applies(title, planned).await?
+            {
+                folder_repairs.push(planned.clone());
+            }
             items.append(&mut title_items);
+            title_folders.extend(title_folder);
         }
 
-        Ok(build_rename_plan_from_items(
+        let mut plan = build_rename_plan_from_items(
             facet,
             title_id,
             settings.template,
             settings.collision_policy,
             settings.missing_metadata_policy,
             items,
-        ))
+        );
+        plan.title_folders = title_folders;
+        plan.folder_repairs = folder_repairs;
+        Ok(plan)
+    }
+
+    /// Whether a title's record should be replaced by its planned folder even
+    /// though none of its files move: the record is not a title folder, the
+    /// planned folder is, and every one of the title's media files, of any
+    /// role, and every collection path already sits strictly inside the
+    /// planned folder.
+    async fn rename_folder_repair_applies(
+        &self,
+        title: &Title,
+        planned: &RenamePlanTitleFolder,
+    ) -> AppResult<bool> {
+        let Some(recorded) = title
+            .folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|recorded| !recorded.is_empty())
+        else {
+            return Ok(false);
+        };
+        // The common case, a record that already is the planned folder, needs
+        // no lookups.
+        if crate::stored_paths::folder_paths_match(recorded, &planned.folder_path) {
+            return Ok(false);
+        }
+        if self
+            .rename_title_folder_root_violation(title, recorded)
+            .await?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        if self
+            .rename_title_folder_root_violation(title, &planned.folder_path)
+            .await?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        // Once the record names the planned folder, a scan detaches every media
+        // row and collection whose path is outside it, whatever its role. The
+        // repair may only happen when that detaches nothing.
+        let inside = |path: &str| {
+            crate::title_folder_rules::path_is_strictly_within(path, &planned.folder_path)
+        };
+        let files = self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await?;
+        if !files.iter().any(|file| file.role.is_primary())
+            || !files.iter().all(|file| inside(&file.file_path))
+        {
+            return Ok(false);
+        }
+        let collections = self
+            .services
+            .catalog
+            .shows
+            .list_collections_for_title(&title.id)
+            .await?;
+        Ok(collections
+            .iter()
+            .filter_map(|collection| collection.ordered_path.as_deref())
+            .filter(|path| !path.trim().is_empty())
+            .all(inside))
     }
 
     async fn build_rename_plan_items_for_title(
@@ -1357,7 +1988,7 @@ impl AppUseCase {
         _effective_language: &str,
         settings: &RenamePlanSettings,
         planning: &mut RenamePlanningState,
-    ) -> AppResult<Vec<RenamePlanItem>> {
+    ) -> AppResult<(Vec<RenamePlanItem>, Option<RenamePlanTitleFolder>)> {
         let title = title.clone();
         let use_season_folders = self.resolve_use_season_folders(&title).await?;
         let collections = self
@@ -1384,7 +2015,20 @@ impl AppUseCase {
             .rename_media_root_for_title(&title, &media_files)
             .await?
         else {
-            return Ok(rename_items_outside_library_roots(&media_files));
+            return Ok((rename_items_outside_library_roots(&media_files), None));
+        };
+        // Every Move/Replace target of this title lands under this one folder
+        // (see `episode_parent_path_for_renamed_file` and
+        // `title_folder_path_for_renamed_file`), so it is the folder the title
+        // owns once the plan is applied.
+        let title_folder = RenamePlanTitleFolder {
+            title_id: title.id.clone(),
+            folder_path: path_to_stored_string(configured_title_folder_path(
+                &media_root,
+                &title,
+                &settings.folder_template,
+                title.year,
+            )),
         };
         let episodes = match title.facet {
             MediaFacet::Movie => Vec::new(),
@@ -1450,7 +2094,8 @@ impl AppUseCase {
 
         let items = self.normalize_existing_rename_collisions(items).await?;
         let items = self.refuse_cross_root_rename_items(&title, items).await?;
-        self.plan_rename_companions(items, planning).await
+        let items = self.plan_rename_companions(items, planning).await?;
+        Ok((items, Some(title_folder)))
     }
 
     /// The root a rename must plan inside: the configured root of the title's
@@ -2540,6 +3185,10 @@ pub(crate) fn title_folder_path_for_renamed_file(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        // A recorded folder that is the root itself (or above it) is not a
+        // title folder; keeping a file's path relative to it would carry the
+        // old title folder's name into the new one.
+        .filter(|value| crate::title_folder_rules::path_is_strictly_within(value, media_root))
         .map(stored_path_to_path_buf)
     else {
         return desired_root;
@@ -2588,51 +3237,13 @@ fn episode_parent_path_for_renamed_file(
     ))
 }
 
-fn infer_title_folder_path_after_rename(
-    title: &Title,
-    use_season_folders: bool,
-    current_path: &str,
-    final_path: &str,
-) -> Option<String> {
-    let final_path = stored_path_to_path_buf(final_path);
-    let final_parent = final_path.parent()?;
-    if let Some(existing_root) = title
-        .folder_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(stored_path_to_path_buf)
-    {
-        let current_path = stored_path_to_path_buf(current_path);
-        let current_parent = current_path.parent()?;
-        if let Ok(relative_parent) = current_parent.strip_prefix(&existing_root) {
-            let mut new_root = final_parent.to_path_buf();
-            for _ in relative_parent.components() {
-                new_root = new_root.parent()?.to_path_buf();
-            }
-            return Some(path_to_stored_string(&new_root));
-        }
-    }
-
-    infer_title_folder_path_from_final_path(title, use_season_folders, final_parent)
-        .map(|path| path_to_stored_string(&path))
-}
-
-fn infer_title_folder_path_from_final_path(
-    _title: &Title,
-    use_season_folders: bool,
-    final_parent: &Path,
-) -> Option<PathBuf> {
-    if use_season_folders
-        && final_parent
-            .file_name()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.starts_with("Season "))
-    {
-        return final_parent.parent().map(Path::to_path_buf);
-    }
-
-    Some(final_parent.to_path_buf())
+/// The folder a plan resolved for `title_id`, if it resolved one.
+fn planned_rename_title_folder<'a>(plan: &'a RenamePlan, title_id: &str) -> Option<&'a str> {
+    plan.title_folders
+        .iter()
+        .find(|planned| planned.title_id == title_id)
+        .map(|planned| planned.folder_path.as_str())
+        .filter(|folder_path| !folder_path.trim().is_empty())
 }
 
 /// Plan-wide state shared by every title in one preview.
@@ -2800,6 +3411,129 @@ fn path_is_within_a_planned_title_folder(path: &Path, planned_title_folders: &[S
     planned_title_folders
         .iter()
         .any(|folder| library_path_is_under_root(&candidate, folder))
+}
+
+/// One title's claim on a folder: the folder a rename is about to put its files
+/// in (`planned`), or the folder it is recorded at and keeps because the
+/// rename moves none of its files.
+#[derive(Debug, Clone, Copy)]
+struct TitleFolderClaim<'a> {
+    folder: &'a RenamePlanTitleFolder,
+    planned: bool,
+}
+
+/// Two titles claiming the same folder, or one folder inside the other.
+/// `outer` holds `inner`; when `nested` is false they are equal. At least one
+/// of the two is a planned folder.
+#[derive(Debug)]
+struct PlannedTitleFolderOverlap<'a> {
+    outer: TitleFolderClaim<'a>,
+    inner: TitleFolderClaim<'a>,
+    nested: bool,
+}
+
+/// The first pair of different titles that would end up sharing a folder, or
+/// with one's folder inside the other's, once a rename puts files in the
+/// `planned` folders. `standing` folders are where titles the rename does not
+/// move stay; two of them overlapping already is left alone, since this
+/// rename changes nothing there.
+fn planned_title_folder_overlap<'a>(
+    planned: &'a [RenamePlanTitleFolder],
+    standing: &'a [RenamePlanTitleFolder],
+) -> Option<PlannedTitleFolderOverlap<'a>> {
+    use crate::title_folder_rules::{
+        containing_folder_keys, folder_containment_key, stored_path_is_inside_folder,
+    };
+
+    let claims = planned
+        .iter()
+        .map(|folder| TitleFolderClaim {
+            folder,
+            planned: true,
+        })
+        .chain(standing.iter().map(|folder| TitleFolderClaim {
+            folder,
+            planned: false,
+        }))
+        .collect::<Vec<_>>();
+    let mut by_key: HashMap<String, Vec<TitleFolderClaim<'a>>> = HashMap::new();
+    let mut keyed = Vec::new();
+    let mut unkeyed = Vec::new();
+    for claim in &claims {
+        match folder_containment_key(&claim.folder.folder_path) {
+            Some(key) => {
+                by_key.entry(key.clone()).or_default().push(*claim);
+                keyed.push((key, *claim));
+            }
+            None => unkeyed.push(*claim),
+        }
+    }
+    let conflicting = |a: &TitleFolderClaim<'_>, b: &TitleFolderClaim<'_>| {
+        (a.planned || b.planned) && a.folder.title_id != b.folder.title_id
+    };
+    for (key, claim) in &keyed {
+        if let Some(other) = by_key[key].iter().find(|other| conflicting(claim, other)) {
+            return Some(PlannedTitleFolderOverlap {
+                outer: *other,
+                inner: *claim,
+                nested: false,
+            });
+        }
+    }
+    for (own_key, claim) in &keyed {
+        for key in containing_folder_keys(&claim.folder.folder_path) {
+            if &key == own_key {
+                continue;
+            }
+            if let Some(outer) = by_key
+                .get(&key)
+                .and_then(|outers| outers.iter().find(|outer| conflicting(claim, outer)))
+            {
+                return Some(PlannedTitleFolderOverlap {
+                    outer: *outer,
+                    inner: *claim,
+                    nested: true,
+                });
+            }
+        }
+    }
+    // A folder without a comparison key is compared against every other.
+    for claim in unkeyed {
+        for other in &claims {
+            if !conflicting(&claim, other) {
+                continue;
+            }
+            let claim_inside =
+                stored_path_is_inside_folder(&other.folder.folder_path, &claim.folder.folder_path);
+            let other_inside =
+                stored_path_is_inside_folder(&claim.folder.folder_path, &other.folder.folder_path);
+            match (claim_inside, other_inside) {
+                (true, true) => {
+                    return Some(PlannedTitleFolderOverlap {
+                        outer: *other,
+                        inner: claim,
+                        nested: false,
+                    });
+                }
+                (true, false) => {
+                    return Some(PlannedTitleFolderOverlap {
+                        outer: *other,
+                        inner: claim,
+                        nested: true,
+                    });
+                }
+                (false, true) => {
+                    return Some(PlannedTitleFolderOverlap {
+                        outer: claim,
+                        inner: *other,
+                        nested: true,
+                    });
+                }
+                (false, false) => {}
+            }
+        }
+    }
+    None
 }
 
 /// Planned companions grouped by the `current_path` of the media file they
@@ -3907,6 +4641,8 @@ pub(crate) fn build_rename_plan_from_items(
         conflicts,
         errors,
         items,
+        title_folders: Vec::new(),
+        folder_repairs: Vec::new(),
     }
 }
 

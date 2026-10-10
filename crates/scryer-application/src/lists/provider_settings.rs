@@ -16,11 +16,46 @@ use scryer_plugin_sdk::{
 };
 
 use super::plugin::ListPluginProvider;
+use super::refusal::{self, refused};
 use crate::{AppError, AppResult, AppUseCase};
 
 /// The sensitive system setting that holds each provider's values, scoped by
 /// provider type.
 pub(crate) const LIST_PROVIDER_CONFIG_KEY: &str = "lists.provider_config";
+
+/// The config key a list provider reads its OAuth app client id from.
+pub(crate) const CLIENT_ID_CONFIG_KEY: &str = "client_id";
+
+/// List providers SMG may issue a public OAuth client id for at enrollment.
+/// Each has a declared [`gateway_list_client_id_setting_key`] setting.
+pub const GATEWAY_LIST_CLIENT_ID_PROVIDERS: [&str; 4] = ["anilist", "mal", "simkl", "trakt"];
+
+/// The system setting holding the public OAuth client id SMG issued for
+/// `provider_type` at enrollment, such as `lists.trakt.client_id`.
+pub fn gateway_list_client_id_setting_key(provider_type: &str) -> String {
+    format!(
+        "lists.{}.{CLIENT_ID_CONFIG_KEY}",
+        provider_type.trim().to_ascii_lowercase()
+    )
+}
+
+/// `values` with the gateway-issued client id under `client_id`, unless the
+/// operator already set one. A blank gateway id adds nothing.
+pub(crate) fn with_gateway_client_id(
+    mut values: BTreeMap<String, String>,
+    gateway_client_id: Option<&str>,
+) -> BTreeMap<String, String> {
+    let Some(id) = gateway_client_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return values;
+    };
+    let operator_set = values
+        .get(CLIENT_ID_CONFIG_KEY)
+        .is_some_and(|value| !value.trim().is_empty());
+    if !operator_set {
+        values.insert(CLIENT_ID_CONFIG_KEY.to_string(), id.to_string());
+    }
+    values
+}
 
 /// Every provider's server-wide values, keyed by provider type.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -182,9 +217,10 @@ pub(crate) fn merge_provider_settings(
         .collect::<BTreeMap<_, _>>();
     for (key, value) in changes {
         if !fields.iter().any(|field| &field.key == key) {
-            return Err(AppError::Validation(format!(
-                "'{key}' is not a server-wide setting of this list provider"
-            )));
+            return Err(refused(
+                refusal::PROVIDER_SETTING_UNKNOWN,
+                format!("'{key}' is not a server-wide setting of this list provider"),
+            ));
         }
         match value
             .as_deref()
@@ -216,6 +252,48 @@ impl AppUseCase {
             .unwrap_or_default())
     }
 
+    /// The public OAuth client id SMG issued for `provider_type`, if any.
+    async fn gateway_list_client_id(&self, provider_type: &str) -> Option<String> {
+        let key = gateway_list_client_id_setting_key(provider_type);
+        match self.read_setting_string_value(&key, None).await {
+            Ok(value) => value.filter(|value| !value.trim().is_empty()),
+            Err(error) => {
+                tracing::warn!(
+                    provider_type,
+                    error = %error,
+                    "could not read a list provider's gateway client id"
+                );
+                None
+            }
+        }
+    }
+
+    /// A provider's operator-entered values, with the gateway client id
+    /// filled in where the operator set none.
+    async fn provider_config_with_gateway_client_id(
+        &self,
+        provider_type: &str,
+        has_server_fields: bool,
+    ) -> BTreeMap<String, String> {
+        let stored = if has_server_fields {
+            match self.stored_list_provider_config(provider_type).await {
+                Ok(values) => values,
+                Err(error) => {
+                    tracing::warn!(
+                        provider_type,
+                        error = %error,
+                        "could not read a list provider's server-wide settings"
+                    );
+                    BTreeMap::new()
+                }
+            }
+        } else {
+            BTreeMap::new()
+        };
+        let gateway_id = self.gateway_list_client_id(provider_type).await;
+        with_gateway_client_id(stored, gateway_id.as_deref())
+    }
+
     /// Every installed provider's stored values. A provider whose values
     /// cannot be read gets none, so its fetch reports the missing key itself.
     pub(crate) async fn load_list_provider_configs(&self) -> ListProviderConfigs {
@@ -224,16 +302,12 @@ impl AppUseCase {
             let Some(provider_type) = provider_type_of(&descriptor) else {
                 continue;
             };
-            if server_fields(&descriptor).is_empty() {
-                continue;
-            }
-            match self.stored_list_provider_config(&provider_type).await {
-                Ok(values) => configs.insert(&provider_type, values),
-                Err(error) => tracing::warn!(
-                    provider_type = provider_type.as_str(),
-                    error = %error,
-                    "could not read a list provider's server-wide settings"
-                ),
+            let has_server_fields = !server_fields(&descriptor).is_empty();
+            let values = self
+                .provider_config_with_gateway_client_id(&provider_type, has_server_fields)
+                .await;
+            if has_server_fields || !values.is_empty() {
+                configs.insert(&provider_type, values);
             }
         }
         configs
@@ -250,17 +324,8 @@ impl AppUseCase {
         else {
             return BTreeMap::new();
         };
-        match self.stored_list_provider_config(&provider_type).await {
-            Ok(values) => values,
-            Err(error) => {
-                tracing::warn!(
-                    provider_type = provider_type.as_str(),
-                    error = %error,
-                    "could not read a list provider's server-wide settings"
-                );
-                BTreeMap::new()
-            }
-        }
+        self.provider_config_with_gateway_client_id(&provider_type, true)
+            .await
     }
 
     /// The server-wide fields of every installed provider that declares any.

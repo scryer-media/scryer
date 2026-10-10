@@ -784,6 +784,13 @@ async fn set_primary_movie_file_scopes_episode_promotion_to_linked_files() {
         .link_file_to_episode(&old_primary_id, "episode-1")
         .await
         .expect("link old primary to episode");
+    // A new link starts Additional, as in the store.
+    app.services
+        .library
+        .media_files
+        .set_media_file_roles_for_episode(&title.id, "episode-1", &old_primary_id, &[])
+        .await
+        .expect("make the old primary the episode's primary");
     let new_primary_id = app
         .services
         .library
@@ -822,6 +829,12 @@ async fn set_primary_movie_file_scopes_episode_promotion_to_linked_files() {
         .link_file_to_episode(&unrelated_primary_id, "episode-2")
         .await
         .expect("link unrelated primary to episode");
+    app.services
+        .library
+        .media_files
+        .set_media_file_roles_for_episode(&title.id, "episode-2", &unrelated_primary_id, &[])
+        .await
+        .expect("make the unrelated file its episode's primary");
 
     app.set_primary_movie_file(&user, &title.id, &new_primary_id)
         .await
@@ -3060,5 +3073,45 @@ async fn a_tag_patch_naming_a_label_on_both_sides_is_refused_before_any_write() 
             .iter()
             .any(|tag| tag == "keep"),
         "nothing may be written when the patch contradicts itself"
+    );
+}
+
+#[tokio::test]
+async fn custom_release_names_survive_provider_hydration() {
+    let (app, user) = bootstrap();
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Primary Title".into(),
+                facet: MediaFacet::Series,
+                tags: vec![format!(
+                    "{}Över Atlanten II",
+                    scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+                )],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let refreshed = app
+        .services
+        .catalog
+        .titles
+        .update_title_hydrated_metadata(
+            &title.id,
+            TitleMetadataUpdate {
+                aliases: vec!["Provider Name".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(refreshed.custom_search_aliases(), vec!["Över Atlanten II"]);
+    assert!(
+        refreshed
+            .with_custom_search_aliases()
+            .aliases
+            .contains(&"Över Atlanten II".into())
     );
 }

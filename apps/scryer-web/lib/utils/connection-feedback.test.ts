@@ -7,25 +7,26 @@ import {
 } from "./connection-feedback.ts";
 
 test("connection feedback emits one terminal success message", async () => {
-  const statuses: string[] = [];
+  const statuses: Array<[string, string | undefined]> = [];
 
   await runConnectionFeedback({
-    setGlobalStatus: (status) => statuses.push(status),
+    setGlobalStatus: (status, options) => statuses.push([status, options?.level]),
     startMessage: "Testing",
     successMessage: "Connected",
     failureFallbackMessage: "Failed",
     run: async () => undefined,
   });
 
-  assert.deepEqual(statuses, ["Testing", "Connected"]);
+  // The progress note stays out of the toasts; the outcome states its level.
+  assert.deepEqual(statuses, [["Testing", undefined], ["Connected", "SUCCESS"]]);
 });
 
 test("connection feedback emits one terminal failure message", async () => {
-  const statuses: string[] = [];
+  const statuses: Array<[string, string | undefined]> = [];
 
   await assert.rejects(
     runConnectionFeedback({
-      setGlobalStatus: (status) => statuses.push(status),
+      setGlobalStatus: (status, options) => statuses.push([status, options?.level]),
       successMessage: "Connected",
       failureFallbackMessage: "Failed",
       run: async () => {
@@ -34,5 +35,5 @@ test("connection feedback emits one terminal failure message", async () => {
     }),
     isReportedConnectionFeedbackError,
   );
-  assert.deepEqual(statuses, ["Unavailable"]);
+  assert.deepEqual(statuses, [["Unavailable", "ERROR"]]);
 });

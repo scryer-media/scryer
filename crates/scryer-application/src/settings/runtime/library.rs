@@ -977,6 +977,13 @@ impl AppUseCase {
             .await?;
 
         Ok(LibrarySettings {
+            search_languages: self
+                .read_setting_json_value::<Vec<String>>(
+                    crate::SEARCH_LANGUAGES_KEY,
+                    Some(&library.id),
+                )
+                .await?
+                .unwrap_or_default(),
             required_audio_languages_override,
             required_audio_languages,
             metadata_language_override,
@@ -1439,6 +1446,8 @@ impl AppUseCase {
             .lock()
             .await;
         let is_anime_library = library.facet == MediaFacet::Anime;
+        let search_languages =
+            crate::normalize_search_languages(settings.search_languages.clone().unwrap_or_default())?;
         let metadata_language_override = normalize_optional_string(settings.metadata_language.clone())
             .map(|value| {
                 crate::normalize_metadata_language_code(&value).ok_or_else(|| {
@@ -1484,6 +1493,16 @@ impl AppUseCase {
             .and_then(|profile_id| normalize_optional_string(Some(profile_id)))
         {
             self.validate_quality_profile_id(&profile_id).await?;
+        }
+
+        if settings.search_languages.is_some() {
+            self.upsert_scoped_system_setting_json(
+                crate::SEARCH_LANGUAGES_KEY,
+                &library.id,
+                &search_languages,
+                Some(actor.id.clone()),
+            )
+            .await?;
         }
 
         if let Some(languages) = settings.required_audio_languages {

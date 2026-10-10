@@ -177,7 +177,8 @@ impl AppUseCase {
         }
     }
 
-    pub async fn append_domain_event(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+    pub async fn append_domain_event(&self, mut event: NewDomainEvent) -> AppResult<DomainEvent> {
+        crate::url_redaction::redact_new_domain_event(&mut event);
         let stored = self.services.events.domain_events.append(event).await?;
         self.publish_stored_domain_event(&stored).await;
         Ok(stored)
@@ -198,7 +199,9 @@ impl AppUseCase {
             .events
             .domain_event_broadcast
             .send(stored.sequence);
-        if crate::notifications::dispatcher::notification_event_type(&stored.payload).is_some() {
+        if !matches!(stored.stream, scryer_domain::DomainEventStream::User { .. })
+            && crate::notifications::dispatcher::notification_event_type(&stored.payload).is_some()
+        {
             tracing::debug!(
                 sequence = stored.sequence,
                 event_type = stored.payload.event_type().as_str(),
@@ -222,8 +225,11 @@ impl AppUseCase {
 
     pub async fn append_domain_events(
         &self,
-        events: Vec<NewDomainEvent>,
+        mut events: Vec<NewDomainEvent>,
     ) -> AppResult<Vec<DomainEvent>> {
+        events
+            .iter_mut()
+            .for_each(crate::url_redaction::redact_new_domain_event);
         let stored = self
             .services
             .events
@@ -257,7 +263,9 @@ impl AppUseCase {
         let notification_count = stored
             .iter()
             .filter(|event| {
-                crate::notifications::dispatcher::notification_event_type(&event.payload).is_some()
+                !matches!(event.stream, scryer_domain::DomainEventStream::User { .. })
+                    && crate::notifications::dispatcher::notification_event_type(&event.payload)
+                        .is_some()
             })
             .count();
         if notification_count > 0

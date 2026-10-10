@@ -771,9 +771,8 @@ fn queue_placement(queue_priority: Option<&str>) -> Option<PluginTorrentQueuePla
 
 fn derive_torrent_file_name(request: &DownloadClientAddRequest) -> Option<String> {
     request
-        .source_title
-        .clone()
-        .or_else(|| request.release_title.clone())
+        .source_title_without_password()
+        .or_else(|| request.release_title_without_password())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
@@ -837,6 +836,7 @@ fn resolved_artifact_source(
             bytes,
             file_name,
             content_type,
+            ..
         } => (
             DownloadSourceKind::NzbFile,
             ResolvedTorrentSource {
@@ -929,15 +929,15 @@ fn build_plugin_add_request(
             nzb_bytes_base64: resolved.nzb_bytes_base64,
             nzb_file_name: resolved.nzb_file_name,
             nzb_content_type: resolved.nzb_content_type,
-            source_title: request.source_title.clone(),
-            source_password: request.source_password.clone(),
+            source_title: request.source_title_without_password(),
+            source_password: request.password_candidates().first().map(str::to_string),
+            password_candidates: request.password_candidates().iter().cloned().collect(),
         },
         release: PluginDownloadRelease {
             download_id: request.download_id.map(|id| id.to_wire()),
             release_title: request
-                .release_title
-                .clone()
-                .or_else(|| request.source_title.clone()),
+                .release_title_without_password()
+                .or_else(|| request.source_title_without_password()),
             import_purpose: Some(request.purpose.as_str().to_string()),
             is_recent: request.is_recent,
             season_pack: request.season_pack,
@@ -2702,6 +2702,7 @@ mod component_routing_tests {
 
     fn descriptor() -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: "fixture-download-client".to_string(),
             name: "Fixture Download Client".to_string(),
             version: "1.0.0".to_string(),

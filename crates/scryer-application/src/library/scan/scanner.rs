@@ -847,6 +847,15 @@ pub struct EpisodeMetadata {
 
 #[async_trait]
 pub trait MetadataGateway: Send + Sync {
+    async fn canonical_tag_vocabulary(
+        &self,
+        _known_version: Option<&str>,
+    ) -> AppResult<crate::lists::vocabulary::VocabularyReply> {
+        Err(crate::AppError::Repository(
+            "canonical vocabulary is not configured".into(),
+        ))
+    }
+
     async fn search_tvdb(
         &self,
         query: &str,
@@ -952,6 +961,15 @@ pub trait MetadataGateway: Send + Sync {
         ))
     }
 
+    async fn list_movie_targets(
+        &self,
+        _ids: &[i64],
+    ) -> AppResult<Vec<crate::lists::gateway::ListMovieTarget>> {
+        Err(AppError::Repository(
+            "metadata gateway listMovieTargets is not implemented".into(),
+        ))
+    }
+
     /// The public charts an import list may follow.
     async fn list_chart_catalog(
         &self,
@@ -975,18 +993,6 @@ pub trait MetadataGateway: Send + Sync {
         let _ = (provider, chart_key, scope, limit, language);
         Err(AppError::Repository(
             "metadata gateway listChartItems is not implemented".into(),
-        ))
-    }
-
-    /// A public IMDb list, proxied by the gateway, in list order. Entries the
-    /// gateway has no title for come back unresolved with their IMDb id only.
-    async fn list_imdb_user_list(
-        &self,
-        list_id: &str,
-    ) -> AppResult<Vec<crate::lists::gateway::ListChartItem>> {
-        let _ = list_id;
-        Err(AppError::Repository(
-            "metadata gateway listImdbUserList is not implemented".into(),
         ))
     }
 

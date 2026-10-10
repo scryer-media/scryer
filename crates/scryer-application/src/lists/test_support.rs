@@ -105,6 +105,9 @@ pub(crate) fn plugin_item(key: &str) -> ListPluginItem {
 pub(crate) fn resolved_item(key: &str) -> ResolvedItem {
     let item = plugin_item(key);
     ResolvedItem {
+        series_movie: None,
+        resolution_reason: None,
+        facts: None,
         external_ids: vec![tmdb(&format!("{key}-id"))],
         item,
         kind: Some(MediaFacet::Movie),
@@ -120,6 +123,7 @@ pub(crate) fn membership(
     state: scryer_domain::ListMembershipState,
 ) -> ListMembership {
     ListMembership {
+        series_movie: None,
         subscription_id: subscription_id.to_string(),
         item_key: key.to_string(),
         rank: None,
@@ -145,6 +149,10 @@ pub(crate) fn membership(
 
 #[derive(Default)]
 pub(crate) struct MemoryListStore {
+    pub vocabulary: Mutex<Option<super::vocabulary::VocabularySnapshot>>,
+    pub vocabulary_reads: std::sync::atomic::AtomicUsize,
+    pub vocabulary_writes: Mutex<Vec<bool>>,
+    pub fail_vocabulary_write: std::sync::atomic::AtomicBool,
     pub subscriptions: Mutex<Vec<ListSubscription>>,
     pub memberships: Mutex<Vec<ListMembership>>,
     pub exclusions: Mutex<Vec<ListExclusion>>,
@@ -203,6 +211,26 @@ impl MemoryListStore {
 
 #[async_trait]
 impl ListSubscriptionRepository for MemoryListStore {
+    async fn vocabulary_cache(&self) -> AppResult<Option<super::vocabulary::VocabularySnapshot>> {
+        self.vocabulary_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.vocabulary.lock().unwrap().clone())
+    }
+    async fn save_vocabulary_cache(
+        &self,
+        snapshot: &super::vocabulary::VocabularySnapshot,
+        unchanged: bool,
+    ) -> AppResult<()> {
+        if self
+            .fail_vocabulary_write
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository("fixture cache write failure".into()));
+        }
+        self.vocabulary_writes.lock().unwrap().push(unchanged);
+        *self.vocabulary.lock().unwrap() = Some(snapshot.clone());
+        Ok(())
+    }
     async fn create(&self, subscription: ListSubscription) -> AppResult<ListSubscription> {
         self.subscriptions
             .lock()
@@ -323,6 +351,13 @@ impl ListSubscriptionRepository for MemoryListStore {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn delete_sync_runs_older_than(&self, cutoff: DateTime<Utc>) -> AppResult<u32> {
+        let mut runs = self.runs.lock().unwrap();
+        let before = runs.len();
+        runs.retain(|run| run.started_at >= cutoff);
+        Ok(u32::try_from(before - runs.len()).unwrap_or(u32::MAX))
     }
 }
 
@@ -483,6 +518,23 @@ impl ListExclusionRepository for MemoryListStore {
 
 #[async_trait]
 impl UserListAccountRepository for MemoryListStore {
+    async fn unlink(&self, id: &str, owner: &str) -> AppResult<()> {
+        let mut accounts = self.accounts.lock().unwrap();
+        if !accounts
+            .iter()
+            .any(|row| row.id == id && row.user_id == owner)
+        {
+            return Err(AppError::NotFound("list account".into()));
+        }
+        self.subscriptions.lock().unwrap().retain(|row| {
+            !(row.credential_id.as_deref() == Some(id)
+                && row.owner_user_id == owner
+                && row.is_personal())
+        });
+        accounts.retain(|row| row.id != id);
+        Ok(())
+    }
+
     async fn create(&self, account: UserListAccount) -> AppResult<UserListAccount> {
         self.accounts.lock().unwrap().push(account.clone());
         Ok(account)
@@ -590,6 +642,8 @@ pub(crate) struct RecordingActions {
     /// How many times a title's existence was looked up.
     pub title_lookups: Mutex<u32>,
     pub owner_manages_titles: bool,
+    /// Makes the owner's permission lookup fail instead of answering.
+    pub owner_permission_unreadable: bool,
 }
 
 impl RecordingActions {
@@ -645,6 +699,9 @@ impl ListActions for RecordingActions {
         _subscription: &ListSubscription,
         _route: &ListRoute,
     ) -> AppResult<bool> {
+        if self.owner_permission_unreadable {
+            return Err(AppError::Repository("fixture failure".into()));
+        }
         Ok(self.owner_manages_titles)
     }
 
@@ -716,10 +773,27 @@ impl ListActions for RecordingActions {
 pub(crate) struct FixtureResolver {
     pub in_library: HashMap<String, String>,
     pub fail: bool,
+    pub facts: Mutex<Option<super::resolve::ListMetadataFacts>>,
+    pub fail_enrichment: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
 impl ListItemResolver for FixtureResolver {
+    async fn enrich(&self, items: &mut [ResolvedItem]) -> AppResult<()> {
+        if self
+            .fail_enrichment
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository(
+                "fixture enrichment unavailable".into(),
+            ));
+        }
+        for item in items {
+            item.facts = self.facts.lock().unwrap().clone();
+        }
+        Ok(())
+    }
+
     async fn resolve(&self, inputs: &[ResolveInput]) -> AppResult<Vec<ResolveOutput>> {
         if self.fail {
             return Err(AppError::Repository("fixture gateway down".into()));
@@ -727,6 +801,8 @@ impl ListItemResolver for FixtureResolver {
         Ok(inputs
             .iter()
             .map(|input| ResolveOutput {
+                series_movie: None,
+                resolution_reason: None,
                 resolved: true,
                 smg_title_id: None,
                 external_ids: Vec::new(),
@@ -741,11 +817,37 @@ impl ListItemResolver for FixtureResolver {
 
 // ── Plugin ─────────────────────────────────────────────────────────────────
 
+/// A provider with one public `user_list` source named by `list_id`, the
+/// source [`subscription`] follows.
 fn fixture_descriptor() -> PluginDescriptor {
-    let provider: ListProviderDescriptor =
+    use scryer_plugin_sdk::{
+        ListAuthBadge, ListProviderGroup, ListProviderItem, ListSourceParam, ListSourceParamType,
+    };
+    let mut provider: ListProviderDescriptor =
         serde_json::from_value(serde_json::json!({ "provider_type": PROVIDER }))
             .expect("minimal list descriptor");
+    provider.groups = vec![ListProviderGroup {
+        label: "Lists".to_string(),
+        auth_badge: ListAuthBadge::NoAccountNeedsValue,
+        items: vec![ListProviderItem {
+            id: format!("{PROVIDER}:user_list"),
+            name: "Fixture public list".to_string(),
+            description: None,
+            kinds: vec![ListMediaKind::Movie],
+            source_type: "user_list".to_string(),
+            params: vec![ListSourceParam {
+                key: "list_id".to_string(),
+                label: "List ID".to_string(),
+                param_type: ListSourceParamType::Text,
+                options: Vec::new(),
+                required: true,
+            }],
+            personal: false,
+            default_interval_seconds: 6 * 3600,
+        }],
+    }];
     PluginDescriptor {
+        settings: Vec::new(),
         id: PROVIDER.to_string(),
         name: "Fixture Lists".to_string(),
         version: "1.0.0".to_string(),
@@ -780,6 +882,22 @@ impl ScriptedLists {
             fetched: Mutex::new(Vec::new()),
             configs: Mutex::new(Vec::new()),
         })
+    }
+
+    pub(crate) fn with_media_param(param: scryer_plugin_sdk::ListSourceParam) -> Arc<Self> {
+        let mut client = Self::new();
+        let ProviderDescriptor::ListProvider(provider) =
+            &mut Arc::get_mut(&mut client).unwrap().descriptor.provider
+        else {
+            unreachable!();
+        };
+        provider.groups[0].items[0].params.push(param);
+        provider.groups[0].items[0].kinds = vec![
+            ListMediaKind::Movie,
+            ListMediaKind::Series,
+            ListMediaKind::Anime,
+        ];
+        client
     }
 
     /// Serve `keys` for `subscription_id`'s list.
@@ -877,12 +995,11 @@ pub(crate) fn keys_of(rows: &[ListMembership]) -> HashSet<String> {
 
 // ── Gateway charts ─────────────────────────────────────────────────────────
 
-/// Serves scripted chart and IMDb list entries; anything not scripted is
+/// Serves scripted chart entries; anything not scripted is
 /// unavailable, as a gateway outage would be.
 #[derive(Default)]
 pub(crate) struct ScriptedCharts {
     pub charts: Mutex<HashMap<String, Vec<super::gateway::ListChartItem>>>,
-    pub imdb_lists: Mutex<HashMap<String, Vec<super::gateway::ListChartItem>>>,
 }
 
 #[async_trait]
@@ -903,20 +1020,6 @@ impl super::fetch::ListChartSource for ScriptedCharts {
                     super::fetch::ListFailureClass::Unavailable,
                     "The metadata service",
                 )
-            })
-    }
-
-    async fn imdb_user_list(
-        &self,
-        list_id: &str,
-    ) -> Result<Vec<super::gateway::ListChartItem>, super::fetch::ListFailure> {
-        self.imdb_lists
-            .lock()
-            .unwrap()
-            .get(list_id)
-            .cloned()
-            .ok_or_else(|| {
-                super::fetch::ListFailure::new(super::fetch::ListFailureClass::NotFound, "IMDb")
             })
     }
 }

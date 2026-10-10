@@ -151,6 +151,7 @@ export function SubtitleSearchModal({
         setLanguage((current) => current || availableLanguagesRef.current[0] || "eng");
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       } finally {
         setSearching(false);
@@ -176,6 +177,7 @@ export function SubtitleSearchModal({
       if (!cancelled) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       }
     });
@@ -216,6 +218,7 @@ export function SubtitleSearchModal({
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       } finally {
         setDownloadingId(null);

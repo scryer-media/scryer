@@ -107,6 +107,52 @@ export type TitleMatchType =
   | "ID_ONLY"
   | "UNMATCHED";
 
+export type HeldImportSourcesReason =
+  | "SUBTITLES_PENDING"
+  | "SOURCE_CLEANUP_INCOMPLETE"
+  | "UNKNOWN"
+  | "ARCHIVE_EXTRACTION_FAILED";
+
+export type HeldDownloadClientPolicy = "REMOVES" | "REMOVES_AFTER_SEEDING" | "KEEPS" | "UNKNOWN";
+
+export type HeldImportSourcesSettlement =
+  | "IMPORTED"
+  | "AWAITING_IMPORT"
+  | "UNCHANGED"
+  | "UNTRACKED"
+  | "UNPROVEN"
+  | "NOT_SETTLED";
+
+export type HeldWorkspacePreservedReason =
+  | "NOT_OWNED"
+  | "UNSAFE"
+  | "HOLDS_UNIMPORTED_VIDEO"
+  | "IN_USE"
+  | "UNVERIFIED"
+  | "REMOVAL_FAILED"
+  | "DOWNLOAD_NOT_IMPORTED";
+
+/** Held sources of a download: every import and title a release covers. */
+export type HeldImportSources = {
+  importId: string;
+  importIds: string[];
+  titleNames: string[];
+  reason: HeldImportSourcesReason;
+  clientPolicy: HeldDownloadClientPolicy;
+};
+
+/** Outcome of releasing a download's held sources. */
+export type HeldImportSourcesReleased = {
+  importId: string;
+  releasedImportIds: string[];
+  settlement: HeldImportSourcesSettlement;
+  clientPolicy: HeldDownloadClientPolicy;
+  workspaceRemoved: boolean;
+  workspacesRemoved: number;
+  preservedWorkspaceReasons: HeldWorkspacePreservedReason[];
+  workspaceLookupIncomplete: boolean;
+};
+
 export type DownloadQueueItem = {
   id: string;
   titleId: string | null;
@@ -132,6 +178,10 @@ export type DownloadQueueItem = {
   lastUpdatedAt: string | null;
   attentionRequired: boolean;
   attentionReason: string | null;
+  passwordFailureCode?: "ARCHIVE_PASSWORD_REQUIRED" | "ARCHIVE_PASSWORD_OR_CORRUPTION" | null;
+  passwordRetryImportId?: string | null;
+  /** Held sources of this download that the viewer may release. */
+  heldImportSources?: HeldImportSources | null;
   downloadClientItemId: string;
   downloadId: string | null;
   importStatus: ImportStatus | null;

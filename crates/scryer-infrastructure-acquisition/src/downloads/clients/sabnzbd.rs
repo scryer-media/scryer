@@ -428,6 +428,11 @@ impl SabnzbdDownloadClient {
         }
         let json = self.api_get(&params).await?;
 
+        let paused = json
+            .get("queue")
+            .and_then(|queue| queue.get("paused"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let slots = json
             .get("queue")
             .and_then(slots_from_api_section)
@@ -480,7 +485,16 @@ impl SabnzbdDownloadClient {
                     };
 
                 let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
-                let state = sabnzbd_queue_state(status)?;
+                let mut state = sabnzbd_queue_state(status)?;
+                // A global pause stops downloading only; verification, repair,
+                // extraction, moving and scripts keep running. This deliberately
+                // diverges from Sonarr, which reports every slot as paused.
+                if paused
+                    && sabnzbd_queue_status_is_download_phase(status)
+                    && sabnzbd_queue_priority(slot.get("priority").and_then(Value::as_str)) != 2
+                {
+                    state = DownloadQueueState::Paused;
+                }
 
                 let percentage = slot
                     .get("percentage")
@@ -690,6 +704,15 @@ impl SabnzbdDownloadClient {
         }) {
             return Err(AppError::Repository(
                 "SABnzbd history contains an invalid job identity".into(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        if slots
+            .iter()
+            .any(|slot| !seen.insert(slot.get("nzo_id").and_then(Value::as_str)))
+        {
+            return Err(AppError::Repository(
+                "duplicate nzo_id in SABnzbd history response".into(),
             ));
         }
         Ok(slots)
@@ -1130,8 +1153,8 @@ impl DownloadClient for SabnzbdDownloadClient {
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
         let title = &request.title;
-        let nzb_name = request
-            .source_title
+        let source_title = request.source_title_without_password();
+        let nzb_name = source_title
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -1152,12 +1175,7 @@ impl DownloadClient for SabnzbdDownloadClient {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
-            let password = request
-                .source_password
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty() && *value != "0")
-                .map(str::to_string);
+            let password = request.password_candidates().first().map(str::to_string);
             let nzb_name_owned = nzb_name.to_string();
             let queue_priority =
                 sabnzbd_queue_priority(request.queue_priority.as_deref()).to_string();
@@ -1451,10 +1469,74 @@ impl DownloadClient for SabnzbdDownloadClient {
         Ok(())
     }
 
+    async fn retry_failed_job(
+        &self,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        use scryer_application::DownloadClientRetryOutcome as Outcome;
+        if password.is_empty() || id.is_empty() {
+            return Err(AppError::Validation(
+                "job ID and replacement password are required".into(),
+            ));
+        }
+        let url = self.resolve_addfile_url().await?;
+        let mut fields = vec![
+            ("output", "json".to_string()),
+            ("mode", "retry".to_string()),
+            ("value", id.to_string()),
+            ("password", password.to_string()),
+        ];
+        match self.api_auth()? {
+            SabApiAuth::ApiKey(key) => fields.push(("apikey", key)),
+            SabApiAuth::Credentials { username, password } => {
+                fields.push(("ma_username", username));
+                fields.push(("ma_password", password));
+            }
+        }
+        // Secrets stay in the POST body. Dispatch once to one resolved endpoint.
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields.iter().map(|(name, value)| (*name, value.as_str())))
+            .finish();
+        let response = match self
+            .outbound_http
+            .send(self.mutation_policy("sabnzbd_retry"), || {
+                self.outbound_http
+                    .client()
+                    .post(&url)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .body(body.clone())
+                    .timeout(SABNZBD_HTTP_REQUEST_TIMEOUT)
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => return Ok(Outcome::Uncertain),
+        };
+        if !response.status().is_success() {
+            return Ok(Outcome::Uncertain);
+        }
+        let Ok(response) = response.json::<Value>().await else {
+            return Ok(Outcome::Uncertain);
+        };
+        match response.get("status").and_then(Value::as_bool) {
+            Some(false) => Ok(Outcome::Refused),
+            Some(true) => Ok(response
+                .get("nzo_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(|id| Outcome::Accepted {
+                    item_id: id.to_string(),
+                })
+                .unwrap_or(Outcome::Uncertain)),
+            None => Ok(Outcome::Uncertain),
+        }
+    }
+
     /// A history delete includes `del_files=1` only when `remove_data` is
     /// requested, alongside nzbdav's non-standard `del_completed_files=1`
-    /// (see `send_delete`). Queue deletes continue to include `del_files=1`
-    /// regardless.
+    /// (see `send_delete`). Queue deletes always send `del_files`, as `1` when
+    /// `remove_data` is requested and `0` otherwise.
     ///
     /// `is_history` is only a hint: the caller derives it from the last polled
     /// state, and SAB moves a job into history the moment post-processing
@@ -1501,12 +1583,27 @@ impl DownloadClient for SabnzbdDownloadClient {
                         in_queue,
                         "sabnzbd queue probe contradicts the delete hint; retrying in the other mode"
                     );
-                    // The probe cannot tell "removed by the hinted delete"
-                    // from "never in that list", so this second delete is
-                    // best effort: backends that answer an unknown id with an
-                    // error (decypharr) must not turn a delete that already
-                    // landed into a failure.
-                    if let Err(error) = self.send_delete(id, !is_history, remove_data).await {
+                    // A positive queue observation proves the job remains.
+                    // Only an absent job permits a best-effort fallback for
+                    // compatible backends that reject already removed IDs.
+                    let fallback = self
+                        .send_delete(id, !is_history, remove_data)
+                        .await
+                        .and_then(|response| {
+                            if in_queue
+                                && sab_delete_removed_hinted_id(&response, id) == Some(false)
+                            {
+                                Err(AppError::Repository(
+                                    "SABnzbd did not remove the observed queue job".into(),
+                                ))
+                            } else {
+                                Ok(())
+                            }
+                        });
+                    if let Err(error) = fallback {
+                        if in_queue {
+                            return Err(error);
+                        }
                         debug!(
                             nzo_id = id,
                             hinted_history = is_history,
@@ -1538,7 +1635,34 @@ impl SabnzbdDownloadClient {
     /// the caller can tell whether anything was actually removed.
     async fn send_delete(&self, id: &str, is_history: bool, remove_data: bool) -> AppResult<Value> {
         if is_history {
-            let mut params = vec![("mode", "history"), ("name", "delete"), ("value", id)];
+            // Only an exact job mapped to Failed authorizes permanent history removal.
+            // Unknown states and compatible APIs retain the archive default.
+            let failed = self
+                .api_get(&[
+                    ("mode", "history"),
+                    ("nzo_ids", id),
+                    ("start", "0"),
+                    ("limit", "1"),
+                ])
+                .await
+                .ok()
+                .and_then(|json| Self::history_slots_from_response(&json).ok())
+                .is_some_and(|slots| {
+                    slots.iter().any(|slot| {
+                        slot.get("nzo_id").and_then(Value::as_str) == Some(id)
+                            && sabnzbd_history_state(
+                                slot.get("status").and_then(Value::as_str).unwrap_or(""),
+                                slot.get("fail_message").and_then(Value::as_str),
+                            )
+                            .is_some_and(|(state, _)| state == DownloadQueueState::Failed)
+                    })
+                });
+            let mut params = vec![
+                ("mode", "history"),
+                ("name", "delete"),
+                ("value", id),
+                ("archive", if failed { "0" } else { "1" }),
+            ];
             if remove_data {
                 params.push(("del_files", "1"));
                 // nzbdav ignores `del_files` on history deletes and only drops
@@ -1558,7 +1682,7 @@ impl SabnzbdDownloadClient {
                     ("mode", "queue"),
                     ("name", "delete"),
                     ("value", id),
-                    ("del_files", "1"),
+                    ("del_files", if remove_data { "1" } else { "0" }),
                 ],
                 "sabnzbd_delete_queue_item",
             )
@@ -2294,8 +2418,8 @@ fn sabnzbd_queue_state(status: &str) -> Option<DownloadQueueState> {
     let normalized = status.to_ascii_uppercase();
     match normalized.as_str() {
         "DELETED" => None,
-        "DOWNLOADING" => Some(DownloadQueueState::Downloading),
-        "QUEUED" | "FETCHING" | "PROPAGATING" | "GRABBING" => Some(DownloadQueueState::Queued),
+        "DOWNLOADING" | "CHECKING" | "FETCHING" => Some(DownloadQueueState::Downloading),
+        "QUEUED" | "PROPAGATING" | "GRABBING" => Some(DownloadQueueState::Queued),
         "PAUSED" => Some(DownloadQueueState::Paused),
         // Post-processing stages reported in queue (SABnzbd 4.x can show these)
         "VERIFYING" | "QUICKCHECK" => Some(DownloadQueueState::Verifying),
@@ -2304,6 +2428,13 @@ fn sabnzbd_queue_state(status: &str) -> Option<DownloadQueueState> {
         "MOVING" | "RUNNING" => Some(DownloadQueueState::Downloading),
         _ => Some(DownloadQueueState::Queued),
     }
+}
+
+fn sabnzbd_queue_status_is_download_phase(status: &str) -> bool {
+    matches!(
+        status.to_ascii_uppercase().as_str(),
+        "DOWNLOADING" | "CHECKING" | "FETCHING" | "QUEUED" | "PROPAGATING" | "GRABBING"
+    )
 }
 
 fn sabnzbd_postprocessing_stage(status: &str) -> Option<String> {
@@ -2338,17 +2469,16 @@ fn sabnzbd_history_state(
         "REPAIRING" => (DownloadQueueState::Repairing, None),
         "EXTRACTING" => (DownloadQueueState::Extracting, None),
         "MOVING" | "RUNNING" => (DownloadQueueState::Downloading, None),
-        _ => {
-            if normalized.starts_with("FAILED") {
-                let reason = status
-                    .split_once(" - ")
-                    .map(|(_, detail)| detail.trim().to_string())
-                    .filter(|d| !d.is_empty());
-                (DownloadQueueState::Failed, reason)
-            } else {
-                (DownloadQueueState::Downloading, None)
-            }
-        }
+        "IDLE" | "CHECKING" | "DOWNLOADING" | "FETCHING" | "GRABBING" | "PAUSED"
+        | "PROPAGATING" => (DownloadQueueState::Downloading, None),
+        "" => (
+            DownloadQueueState::Warning,
+            Some("SABnzbd history entry has no status".to_string()),
+        ),
+        _ => (
+            DownloadQueueState::Warning,
+            Some(format!("Unrecognized SABnzbd history status: {status}")),
+        ),
     };
 
     if state == DownloadQueueState::Failed
@@ -2356,7 +2486,23 @@ fn sabnzbd_history_state(
             .map(str::trim)
             .filter(|value| !value.is_empty())
     {
-        if fail_message.eq_ignore_ascii_case(UNPACK_WRITE_FAILURE) {
+        if fail_message.eq_ignore_ascii_case("Unpacking failed, archive requires a password") {
+            return Some((
+                DownloadQueueState::Failed,
+                Some(
+                    scryer_domain::DownloadPasswordFailure::Required
+                        .message()
+                        .into(),
+                ),
+            ));
+        }
+        // Deliberately broader than Sonarr's exact match: SAB emits the same
+        // recoverable write failure with additional details and a disk-full variant.
+        if fail_message
+            .get(..UNPACK_WRITE_FAILURE.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(UNPACK_WRITE_FAILURE))
+            || fail_message.eq_ignore_ascii_case("Unpacking failed, disk full")
+        {
             return Some((DownloadQueueState::Warning, Some(fail_message.to_string())));
         }
         if reason.is_none() {
@@ -2645,6 +2791,284 @@ mod tests {
 
     use crate::downloads::staged_nzb_store::FileSystemStagedNzbStore;
 
+    #[tokio::test]
+    async fn sabnzbd_queue_pause_respects_force_priority_and_item_pause() {
+        for paused in [false, true] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(query_param("mode", "queue"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "queue": {"paused": paused, "slots": [
+                        {"nzo_id": "normal", "status": "Downloading", "priority": "Normal"},
+                        {"nzo_id": "force", "status": "Downloading", "priority": "Force"},
+                        {"nzo_id": "item-paused", "status": "Paused", "priority": "Force"},
+                        {"nzo_id": "extracting", "status": "Extracting", "priority": "Normal"},
+                        {"nzo_id": "moving", "status": "Moving", "priority": "Normal"}
+                    ]}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+            let items = client.list_queue().await.unwrap();
+            assert_eq!(items.len(), 5);
+            assert_eq!(
+                items[0].state,
+                if paused {
+                    DownloadQueueState::Paused
+                } else {
+                    DownloadQueueState::Downloading
+                }
+            );
+            assert_eq!(items[1].state, DownloadQueueState::Downloading);
+            assert_eq!(items[2].state, DownloadQueueState::Paused);
+            assert_eq!(items[3].state, DownloadQueueState::Extracting);
+            assert_eq!(items[4].state, DownloadQueueState::Downloading);
+        }
+    }
+
+    #[test]
+    fn sabnzbd_queue_distinguishes_active_work_from_waiting() {
+        for status in ["Checking", "Fetching", "Downloading"] {
+            assert_eq!(
+                sabnzbd_queue_state(status),
+                Some(DownloadQueueState::Downloading)
+            );
+        }
+        for status in ["Queued", "Propagating", "Grabbing", "FutureStatus", ""] {
+            assert_eq!(
+                sabnzbd_queue_state(status),
+                Some(DownloadQueueState::Queued)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_queue_delete_honors_keep_data() {
+        for remove_data in [false, true] {
+            let server = MockServer::start().await;
+            mount_sab_delete(
+                &server,
+                "queue",
+                "job",
+                json!({"status": true, "nzo_ids": ["job"]}),
+                1,
+            )
+            .await;
+            let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+            client
+                .delete_queue_item("job", false, remove_data)
+                .await
+                .unwrap();
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(
+                requests[0]
+                    .url
+                    .query_pairs()
+                    .any(|(key, value)| key == "del_files"
+                        && value == if remove_data { "1" } else { "0" })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_known_queued_job_propagates_delete_rejection() {
+        let server = MockServer::start().await;
+        mount_sab_delete(&server, "history", "job", json!({"status": true}), 1).await;
+        mount_sab_queue_listing(&server, json!([{"nzo_id": "job"}]), 1).await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "queue"))
+            .and(query_param("name", "delete"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(json!({"status": false, "error": "synthetic rejection"})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        assert!(client.delete_queue_item("job", true, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_known_queued_job_propagates_empty_removal_report() {
+        let server = MockServer::start().await;
+        mount_sab_delete(&server, "history", "job", json!({"status": true}), 1).await;
+        mount_sab_queue_listing(&server, json!([{"nzo_id": "job"}]), 1).await;
+        mount_sab_delete(
+            &server,
+            "queue",
+            "job",
+            json!({"status": false, "nzo_ids": []}),
+            1,
+        )
+        .await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        assert!(client.delete_queue_item("job", true, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_history_archives_completed_but_removes_exact_failed_record() {
+        for (observed_id, status, fail_message, archive) in [
+            ("job", "Failed", None, "0"),
+            ("job", "Completed", None, "1"),
+            ("other", "Failed", None, "1"),
+            ("job", "Failed", Some("54 articles were missing"), "0"),
+            (
+                "job",
+                "Failed",
+                Some("Unpacking failed, write error or disk is full?"),
+                "1",
+            ),
+            (
+                "job",
+                "Failed",
+                Some("Unpacking failed, write error or disk is full? detail"),
+                "1",
+            ),
+            ("job", "Failed", Some("Unpacking failed, disk full"), "1"),
+            ("job", "FutureStatus", None, "1"),
+            ("job", "FailedFuture", None, "1"),
+            ("job", "Running", None, "1"),
+            ("job", "", None, "1"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param_is_missing("name"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    json!({"history": {"slots": [{"nzo_id": observed_id, "status": status, "fail_message": fail_message}]}}),
+                ))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param("name", "delete"))
+                .and(query_param("archive", archive))
+                .and(query_param_is_missing("del_files"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"status": true, "nzo_ids": ["job"]})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+            client.delete_queue_item("job", true, false).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_uncertain_history_probe_preserves_archive_and_data_flag() {
+        for slots in [
+            json!([]),
+            json!([{"nzo_id": "job", "status": "Failed"}, {"nzo_id": "job", "status": "Running"}]),
+            json!([{"status": "Failed"}]),
+        ] {
+            for remove_data in [false, true] {
+                let server = MockServer::start().await;
+                Mock::given(method("GET"))
+                    .and(query_param("mode", "history"))
+                    .and(query_param("nzo_ids", "job"))
+                    .and(query_param_is_missing("name"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(json!({"history": {"slots": slots}})),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let delete = Mock::given(method("GET"))
+                    .and(query_param("mode", "history"))
+                    .and(query_param("name", "delete"))
+                    .and(query_param("value", "job"))
+                    .and(query_param("archive", "1"));
+                let delete = if remove_data {
+                    delete
+                        .and(query_param("del_files", "1"))
+                        .and(query_param("del_completed_files", "1"))
+                } else {
+                    delete
+                        .and(query_param_is_missing("del_files"))
+                        .and(query_param_is_missing("del_completed_files"))
+                };
+                delete
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(json!({"status": true, "nzo_ids": ["job"]})),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+                client
+                    .delete_queue_item("job", true, remove_data)
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn password_retry_posts_secret_once_and_preserves_ambiguous_outcome() {
+        use scryer_application::DownloadClientRetryOutcome as Outcome;
+        for valid_reply in [true, false] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api"))
+                .and(query_param("mode", "queue"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"queue": {"slots": []}})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api"))
+                .respond_with(if valid_reply {
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"status": true, "nzo_id": "new-job"}))
+                } else {
+                    ResponseTemplate::new(502).set_body_string("synthetic secret response")
+                })
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client =
+                super::SabnzbdDownloadClient::new(server.uri(), "synthetic-api-key".into());
+            let result = client
+                .retry_failed_job("old-job", " synthetic &=密碼 ")
+                .await
+                .unwrap();
+            assert_eq!(
+                result,
+                if valid_reply {
+                    Outcome::Accepted {
+                        item_id: "new-job".into(),
+                    }
+                } else {
+                    Outcome::Uncertain
+                }
+            );
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 2);
+            let request = &requests[1];
+            assert!(request.url.query().is_none());
+            let fields: std::collections::HashMap<_, _> =
+                url::form_urlencoded::parse(&request.body)
+                    .into_owned()
+                    .collect();
+            assert_eq!(
+                fields.get("password").map(String::as_str),
+                Some(" synthetic &=密碼 ")
+            );
+            assert_eq!(fields.get("mode").map(String::as_str), Some("retry"));
+            assert_eq!(fields.get("value").map(String::as_str), Some("old-job"));
+        }
+    }
+
     fn test_add_request(download_id: &str) -> DownloadClientAddRequest {
         let facet = MediaFacet::Movie;
         DownloadClientAddRequest {
@@ -2695,6 +3119,7 @@ mod tests {
             source_hint: Some("https://example.invalid/release.nzb".to_string()),
             staged_nzb: None,
             resolved_download_artifact: Some(ResolvedDownloadArtifact::Nzb {
+                password_candidates: Default::default(),
                 bytes: b"<nzb></nzb>".to_vec(),
                 file_name: Some("Test Release.nzb".to_string()),
                 content_type: Some("application/x-nzb".to_string()),
@@ -2874,20 +3299,114 @@ mod tests {
     }
 
     #[test]
-    fn sabnzbd_unknown_history_status_remains_in_progress() {
+    fn sabnzbd_unknown_history_status_is_a_warning() {
+        for status in ["FutureStatus", "FailedFuture", "Failed - future detail"] {
+            assert_eq!(
+                sabnzbd_history_state(status, None),
+                Some((
+                    DownloadQueueState::Warning,
+                    Some(format!("Unrecognized SABnzbd history status: {status}"))
+                ))
+            );
+        }
         assert_eq!(
-            sabnzbd_history_state("FutureStatus", None),
-            Some((DownloadQueueState::Downloading, None))
+            sabnzbd_history_state("", None),
+            Some((
+                DownloadQueueState::Warning,
+                Some("SABnzbd history entry has no status".to_string())
+            ))
         );
     }
 
     #[test]
+    fn sabnzbd_known_history_states_keep_their_mapping() {
+        for (status, state) in [
+            ("Idle", DownloadQueueState::Downloading),
+            ("Checking", DownloadQueueState::Downloading),
+            ("Downloading", DownloadQueueState::Downloading),
+            ("Fetching", DownloadQueueState::Downloading),
+            ("Grabbing", DownloadQueueState::Downloading),
+            ("Paused", DownloadQueueState::Downloading),
+            ("Propagating", DownloadQueueState::Downloading),
+            ("Queued", DownloadQueueState::Queued),
+            ("QuickCheck", DownloadQueueState::Verifying),
+            ("Verifying", DownloadQueueState::Verifying),
+            ("Repairing", DownloadQueueState::Repairing),
+            ("Extracting", DownloadQueueState::Extracting),
+            ("Moving", DownloadQueueState::Downloading),
+            ("Running", DownloadQueueState::Downloading),
+            ("Completed", DownloadQueueState::Completed),
+            ("Failed", DownloadQueueState::Failed),
+        ] {
+            assert_eq!(
+                sabnzbd_history_state(status, None),
+                Some((state, None)),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
     fn sabnzbd_unpack_write_failure_is_a_warning() {
-        let message = "Unpacking failed, write error or disk is full?";
+        for message in [
+            "Unpacking failed, write error or disk is full?",
+            "Unpacking failed, write error or disk is full? /mnt/downloads/job.r01",
+            "Unpacking failed, disk full",
+            "  UNPACKING FAILED, WRITE ERROR OR DISK IS FULL? detail  ",
+            "  UNPACKING FAILED, DISK FULL  ",
+        ] {
+            assert_eq!(
+                sabnzbd_history_state("Failed", Some(message)),
+                Some((
+                    DownloadQueueState::Warning,
+                    Some(message.trim().to_string())
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn sabnzbd_password_failure_keeps_its_retry_classification() {
         assert_eq!(
-            sabnzbd_history_state("Failed", Some(message)),
-            Some((DownloadQueueState::Warning, Some(message.to_string())))
+            sabnzbd_history_state(
+                "Failed",
+                Some("Unpacking failed, archive requires a password")
+            ),
+            Some((
+                DownloadQueueState::Failed,
+                Some(
+                    scryer_domain::DownloadPasswordFailure::Required
+                        .message()
+                        .into()
+                )
+            ))
         );
+    }
+
+    #[tokio::test]
+    async fn sabnzbd_duplicate_history_ids_fail_listing_and_exact_observation() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "history"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "history": {"slots": [
+                    {"nzo_id": "job", "status": "Failed"},
+                    {"nzo_id": "job", "status": "Running"}
+                ]}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        mount_sab_queue_listing(&server, json!([]), 1).await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        let locator = scryer_application::ClientJobLocator::new(None, "sabnzbd", "job");
+        for result in [
+            client.list_history_page(0, 100).await.map(|_| ()),
+            client.observe_download(&locator, 0).await.map(|_| ()),
+        ] {
+            assert!(matches!(result, Err(AppError::Repository(message))
+                if message == "duplicate nzo_id in SABnzbd history response"));
+        }
     }
 
     #[test]
@@ -3863,6 +4382,10 @@ mod tests {
                     .url
                     .query_pairs()
                     .any(|(key, value)| key == "mode" && value == "history")
+                    && request
+                        .url
+                        .query_pairs()
+                        .any(|(key, value)| key == "name" && value == "delete")
             })
             .expect("history delete should be requested");
         // `remove_data` carries over to the fallback delete.

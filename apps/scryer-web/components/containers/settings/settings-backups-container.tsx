@@ -375,7 +375,7 @@ export function SettingsBackupsContainer() {
       }
       setBackups(sortBackups(data?.backups ?? []));
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     } finally {
       setLoading(false);
     }
@@ -397,7 +397,7 @@ export function SettingsBackupsContainer() {
       setSavedAutoBackupSettings(nextSettings);
       setAutoBackupSettings(nextSettings);
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     } finally {
       setAutoBackupLoading(false);
     }
@@ -419,7 +419,7 @@ export function SettingsBackupsContainer() {
       setSavedBackupSettings(nextSettings);
       setBackupPathDraft(nextSettings.customBackupPath ?? "");
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     } finally {
       setBackupSettingsLoading(false);
     }
@@ -510,7 +510,7 @@ export function SettingsBackupsContainer() {
       setCreateDialogOpen(false);
       setGlobalStatus(t("settings.backupsQueued"));
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")));
+      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
     } finally {
       setCreatingRequest(false);
     }
@@ -578,10 +578,12 @@ export function SettingsBackupsContainer() {
         setGlobalStatus(
           firstFailureMessage ??
             t("settings.backupsDeleteFailedCount", { count: failedFilenames.size }),
+          { level: "ERROR" },
         );
       } else {
         setGlobalStatus(
           t("settings.backupsDeletedCount", { count: deletedFilenames.size }),
+          { level: "SUCCESS" },
         );
       }
     } finally {
@@ -617,7 +619,7 @@ export function SettingsBackupsContainer() {
 
       await saveDownloadResponse(response, backup.filename);
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     } finally {
       setDownloadingFilename(null);
     }
@@ -652,9 +654,9 @@ export function SettingsBackupsContainer() {
       setAutoBackupKey("");
       setClearAutoBackupKey(false);
       setShowAutoBackupKey(false);
-      setGlobalStatus(t("settings.autoBackupsSaved"));
+      setGlobalStatus(t("settings.autoBackupsSaved"), { level: "SUCCESS" });
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")));
+      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
     } finally {
       setAutoBackupSaving(false);
     }
@@ -686,9 +688,9 @@ export function SettingsBackupsContainer() {
       setSavedBackupSettings(data.updateBackupSettings);
       setBackupPathDraft(data.updateBackupSettings.customBackupPath ?? "");
       await fetchBackups();
-      setGlobalStatus(t("settings.backupLocationSaved"));
+      setGlobalStatus(t("settings.backupLocationSaved"), { level: "SUCCESS" });
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")));
+      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
     } finally {
       setBackupSettingsSaving(false);
     }

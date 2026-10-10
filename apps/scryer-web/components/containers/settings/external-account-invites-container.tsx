@@ -159,6 +159,7 @@ export function ExternalAccountInvitesContainer({
       setExternalAuthSettings(DEFAULT_EXTERNAL_AUTH_RUNTIME_SETTINGS);
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     } finally {
       setLoading(false);
@@ -288,13 +289,14 @@ export function ExternalAccountInvitesContainer({
         providerUserIdentifier: "",
         providerUserId: "",
       }));
-      setGlobalStatus(t("settings.externalAccountInviteCreated"));
+      setGlobalStatus(t("settings.externalAccountInviteCreated"), { level: "SUCCESS" });
       await refreshExternalInvites();
     } catch (error) {
       setGlobalStatus(
         error instanceof Error
           ? error.message
           : t("settings.externalAccountInviteFailed"),
+        { level: "ERROR" },
       );
     } finally {
       setExternalInviteSubmitting(false);
@@ -320,6 +322,7 @@ export function ExternalAccountInvitesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("profile.linkedAccountUnlinkFailed"),
+        { level: "ERROR" },
       );
     } finally {
       setUnlinkingAccountId(null);

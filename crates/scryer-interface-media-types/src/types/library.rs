@@ -32,6 +32,8 @@ pub struct LibraryRootPayload {
 #[derive(SimpleObject, Clone)]
 /// Effective library settings together with nullable per-library overrides.
 pub struct LibrarySettingsPayload {
+    /// Ordered release-search languages whose localized titles are also queried; empty searches only the primary name.
+    pub search_languages: Vec<String>,
     /// Library override for required audio language codes; `original` resolves per title.
     pub required_audio_languages_override: Option<Vec<String>>,
     /// Effective configured requirements after inheritance; `original` remains unchanged.
@@ -186,6 +188,203 @@ pub struct RetryImportInput {
     pub import_id: ID,
     /// Optional password for an encrypted source archive.
     pub password: Option<String>,
+}
+
+#[derive(InputObject)]
+/// Requests releasing the sources a completed import is holding.
+pub struct ReleaseHeldImportSourcesInput {
+    /// Completed import record ID whose held sources are released.
+    pub import_id: ID,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Why a completed import kept its download's sources.
+pub enum HeldImportSourcesReasonValue {
+    /// Subtitle discovery or delivery is still pending.
+    SubtitlesPending,
+    /// The import finished, but removing its replaced sources did not.
+    SourceCleanupIncomplete,
+    /// The hold has no recorded reason.
+    Unknown,
+    /// Archive extraction failed; the unextracted archives were never imported.
+    ArchiveExtractionFailed,
+}
+
+impl From<scryer_application::HeldSourcesReason> for HeldImportSourcesReasonValue {
+    fn from(value: scryer_application::HeldSourcesReason) -> Self {
+        use scryer_application::HeldSourcesReason as Reason;
+        match value {
+            Reason::SubtitlesPending => Self::SubtitlesPending,
+            Reason::SourceCleanupIncomplete => Self::SourceCleanupIncomplete,
+            Reason::Unknown => Self::Unknown,
+            Reason::ArchiveExtractionFailed => Self::ArchiveExtractionFailed,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What the download client's removal policy does with the download after release.
+pub enum HeldDownloadClientPolicyValue {
+    /// The client removes the completed download.
+    Removes,
+    /// The client removes the completed download once its seeding requirements are met.
+    RemovesAfterSeeding,
+    /// The policy keeps the download, or no configured client can act on it.
+    Keeps,
+    /// The download's title could not be resolved, so the policy is unknown.
+    Unknown,
+}
+
+impl From<scryer_application::HeldDownloadClientPolicy> for HeldDownloadClientPolicyValue {
+    fn from(value: scryer_application::HeldDownloadClientPolicy) -> Self {
+        use scryer_application::HeldDownloadClientPolicy as Policy;
+        match value {
+            Policy::Removes => Self::Removes,
+            Policy::RemovesAfterSeeding => Self::RemovesAfterSeeding,
+            Policy::Keeps => Self::Keeps,
+            Policy::Unknown => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What releasing held sources did to the tracked download.
+pub enum HeldImportSourcesSettlementValue {
+    /// Verification proved the download complete; it is imported and the client's policy applies.
+    Imported,
+    /// Verification did not prove the download complete; it returned to import and nothing was cleaned up.
+    AwaitingImport,
+    /// The download was not blocked on the hold; its own workflow decides.
+    Unchanged,
+    /// The download is no longer tracked; it is settled when next observed.
+    Untracked,
+    /// The holds were released but the tracked download could not be reached; releasing again resumes.
+    NotSettled,
+    /// A held import may hold content never extracted or imported, and nothing proved every expected file imported; not marked imported, no retry scheduled and nothing cleaned up.
+    Unproven,
+}
+
+impl From<scryer_application::HeldSourcesSettlement> for HeldImportSourcesSettlementValue {
+    fn from(value: scryer_application::HeldSourcesSettlement) -> Self {
+        use scryer_application::HeldSourcesSettlement as Settlement;
+        match value {
+            Settlement::Imported => Self::Imported,
+            Settlement::AwaitingImport => Self::AwaitingImport,
+            Settlement::Unchanged => Self::Unchanged,
+            Settlement::Untracked => Self::Untracked,
+            Settlement::NotSettled => Self::NotSettled,
+            Settlement::Unproven => Self::Unproven,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Why a released import's extraction workspace was preserved.
+pub enum HeldWorkspacePreservedValue {
+    /// The workspace's ownership marker could not be authenticated.
+    NotOwned,
+    /// It contains a symlink, special file, unreadable entry, or too many entries.
+    Unsafe,
+    /// A video in it is not recorded, by its path, as imported by the import that owns it.
+    HoldsUnimportedVideo,
+    /// An unfinished import or open manual-import selection may still need it.
+    InUse,
+    /// What was imported from it could not be established.
+    Unverified,
+    /// Removal was attempted and the workspace remains.
+    RemovalFailed,
+    /// The download was not proven imported, so nothing of it was removed.
+    DownloadNotImported,
+}
+
+impl From<scryer_application::HeldWorkspacePreserved> for HeldWorkspacePreservedValue {
+    fn from(value: scryer_application::HeldWorkspacePreserved) -> Self {
+        use scryer_application::HeldWorkspacePreserved as Preserved;
+        match value {
+            Preserved::NotOwned => Self::NotOwned,
+            Preserved::Unsafe => Self::Unsafe,
+            Preserved::HoldsUnimportedVideo => Self::HoldsUnimportedVideo,
+            Preserved::InUse => Self::InUse,
+            Preserved::Unverified => Self::Unverified,
+            Preserved::RemovalFailed => Self::RemovalFailed,
+            Preserved::DownloadNotImported => Self::DownloadNotImported,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone)]
+/// Outcome of releasing a download's held sources.
+pub struct HeldImportSourcesReleasedPayload {
+    /// Import record ID the release was requested through.
+    pub import_id: ID,
+    /// Every import of the download whose hold was released.
+    pub released_import_ids: Vec<ID>,
+    /// What the release did to the tracked download.
+    pub settlement: HeldImportSourcesSettlementValue,
+    /// The download client's removal policy that now applies.
+    pub client_policy: HeldDownloadClientPolicyValue,
+    /// Whether every identified extraction workspace was removed and none could have been missed.
+    pub workspace_removed: bool,
+    /// Number of extraction workspaces removed.
+    pub workspaces_removed: i32,
+    /// Distinct reasons extraction workspaces were preserved; preserved workspaces are never removed later by inference.
+    pub preserved_workspace_reasons: Vec<HeldWorkspacePreservedValue>,
+    /// Whether a released import's workspaces could not be searched for in full; any not found are preserved.
+    pub workspace_lookup_incomplete: bool,
+}
+
+impl From<scryer_application::HeldSourcesRelease> for HeldImportSourcesReleasedPayload {
+    fn from(value: scryer_application::HeldSourcesRelease) -> Self {
+        Self {
+            workspace_removed: value.workspace_removed(),
+            workspaces_removed: i32::try_from(value.workspaces_removed).unwrap_or(i32::MAX),
+            import_id: value.import_id.into(),
+            released_import_ids: value
+                .released_import_ids
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            settlement: value.settlement.into(),
+            client_policy: value.client_policy.into(),
+            preserved_workspace_reasons: value
+                .preserved_workspaces
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            workspace_lookup_incomplete: value.workspace_lookup_incomplete,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone)]
+/// Held sources of a download the viewer may release.
+pub struct HeldImportSourcesPayload {
+    /// Completed import record ID the release is requested through.
+    pub import_id: ID,
+    /// Every import of the download the release covers.
+    pub import_ids: Vec<ID>,
+    /// Distinct titles those imports belong to.
+    pub title_names: Vec<String>,
+    /// The most severe reason the sources are held.
+    pub reason: HeldImportSourcesReasonValue,
+    /// What the download client's removal policy does with the download after release.
+    pub client_policy: HeldDownloadClientPolicyValue,
+}
+
+impl From<scryer_application::HeldSourcesReleaseOffer> for HeldImportSourcesPayload {
+    fn from(value: scryer_application::HeldSourcesReleaseOffer) -> Self {
+        Self {
+            import_id: value.import_id.into(),
+            import_ids: value.import_ids.into_iter().map(Into::into).collect(),
+            title_names: value.title_names,
+            reason: value.reason.into(),
+            client_policy: value.client_policy.into(),
+        }
+    }
 }
 
 #[derive(InputObject)]
@@ -657,6 +856,9 @@ pub struct MediaRenamePlanPayload {
     pub conflicts: i32,
     /// Number of items with planning errors.
     pub errors: i32,
+    /// Number of titles with nothing to move whose recorded folder is not a
+    /// title folder; applying the plan records the planned folder for them.
+    pub folder_repairs: i32,
     /// Plan items in deterministic service order.
     pub items: Vec<MediaRenamePlanItemPayload>,
 }
@@ -732,6 +934,10 @@ impl ExternalIdInput {
 #[derive(InputObject, Clone)]
 /// Optional title settings used when creating or updating a title.
 pub struct TitleOptionsInput {
+    /// Search-language override: omitted preserves, null inherits the library, empty searches only the primary name and custom aliases.
+    pub search_languages: MaybeUndefined<Vec<String>>,
+    /// User-owned search aliases: omitted preserves, null or empty clears. Metadata refresh preserves these aliases.
+    pub search_aliases: MaybeUndefined<Vec<String>>,
     /// Quality profile identity; omission preserves the current value, null clears it, and a value replaces it.
     pub quality_profile_id: MaybeUndefined<ID>,
     /// Root-folder identity used when a title is created; omission preserves the current value, null clears it, and a value replaces it. Changing the root of an existing title that has tracked files is refused: preview the change with locationOperationPreview and run it with startLocationOperation.
@@ -1122,6 +1328,8 @@ pub struct UpdateLibraryInput {
 #[derive(InputObject, Clone)]
 /// Acquisition, import, routing, and filesystem settings for a library.
 pub struct LibrarySettingsInput {
+    /// Ordered release-search languages, independent of metadata and audio.
+    pub search_languages: Option<Vec<String>>,
     /// Required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
     /// Metadata language override; null inherits the global default.

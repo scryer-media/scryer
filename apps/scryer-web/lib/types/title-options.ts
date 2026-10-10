@@ -1,4 +1,6 @@
 export type TitleOptionUpdates = {
+  searchLanguages?: string[] | null;
+  searchAliases?: string[] | null;
   metadataLanguage?: string | null;
   qualityProfileId?: string | null;
   rootFolderId?: string | null;

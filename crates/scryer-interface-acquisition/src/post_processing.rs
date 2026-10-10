@@ -1,7 +1,10 @@
-use async_graphql::{Context, ID, Object, Result as GqlResult};
+use async_graphql::{Context, ID, MaybeUndefined, Object, Result as GqlResult};
 use chrono::Utc;
-use scryer_application::AppError;
-use scryer_domain::{AppPermission, ExecutionMode, Id, PostProcessingScript, ScriptType};
+use scryer_application::{AppError, UpdateScriptInterpreterSettings};
+use scryer_domain::{
+    AppPermission, ExecutionMode, Id, PostProcessingScript, ScriptLanguage, ScriptSchedule,
+    ScriptTrigger, ScriptType,
+};
 use std::path::Path;
 
 use scryer_interface_core::{app_from_ctx, require_config_app_permission, to_gql_error};
@@ -20,6 +23,14 @@ fn parse_script_type(value: &str) -> GqlResult<ScriptType> {
 
 fn parse_execution_mode(value: Option<ExecutionModeValue>) -> ExecutionMode {
     value.map(ExecutionMode::from).unwrap_or_default()
+}
+
+fn parse_schedule(input: ScriptScheduleInput) -> GqlResult<ScriptSchedule> {
+    input.into_domain().map_err(|field| {
+        to_gql_error(AppError::Validation(format!(
+            "schedule is missing {field} for its kind"
+        )))
+    })
 }
 
 fn require_inline_shell_acknowledgement(acknowledged: Option<bool>) -> GqlResult<()> {
@@ -48,7 +59,7 @@ fn validate_file_script_content(script_content: &str) -> GqlResult<()> {
 
 #[Object]
 impl PostProcessingMutations {
-    /// Create an enabled post-processing script after validating its type and content.
+    /// Create a post-processing script, enabled unless the input says otherwise, after validating its type, content, and schedule.
     async fn create_post_processing_script(
         &self,
         ctx: &Context<'_>,
@@ -81,8 +92,12 @@ impl PostProcessingMutations {
             execution_mode,
             timeout_secs: input.timeout_secs.map(|v| v as i64).unwrap_or(300),
             priority: input.priority.unwrap_or(0),
-            enabled: true,
+            enabled: input.enabled.unwrap_or(true),
             debug: input.debug.unwrap_or(false),
+            language: input.language.map(ScriptLanguage::from).unwrap_or_default(),
+            trigger: input.trigger.map(ScriptTrigger::from).unwrap_or_default(),
+            schedule: input.schedule.map(parse_schedule).transpose()?,
+            run_on_startup: input.run_on_startup.unwrap_or(false),
             created_at: now,
             updated_at: now,
         };
@@ -118,6 +133,7 @@ impl PostProcessingMutations {
         let previous_script_type = script.script_type;
         let previous_script_content = script.script_content.clone();
         let previous_enabled = script.enabled;
+        let previous_language = script.language;
         let next_script_type = match input.script_type.as_deref() {
             Some(value) => Some(parse_script_type(value)?),
             None => None,
@@ -154,6 +170,22 @@ impl PostProcessingMutations {
         if let Some(debug) = input.debug {
             script.debug = debug;
         }
+        if let Some(language) = input.language {
+            script.language = language.into();
+        }
+        if let Some(trigger) = input.trigger
+            && ScriptTrigger::from(trigger) != script.trigger
+        {
+            return Err(to_gql_error(AppError::Validation(
+                "a script's trigger cannot be changed after it is created".into(),
+            )));
+        }
+        if let Some(schedule) = input.schedule {
+            script.schedule = Some(parse_schedule(schedule)?);
+        }
+        if let Some(run_on_startup) = input.run_on_startup {
+            script.run_on_startup = run_on_startup;
+        }
 
         let inline_transition =
             previous_script_type != ScriptType::Inline && script.script_type == ScriptType::Inline;
@@ -161,7 +193,10 @@ impl PostProcessingMutations {
             && script.script_content != previous_script_content;
         let inline_enabled =
             script.script_type == ScriptType::Inline && !previous_enabled && script.enabled;
-        if inline_transition || inline_content_changed || inline_enabled {
+        let inline_language_changed =
+            script.script_type == ScriptType::Inline && script.language != previous_language;
+        if inline_transition || inline_content_changed || inline_enabled || inline_language_changed
+        {
             require_inline_shell_acknowledgement(input.inline_shell_acknowledged)?;
         }
         if script.script_type == ScriptType::File {
@@ -223,5 +258,40 @@ impl PostProcessingMutations {
             .map_err(to_gql_error)?;
 
         Ok(mappers::from_pp_script(updated))
+    }
+
+    /// Replace the interpreters operator scripts are launched with; null or an empty string restores the default command.
+    async fn update_script_interpreter_settings(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Interpreter path or command for each script language.")]
+        input: ScriptInterpreterSettingsInput,
+    ) -> GqlResult<ScriptInterpreterSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+
+        let settings = app
+            .update_script_interpreter_settings(
+                &actor,
+                UpdateScriptInterpreterSettings {
+                    python: pin_change(input.python),
+                    powershell: pin_change(input.powershell),
+                    batch: pin_change(input.batch),
+                    go: pin_change(input.go),
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(mappers::from_script_interpreter_config(settings))
+    }
+}
+
+/// Undefined keeps the current pin, null clears it, a value replaces it.
+fn pin_change(value: MaybeUndefined<String>) -> Option<Option<String>> {
+    match value {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(value) => Some(Some(value)),
     }
 }

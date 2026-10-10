@@ -99,13 +99,13 @@ export function useTitleTagsManager() {
               })
               .toPromise();
         if (result.error) {
-          showStatus(result.error.message || t("settings.titleTagSaveError"));
+          showStatus(result.error.message || t("settings.titleTagSaveError"), { level: "ERROR" });
           return false;
         }
         const payload =
           result.data?.updateTitleTagDefinition ?? result.data?.createTitleTagDefinition;
         if (!payload) {
-          showStatus(t("settings.titleTagSaveError"));
+          showStatus(t("settings.titleTagSaveError"), { level: "ERROR" });
           return false;
         }
         const saved = fromTitleTagDefinitionPayload(payload.definition);
@@ -118,11 +118,11 @@ export function useTitleTagsManager() {
           setRenameWarning(formatTitleTagRenameWarning(counts, previousLabel, t));
           showStatus(formatTitleTagRenameSummary(counts, saved.label, t));
         } else {
-          showStatus(t("settings.titleTagSaved"));
+          showStatus(t("settings.titleTagSaved"), { level: "SUCCESS" });
         }
         return true;
       } catch {
-        showStatus(t("settings.titleTagSaveError"));
+        showStatus(t("settings.titleTagSaveError"), { level: "ERROR" });
         return false;
       } finally {
         setSaving(false);
@@ -140,7 +140,7 @@ export function useTitleTagsManager() {
           .mutation(deleteTitleTagDefinitionMutation, { id: definitionId })
           .toPromise();
         if (result.error) {
-          showStatus(result.error.message || t("settings.titleTagDeleteError"));
+          showStatus(result.error.message || t("settings.titleTagDeleteError"), { level: "ERROR" });
           return false;
         }
         const payload = result.data?.deleteTitleTagDefinition;
@@ -154,10 +154,11 @@ export function useTitleTagsManager() {
             label: payload?.label ?? "",
             count: counts.titles,
           }),
+          { level: "SUCCESS" },
         );
         return true;
       } catch {
-        showStatus(t("settings.titleTagDeleteError"));
+        showStatus(t("settings.titleTagDeleteError"), { level: "ERROR" });
         return false;
       } finally {
         setSaving(false);

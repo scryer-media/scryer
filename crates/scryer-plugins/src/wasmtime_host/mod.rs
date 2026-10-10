@@ -29,8 +29,7 @@ mod sandbox;
 pub(crate) mod subtitle_component_host;
 
 pub(crate) use archive_component_host::{
-    ArchiveInvocation, archive_component_describe, process_archive_component,
-    validate_archive_component,
+    ArchiveInvocation, archive_component_describe, validate_archive_component,
 };
 pub(crate) use component_host::validate_indexer_component;
 pub(crate) use download_client_component_host::{

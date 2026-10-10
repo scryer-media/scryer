@@ -22,6 +22,7 @@ import {
   ShieldAlert,
   Network,
   SlidersHorizontal,
+  SquareTerminal,
   Tag,
   Timer,
   UploadCloud,
@@ -122,6 +123,9 @@ const SettingsRequestRulesContainer = lazy(async () => ({
 }));
 const SettingsPluginsContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-plugins-container")).SettingsPluginsContainer,
+}));
+const SettingsScriptsContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-scripts-container")).SettingsScriptsContainer,
 }));
 const SettingsNotificationsContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-notifications-container")).SettingsNotificationsContainer,
@@ -596,6 +600,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                           : t("settings.requestRules")
                       : settingsSection === "plugins"
                         ? t("settings.plugins")
+                        : settingsSection === "scripts"
+                          ? t("settings.scripts")
                         : settingsSection === "notifications"
                           ? t("settings.notifications")
                           : settingsSection === "post-processing"
@@ -644,6 +650,12 @@ export const SettingsContainer = memo(function SettingsContainer({
       section: "plugins" as const,
       label: t("settings.plugins"),
       icon: Puzzle,
+      visible: canManageSystemSettings,
+    },
+    {
+      section: "scripts" as const,
+      label: t("settings.scripts"),
+      icon: SquareTerminal,
       visible: canManageSystemSettings,
     },
   ].filter((item) => item.visible);
@@ -929,7 +941,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                 settingsSection !== "qualityProfiles" &&
                 settingsSection !== "delayProfiles" &&
                 settingsSection !== "titleTags" &&
-                settingsSection !== "plugins" ? (
+                settingsSection !== "plugins" &&
+                settingsSection !== "scripts" ? (
                   <p className="mt-1 max-w-[640px] text-[13.5px] text-[var(--scry-muted)]">
                     {t("settings.sectionTitle", { section: settingsSectionLabel })}
                   </p>
@@ -1026,6 +1039,8 @@ export const SettingsContainer = memo(function SettingsContainer({
             )
           ) : settingsSection === "plugins" ? (
             <SettingsPluginsContainer />
+          ) : settingsSection === "scripts" ? (
+            <SettingsScriptsContainer />
           ) : settingsSection === "proxies" ? (
             <SettingsProxiesContainer />
           ) : settingsSection === "notifications" ? (

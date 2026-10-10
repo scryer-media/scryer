@@ -51,33 +51,6 @@ mod jemalloc_configuration_tests {
     }
 }
 
-/// Switches mimalloc's purging from decommit to reset.
-///
-/// On Windows decommit hands the pages back to the OS and forces a zero-fill
-/// fault when the allocator next touches that address; reset keeps the mapping
-/// and lets the OS reclaim only under pressure. Measured on Linux in §14 of the
-/// load-test report, where the decommit purge cost 2,587 minor faults/s at 53%
-/// idle CPU and turning it off cut that to 49 faults/s at 38% — the same
-/// mechanism applies to Windows' decommit.
-///
-/// Called first thing in `main`. Rust's runtime has already allocated by then,
-/// so this is not literally before mimalloc's first allocation; it is before
-/// any of Scryer's own work, and the option governs later purges rather than
-/// past ones.
-#[cfg(target_os = "windows")]
-fn configure_mimalloc() {
-    // `mi_option_set` is index-based and libmimalloc-sys 0.1 does not export a
-    // constant for this one. The index is read off the vendored headers, where
-    // both versions agree: `mi_option_purge_decommits` is the sixth member of
-    // `mi_option_e` in c_src/mimalloc/v2/include/mimalloc.h and in
-    // c_src/mimalloc/v3/include/mimalloc.h. Re-check it when the crate moves.
-    const MI_OPTION_PURGE_DECOMMITS: libmimalloc_sys::mi_option_t = 5;
-    // SAFETY: setting a mimalloc option by its documented index; the call is
-    // thread-safe and has no preconditions beyond mimalloc being linked in,
-    // which it is, because it is this target's global allocator.
-    unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DECOMMITS, 0) };
-}
-
 mod application_upgrade_evidence;
 mod application_upgrade_helper;
 mod arr_compat;
@@ -94,6 +67,7 @@ mod http_error;
 mod http_metrics;
 mod indexer_search_routes;
 mod init;
+mod list_account_origin;
 mod log_buffer;
 mod metadata_gateway_url;
 mod metrics_setup;
@@ -139,8 +113,9 @@ use scryer_application::{
     RuntimePluginLoad, SETTINGS_SCOPE_SYSTEM, SeriesFacetHandler, SubtitlePluginProvider,
     SystemInfoProvider, TitleImageKind, TitleImageRepository,
     load_runtime_plugin_from_persisted_installation_payload, start_background_acquisition_poller,
-    start_background_auto_backup_scheduler, start_background_download_delete_poller,
-    start_background_library_refresh_loop, start_background_manual_import_poller,
+    start_background_auto_backup_scheduler, start_background_custom_job_scheduler,
+    start_background_download_delete_poller, start_background_library_refresh_loop,
+    start_background_manual_import_poller,
     start_background_media_server_playback_reconciliation_loop, start_background_subtitle_poller,
     start_background_title_hydration_loop, start_background_title_image_loop,
     start_download_queue_poller_with_options, start_navigation_badge_facts_refresh,
@@ -212,6 +187,7 @@ use oauth_routes::{OAuthRouteState, oauth_router};
 use rate_limit::ScryerRateLimiter;
 use settings_bootstrap::{
     MOVIES_PATH_KEY, SERIES_PATH_KEY, extract_pending_migration_ids,
+    load_or_create_plex_client_identifier,
     migrate_legacy_download_client_default_category_settings,
     migrate_legacy_download_client_routing_settings, normalize_media_path_setting,
     normalize_quality_profile_settings, parse_migration_mode, seed_service_setting_definitions,
@@ -674,8 +650,6 @@ fn install_panic_logging_hook() {
 }
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    configure_mimalloc();
     #[cfg(target_os = "linux")]
     configure_jemalloc();
     if std::env::args().nth(1).as_deref() == Some("__import-file-worker") {
@@ -925,6 +899,7 @@ async fn run_application() {
         std::process::exit(1);
     });
     let base_path = BasePath::from_env();
+    scryer_infrastructure_library::images::install_base_path(base_path.prefix());
 
     // Install Prometheus metrics recorder when enabled.
     // The `metrics` crate uses a global facade — once installed, `metrics::counter!()`
@@ -1140,12 +1115,25 @@ async fn bootstrap_application(
     application_upgrade_assessment: scryer_application::application_upgrade::InstallationAssessment,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
     let bootstrap_start = std::time::Instant::now();
+    scryer_application::initialize_archive_workspace_ownership(&data_dir)?;
 
     let t = std::time::Instant::now();
     let backup_datastore_config = datastore_config.clone();
-    let datastore = DatastoreAssembly::connect(datastore_config)
-        .await
-        .map_err(|e| format!("failed to initialize datastore services: {e}"))?;
+    let datastore = match DatastoreAssembly::connect(datastore_config).await {
+        Ok(datastore) => datastore,
+        // An unreachable server is the one datastore failure a restart can
+        // fix, so exit and let the service manager retry instead of parking
+        // on the bootstrap error page.
+        Err(error)
+            if scryer_infrastructure_datastore::postgres::is_startup_window_exhausted(&error) =>
+        {
+            tracing::error!(error = %error, "PostgreSQL is unreachable; exiting");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            return Err(format!("failed to initialize datastore services: {error}").into());
+        }
+    };
     let bootstrap_settings_store = datastore.settings_store();
     let bootstrap_quality_profile_store = datastore.quality_profile_store();
     let datastore_info = bootstrap_settings_store
@@ -1591,6 +1579,15 @@ async fn bootstrap_application(
         )
         .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
     );
+    let plex_client_identifier =
+        match load_or_create_plex_client_identifier(bootstrap_settings_store.clone()).await {
+            Ok(identifier) => identifier,
+            Err(error) => {
+                // Linking still works; this run presents a one-off device.
+                tracing::warn!(error = %error, "could not keep a stable Plex client identifier");
+                uuid::Uuid::new_v4().to_string()
+            }
+        };
     let services = datastore
         .app_services_builder(indexer_client, download_client)
         .with_runtime_environment(
@@ -1606,6 +1603,13 @@ async fn bootstrap_application(
                 .filter(|value| !value.is_empty()),
         )
         .with_smg_gateway_url(Some(metadata_gateway_url.into_string()))
+        .with_list_account_auth_gateway(Arc::new(
+            scryer_infrastructure_metadata::metadata::gateway::client::HttpListAccountAuthGateway::new_with_client_identifier(
+                metadata_gateway.clone(),
+                plex_client_identifier,
+            )
+            .map_err(|error| error.to_string())?,
+        ))
         .with_metadata_gateway(metadata_gateway)
         .with_image_proxy_cache_control(image_proxy_runtime.clone())
         .with_library_scanner(library_scanner)
@@ -1644,7 +1648,23 @@ async fn bootstrap_application(
         .with_tracked_download_handle(TrackedDownloadHandle::new(tracked_download_tx))
         .build();
 
-    let webauthn = build_webauthn_runtime();
+    let public_url_policy = scryer_application::public_url::PublicUrlPolicy::new(
+        std::env::var(scryer_application::public_url::PUBLIC_URL_ENV)
+            .ok()
+            .as_deref(),
+        read_saved_public_url(bootstrap_settings_store.clone())
+            .await
+            .as_deref(),
+    );
+    if let Some(error) = public_url_policy.error() {
+        tracing::warn!(
+            source = public_url_policy.source().as_str(),
+            %error,
+            "the configured public URL is invalid; account linking uses local addresses only"
+        );
+    }
+    let (webauthn, passkey_rp_source, passkey_rp) =
+        build_webauthn_runtime(public_url_policy.url().as_ref());
     let webauthn_configured = webauthn.is_some();
     let app_use_case = AppUseCase::new_with_webauthn(
         services,
@@ -1655,6 +1675,29 @@ async fn bootstrap_application(
         facet_registry,
         webauthn,
     );
+    {
+        use scryer_application::public_url::{ConfigValueSource, InstanceAddressing};
+        let env_source = |configured: bool| {
+            if configured {
+                ConfigValueSource::Environment
+            } else {
+                ConfigValueSource::Default
+            }
+        };
+        let (passkey_rp_id, passkey_rp_origin) = passkey_rp.unzip();
+        app_use_case.install_public_url(
+            public_url_policy,
+            InstanceAddressing {
+                base_path: base_path.prefix().to_string(),
+                base_path_source: env_source(BasePath::env_configured()),
+                bind_address: bind.clone(),
+                bind_source: env_source(std::env::var_os("SCRYER_BIND").is_some()),
+                passkey_rp_id,
+                passkey_rp_origin,
+                passkey_rp_source,
+            },
+        );
+    }
     app_use_case
         .rebuild_request_rules_engine()
         .await
@@ -1807,6 +1850,12 @@ async fn bootstrap_application(
         }
     }
 
+    // A script run still marked running was cut off by the previous
+    // process; nothing in this one can finish it.
+    if let Err(error) = app_use_case.reconcile_interrupted_script_runs().await {
+        tracing::warn!(error = %error, "failed to reconcile interrupted script runs on startup");
+    }
+
     // Durable maintenance search intents resume with their original job ids.
     // Keep those reservations out of generic interrupted-job reconciliation.
     match app_use_case.resume_interrupted_maintenance_searches().await {
@@ -1834,6 +1883,11 @@ async fn bootstrap_application(
     if let Err(e) = app_use_case.reconcile_default_library_roots().await {
         tracing::warn!(error = %e, "failed to reconcile default library roots on startup");
     }
+
+    // After root reconciliation, so it reads the roots the library really has.
+    application_migrator
+        .spawn_empty_duplicate_title_folder_cleanup(&app_use_case, previous_version)
+        .await;
 
     // A location operation is persisted and checkpointed precisely so a restart
     // can pick it up where it stopped, without repeating verified work
@@ -2118,6 +2172,10 @@ async fn bootstrap_application(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));
+    tokio::spawn(start_background_custom_job_scheduler(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
     tokio::spawn(start_background_manual_import_poller(
         app_use_case.clone(),
         shutdown_token.child_token(),
@@ -2148,6 +2206,10 @@ async fn bootstrap_application(
         auth_runtime: auth_runtime.clone(),
         rate_limiter: rate_limiter.clone(),
         ws_origin_policy: WebSocketOriginPolicy::from_env(&cors),
+        list_account_origin_policy: list_account_origin::ListAccountOriginPolicy::from_env(
+            &bind,
+            app_use_case.public_url_runtime(),
+        ),
         authless_web_client_proof: authless_web_client_proof.clone(),
     };
     let authless_access_guard_state = AuthlessAccessGuardState {
@@ -2747,55 +2809,110 @@ fn comma_separated_env_has_entries(value: &str) -> bool {
     value.split(',').any(|entry| !entry.trim().is_empty())
 }
 
-fn build_webauthn_runtime() -> Option<Arc<webauthn_rs::Webauthn>> {
-    let rp_id = normalize_env_option("SCRYER_WEBAUTHN_RP_ID");
-    let rp_origin = normalize_env_option("SCRYER_WEBAUTHN_RP_ORIGIN");
-    let rp_name =
-        normalize_env_option("SCRYER_WEBAUTHN_RP_NAME").unwrap_or_else(|| "Scryer".to_string());
+/// The passkey relying party selected at startup, before the runtime is built.
+#[derive(Debug, PartialEq, Eq)]
+enum WebauthnRelyingPartySelection {
+    /// Both variables are set; they win exactly as written.
+    Environment { rp_id: String, rp_origin: String },
+    /// Both variables are unset and the public URL implies a usable party.
+    PublicUrl { rp_id: String, rp_origin: Url },
+    /// Only one variable is set, which disables passkeys.
+    Incomplete,
+    /// Nothing configures passkeys.
+    Disabled,
+}
 
+fn select_webauthn_relying_party(
+    rp_id: Option<String>,
+    rp_origin: Option<String>,
+    public_url: Option<&Url>,
+) -> WebauthnRelyingPartySelection {
     match (rp_id, rp_origin) {
         (Some(rp_id), Some(rp_origin)) => {
-            let origin = match Url::parse(&rp_origin) {
-                Ok(origin) => origin,
+            WebauthnRelyingPartySelection::Environment { rp_id, rp_origin }
+        }
+        (Some(_), None) | (None, Some(_)) => WebauthnRelyingPartySelection::Incomplete,
+        (None, None) => public_url
+            .and_then(scryer_application::public_url::passkey_relying_party_from_public_url)
+            .map_or(
+                WebauthnRelyingPartySelection::Disabled,
+                |(rp_id, rp_origin)| WebauthnRelyingPartySelection::PublicUrl { rp_id, rp_origin },
+            ),
+    }
+}
+
+/// Build the passkey runtime once at startup. Explicit WebAuthn variables win;
+/// when both are unset, a public URL with a domain over https (or localhost)
+/// supplies the relying party. A later public URL change applies on restart.
+fn build_webauthn_runtime(
+    public_url: Option<&Url>,
+) -> (
+    Option<Arc<webauthn_rs::Webauthn>>,
+    scryer_application::public_url::PasskeyRelyingPartySource,
+    Option<(String, String)>,
+) {
+    use scryer_application::public_url::PasskeyRelyingPartySource;
+    let rp_name =
+        normalize_env_option("SCRYER_WEBAUTHN_RP_NAME").unwrap_or_else(|| "Scryer".to_string());
+    let selection = select_webauthn_relying_party(
+        normalize_env_option("SCRYER_WEBAUTHN_RP_ID"),
+        normalize_env_option("SCRYER_WEBAUTHN_RP_ORIGIN"),
+        public_url,
+    );
+    let (rp_id, origin, source) = match selection {
+        WebauthnRelyingPartySelection::Environment { rp_id, rp_origin } => {
+            match Url::parse(&rp_origin) {
+                Ok(origin) => (rp_id, origin, PasskeyRelyingPartySource::Environment),
                 Err(error) => {
                     tracing::warn!(
                         error = %error,
                         "disabling passkeys because SCRYER_WEBAUTHN_RP_ORIGIN is invalid"
                     );
-                    return None;
-                }
-            };
-
-            let builder = match WebauthnBuilder::new(&rp_id, &origin) {
-                Ok(builder) => builder,
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        "disabling passkeys because the WebAuthn RP config is invalid"
-                    );
-                    return None;
-                }
-            }
-            .rp_name(&rp_name);
-
-            match builder.build() {
-                Ok(runtime) => Some(Arc::new(runtime)),
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        "disabling passkeys because the WebAuthn runtime could not be built"
-                    );
-                    None
+                    return (None, PasskeyRelyingPartySource::None, None);
                 }
             }
         }
-        (Some(_), None) | (None, Some(_)) => {
+        WebauthnRelyingPartySelection::PublicUrl { rp_id, rp_origin } => {
+            (rp_id, rp_origin, PasskeyRelyingPartySource::PublicUrl)
+        }
+        WebauthnRelyingPartySelection::Incomplete => {
             tracing::warn!(
                 "disabling passkeys because SCRYER_WEBAUTHN_RP_ID and SCRYER_WEBAUTHN_RP_ORIGIN must both be set"
             );
-            None
+            return (None, PasskeyRelyingPartySource::None, None);
         }
-        (None, None) => None,
+        WebauthnRelyingPartySelection::Disabled => {
+            return (None, PasskeyRelyingPartySource::None, None);
+        }
+    };
+
+    let builder = match WebauthnBuilder::new(&rp_id, &origin) {
+        Ok(builder) => builder,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "disabling passkeys because the WebAuthn RP config is invalid"
+            );
+            return (None, PasskeyRelyingPartySource::None, None);
+        }
+    }
+    .rp_name(&rp_name);
+
+    match builder.build() {
+        Ok(runtime) => {
+            if source == PasskeyRelyingPartySource::PublicUrl {
+                tracing::info!(rp_id = %rp_id, "passkey relying party derived from the public URL");
+            }
+            let rp_origin = origin.origin().ascii_serialization();
+            (Some(Arc::new(runtime)), source, Some((rp_id, rp_origin)))
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "disabling passkeys because the WebAuthn runtime could not be built"
+            );
+            (None, PasskeyRelyingPartySource::None, None)
+        }
     }
 }
 
@@ -3056,6 +3173,24 @@ fn resolve_bootstrap_auth_mode(
             Some("administrator bootstrap environment settings are active".into());
     }
     Ok(mode)
+}
+
+async fn read_saved_public_url(settings_store: Arc<SettingsStore>) -> Option<String> {
+    match settings_store
+        .get_setting_with_defaults(
+            SETTINGS_SCOPE_SYSTEM,
+            scryer_application::public_url::PUBLIC_URL_KEY,
+            None,
+        )
+        .await
+    {
+        Ok(Some(record)) => parse_optional_setting_string(&record.effective_value_json),
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to read the saved public URL");
+            None
+        }
+    }
 }
 
 fn parse_optional_setting_string(value_json: &str) -> Option<String> {
@@ -4809,5 +4944,62 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn webauthn_relying_party_selection_matrix() {
+        use super::{WebauthnRelyingPartySelection as Selection, select_webauthn_relying_party};
+        let public_url = url::Url::parse("https://Media.Example/scryer").unwrap();
+
+        // Explicit variables win over the public URL, exactly as written.
+        assert_eq!(
+            select_webauthn_relying_party(
+                Some("auth.example".into()),
+                Some("https://auth.example".into()),
+                Some(&public_url),
+            ),
+            Selection::Environment {
+                rp_id: "auth.example".into(),
+                rp_origin: "https://auth.example".into(),
+            }
+        );
+        // One variable alone still disables passkeys, with or without a URL.
+        for url in [Some(&public_url), None] {
+            assert_eq!(
+                select_webauthn_relying_party(Some("auth.example".into()), None, url),
+                Selection::Incomplete
+            );
+            assert_eq!(
+                select_webauthn_relying_party(None, Some("https://auth.example".into()), url),
+                Selection::Incomplete
+            );
+        }
+        // No variables: the public URL supplies the relying party.
+        assert_eq!(
+            select_webauthn_relying_party(None, None, Some(&public_url)),
+            Selection::PublicUrl {
+                rp_id: "media.example".into(),
+                rp_origin: url::Url::parse("https://media.example").unwrap(),
+            }
+        );
+        let localhost = url::Url::parse("http://localhost:8080").unwrap();
+        assert!(matches!(
+            select_webauthn_relying_party(None, None, Some(&localhost)),
+            Selection::PublicUrl { rp_id, .. } if rp_id == "localhost"
+        ));
+        // No URL and no variables, or a URL that cannot carry a passkey
+        // (insecure domain or IP literal), leaves passkeys disabled.
+        assert_eq!(
+            select_webauthn_relying_party(None, None, None),
+            Selection::Disabled
+        );
+        for value in ["http://media.example", "https://192.168.1.20:8443"] {
+            let url = url::Url::parse(value).unwrap();
+            assert_eq!(
+                select_webauthn_relying_party(None, None, Some(&url)),
+                Selection::Disabled,
+                "{value}"
+            );
+        }
     }
 }

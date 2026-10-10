@@ -525,6 +525,19 @@ loader!(
     }
 );
 
+// Keyed by queue item: one import listing covers every row of the queue.
+loader!(
+    HeldSourcesOfferLoader,
+    scryer_application::ClientJobLocator,
+    scryer_application::HeldSourcesReleaseOffer,
+    |ctx, keys| {
+        ctx.app
+            .held_sources_release_offers(&ctx.actor, keys)
+            .await
+            .map_err(to_gql_error)
+    }
+);
+
 /// Everything a request needs to resolve relationships with batched reads.
 ///
 /// Build once per HTTP request; never store beyond it.
@@ -560,6 +573,7 @@ pub struct RequestLoaders {
     pub title_wanted_item: DataLoader<TitleWantedItemLoader>,
     pub episode_media_availability: DataLoader<EpisodeMediaAvailabilityLoader>,
     pub episode_media_files: DataLoader<EpisodeMediaFilesLoader>,
+    pub held_sources_offer: DataLoader<HeldSourcesOfferLoader>,
 }
 
 impl RequestLoaders {
@@ -602,6 +616,7 @@ impl RequestLoaders {
             title_wanted_item: dl!(TitleWantedItemLoader),
             episode_media_availability: dl!(EpisodeMediaAvailabilityLoader),
             episode_media_files: dl!(EpisodeMediaFilesLoader),
+            held_sources_offer: dl!(HeldSourcesOfferLoader),
         })
     }
 }

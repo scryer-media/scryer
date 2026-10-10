@@ -5,6 +5,8 @@ import {
   AUDIO_LANGUAGES,
   audioLanguageOptions,
   formatAudioLanguageLabels,
+  formatSearchLanguageLabels,
+  SEARCH_LANGUAGES,
 } from "./audio-languages.ts";
 import { SUBTITLE_LANGUAGES } from "./subtitle-languages.ts";
 
@@ -62,4 +64,16 @@ test("audio language labels resolve both halves of ISO 639-2", () => {
     formatAudioLanguageLabels(["arm", "baq"], ORIGINAL_LABEL),
     "Armenian, Basque",
   );
+});
+
+test("search language options use the stored terminological codes", () => {
+  const codes = SEARCH_LANGUAGES.map((language) => language.code);
+
+  assert.equal(new Set(codes).size, codes.length);
+  assert.ok(!codes.includes("original"));
+  for (const bibliographic of ["ger", "fre", "chi", "zht", "pob", "scc"]) {
+    assert.ok(!codes.includes(bibliographic), bibliographic);
+  }
+  assert.ok(codes.includes("deu") && codes.includes("swe") && codes.includes("zho"));
+  assert.equal(formatSearchLanguageLabels(["swe", "deu"]), "Swedish, German");
 });

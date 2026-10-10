@@ -36,6 +36,8 @@ mod media_rename;
 mod metadata_search;
 #[path = "integration_graphql/misc_smoke.rs"]
 mod misc_smoke;
+#[path = "integration_graphql/private_list_accounts.rs"]
+mod private_list_accounts;
 #[path = "integration_graphql/quality_routing_settings.rs"]
 mod quality_routing_settings;
 #[path = "integration_graphql/rule_tester.rs"]
@@ -644,6 +646,17 @@ impl MediaFileRepository for FailingMediaFileRepo {
             .await
     }
 
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool> {
+        self.inner
+            .promote_sole_additional_media_file_for_episodes(title_id, file_id, episode_ids)
+            .await
+    }
+
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
         self.inner.mark_scan_failed(file_id, error).await
     }
@@ -955,6 +968,17 @@ impl MediaFileRepository for CountingMediaFileRepo {
                 primary_file_id,
                 additional_file_ids,
             )
+            .await
+    }
+
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool> {
+        self.inner
+            .promote_sole_additional_media_file_for_episodes(title_id, file_id, episode_ids)
             .await
     }
 
@@ -1532,6 +1556,15 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
                 category: "media".into(),
                 scope: "system".into(),
                 key_name: "audio.required_languages".into(),
+                data_type: "json".into(),
+                default_value_json: "[]".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "search.languages".into(),
                 data_type: "json".into(),
                 default_value_json: "[]".into(),
                 is_sensitive: false,

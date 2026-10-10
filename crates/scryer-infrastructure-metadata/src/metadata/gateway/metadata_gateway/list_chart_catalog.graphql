@@ -4,7 +4,7 @@ query ListChartCatalog($language: String!) {
     chart_key
     scope
     label
-    kinds
+    kinds: routing_kinds
     refreshed_at
     item_count
   }

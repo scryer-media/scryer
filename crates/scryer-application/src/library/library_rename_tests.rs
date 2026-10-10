@@ -656,31 +656,157 @@ fn configured_title_folder_path_caps_long_component() {
     );
 }
 
+/// Every destination a rename plans for a title lies under the one folder the
+/// plan records for it, whatever the layout change: flattening, un-flattening,
+/// a renamed title folder, specials, and files with no season. Recording that
+/// folder once is only sound if no planned target escapes it.
+#[test]
+fn every_planned_rename_parent_lies_under_the_configured_title_folder() {
+    let mut title = test_movie_title("Planned Folder Fixture");
+    title.facet = MediaFacet::Series;
+    title.year = Some(2031);
+    let media_root = "/library/series";
+
+    let current_files = [
+        "/library/series/Old Fixture Name/Season 01/Episode 01.mkv",
+        "/library/series/Old Fixture Name/Season 02/Episode 02.mkv",
+        "/library/series/Old Fixture Name/Episode 03.mkv",
+        "/library/series/Old Fixture Name/Extras/Deep/Episode 04.mkv",
+        "/library/series/Unrelated Folder/Episode 05.mkv",
+    ];
+    for recorded_folder in [
+        Some("/library/series/Old Fixture Name"),
+        // A record damaged into the root itself, or an ancestor of it.
+        Some("/library/series"),
+        Some("/library"),
+        None,
+    ] {
+        title.folder_path = recorded_folder.map(str::to_string);
+        for folder_template in ["{title}", "{title} ({year})", ""] {
+            let planned =
+                configured_title_folder_path(media_root, &title, folder_template, title.year);
+            for use_season_folders in [true, false] {
+                for season in [Some(1), Some(0), None] {
+                    for current in current_files {
+                        let parent = episode_parent_path_for_renamed_file(
+                            &title,
+                            use_season_folders,
+                            std::path::Path::new(current),
+                            media_root,
+                            folder_template,
+                            season,
+                            "Season {season:2}",
+                            "Specials",
+                        );
+                        assert!(
+                            parent.starts_with(&planned),
+                            "{parent:?} escapes {planned:?} (recorded {recorded_folder:?}, \
+                             season folders {use_season_folders}, season {season:?})"
+                        );
+                    }
+                }
+            }
+            for current in current_files {
+                let parent = title_folder_path_for_renamed_file(
+                    &title,
+                    std::path::Path::new(current),
+                    media_root,
+                    folder_template,
+                );
+                assert!(
+                    parent.starts_with(&planned),
+                    "{parent:?} escapes {planned:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A record damaged into the library root must not carry the old title
+/// folder's name into the new one: the movie lands directly in the planned
+/// folder rather than in `<planned>/<old name>`.
+#[test]
+fn a_recorded_root_does_not_nest_the_old_title_folder() {
+    let mut title = test_movie_title("Nesting Fixture");
+    title.folder_path = Some("/library/movies".to_string());
+    let parent = title_folder_path_for_renamed_file(
+        &title,
+        std::path::Path::new("/library/movies/Old Nesting Name/Nesting Fixture.mkv"),
+        "/library/movies",
+        "{title}",
+    );
+    assert_eq!(parent, PathBuf::from("/library/movies/Nesting Fixture"));
+
+    title.folder_path = Some("/library/movies/Old Nesting Name".to_string());
+    let parent = title_folder_path_for_renamed_file(
+        &title,
+        std::path::Path::new("/library/movies/Old Nesting Name/Featurettes/Clip.mkv"),
+        "/library/movies",
+        "{title}",
+    );
+    assert_eq!(
+        parent,
+        PathBuf::from("/library/movies/Nesting Fixture/Featurettes")
+    );
+}
+
 #[cfg(unix)]
 #[test]
-fn infer_title_folder_path_after_rename_decodes_stored_paths() {
+fn renamed_file_parent_decodes_an_escaped_recorded_folder() {
     use std::os::unix::ffi::OsStringExt;
 
     let existing_root = PathBuf::from(std::ffi::OsString::from_vec(
-        b"/library/old-\xFF-root".to_vec(),
+        b"/library/movies/old-\xFF-root".to_vec(),
     ));
-    let current_path = existing_root.join("Season 01").join("Episode.mkv");
-    let final_path = PathBuf::from("/library/new-root/Season 01/Episode.mkv");
+    let current_path = existing_root.join("Featurettes").join("Clip.mkv");
     let mut title = test_movie_title("Encoded Root");
     title.folder_path = Some(path_to_stored_string(&existing_root));
 
-    let inferred = infer_title_folder_path_after_rename(
-        &title,
-        true,
-        &path_to_stored_string(&current_path),
-        &path_to_stored_string(&final_path),
-    )
-    .expect("infer folder path");
+    let parent =
+        title_folder_path_for_renamed_file(&title, &current_path, "/library/movies", "{title}");
 
     assert_eq!(
-        stored_path_to_path_buf(&inferred),
-        PathBuf::from("/library/new-root")
+        parent,
+        PathBuf::from("/library/movies/Encoded Root/Featurettes")
     );
+}
+
+#[test]
+fn planned_rename_title_folder_is_looked_up_by_title() {
+    let mut plan = build_rename_plan_from_items(
+        MediaFacet::Series,
+        None,
+        String::new(),
+        RenameCollisionPolicy::Skip,
+        RenameMissingMetadataPolicy::FallbackTitle,
+        Vec::new(),
+    );
+    assert_eq!(planned_rename_title_folder(&plan, "title-a"), None);
+    plan.title_folders = vec![
+        RenamePlanTitleFolder {
+            title_id: "title-a".to_string(),
+            folder_path: "/library/series/Show A".to_string(),
+        },
+        RenamePlanTitleFolder {
+            title_id: "title-b".to_string(),
+            folder_path: "  ".to_string(),
+        },
+    ];
+    assert_eq!(
+        planned_rename_title_folder(&plan, "title-a"),
+        Some("/library/series/Show A")
+    );
+    assert_eq!(planned_rename_title_folder(&plan, "title-b"), None);
+
+    // A plan serialized before the field existed still reads, and records
+    // no folder.
+    let mut value = serde_json::to_value(&plan).expect("serialize plan");
+    value
+        .as_object_mut()
+        .expect("plan object")
+        .remove("title_folders");
+    let restored: RenamePlan = serde_json::from_value(value).expect("deserialize plan");
+    assert!(restored.title_folders.is_empty());
 }
 
 #[test]
@@ -1661,12 +1787,11 @@ fn movie_rename_items_use_saved_hydrated_localized_title_name() {
         items[0].normalized_filename.as_deref(),
         Some("サンドライン.mkv")
     );
-    assert!(
-        items[0]
-            .proposed_path
-            .as_deref()
-            .is_some_and(|path| path.ends_with("/サンドライン.mkv"))
-    );
+    assert!(items[0].proposed_path.as_deref().is_some_and(|path| {
+        std::path::Path::new(path)
+            .file_name()
+            .is_some_and(|name| name == "サンドライン.mkv")
+    }));
 }
 
 #[test]
@@ -1707,5 +1832,124 @@ fn rename_planning_key_still_separates_different_paths() {
     assert_ne!(
         rename_planning_path_key("/media/TV/Show/one.mkv"),
         rename_planning_path_key("/media/TV/Show/two.mkv")
+    );
+}
+
+fn planned_folder(title_id: &str, folder_path: &str) -> RenamePlanTitleFolder {
+    RenamePlanTitleFolder {
+        title_id: title_id.to_string(),
+        folder_path: folder_path.to_string(),
+    }
+}
+
+fn overlap_titles(overlap: &PlannedTitleFolderOverlap<'_>) -> (String, String) {
+    (
+        overlap.outer.folder.title_id.clone(),
+        overlap.inner.folder.title_id.clone(),
+    )
+}
+
+#[test]
+fn two_titles_planned_into_the_same_folder_overlap() {
+    let folders = vec![
+        planned_folder("title-a", "/media/movies/Shared Name (2024)"),
+        planned_folder("title-b", "/media/movies/Other Name (2021)"),
+        planned_folder("title-c", "/media/movies/Shared Name (2024)/"),
+    ];
+    let overlap = planned_title_folder_overlap(&folders, &[]).expect("the shared folder is found");
+    assert!(!overlap.nested);
+    let (outer, inner) = overlap_titles(&overlap);
+    let mut pair = [outer, inner];
+    pair.sort();
+    assert_eq!(pair, ["title-a", "title-c"]);
+}
+
+#[test]
+fn a_title_planned_inside_another_titles_folder_overlaps() {
+    let folders = vec![
+        planned_folder("title-inner", "/media/movies/Outer Name (2020)/Extras Name"),
+        planned_folder("title-outer", "/media/movies/Outer Name (2020)"),
+    ];
+    let overlap = planned_title_folder_overlap(&folders, &[]).expect("the nesting is found");
+    assert!(overlap.nested);
+    assert_eq!(
+        overlap_titles(&overlap),
+        ("title-outer".to_string(), "title-inner".to_string())
+    );
+}
+
+#[test]
+fn distinct_planned_folders_do_not_overlap() {
+    let folders = vec![
+        planned_folder("title-a", "/media/movies/Name (2020)"),
+        // A shared name prefix is not containment.
+        planned_folder("title-b", "/media/movies/Name (2020) Remastered"),
+        planned_folder("title-c", "/media/series/Name (2020)"),
+        // One title listed twice is still one title.
+        planned_folder("title-a", "/media/movies/Name (2020)"),
+    ];
+    assert!(planned_title_folder_overlap(&folders, &[]).is_none());
+}
+
+#[test]
+fn titles_left_where_they_are_never_overlap_each_other() {
+    let planned = vec![planned_folder(
+        "title-moving",
+        "/media/movies/Fresh Name (2022)",
+    )];
+    let standing = vec![
+        planned_folder("title-a", "/media/movies/Shared Name (2024)"),
+        planned_folder("title-b", "/media/movies/Shared Name (2024)"),
+        planned_folder("title-c", "/media/movies/Shared Name (2024)/Nested Name"),
+    ];
+    assert!(planned_title_folder_overlap(&planned, &standing).is_none());
+}
+
+#[test]
+fn a_planned_folder_that_is_another_titles_current_folder_overlaps() {
+    let planned = vec![planned_folder(
+        "title-moving",
+        "/media/movies/Shared Name (2024)",
+    )];
+    let standing = vec![planned_folder(
+        "title-idle",
+        "/media/movies/Shared Name (2024)/",
+    )];
+    let overlap =
+        planned_title_folder_overlap(&planned, &standing).expect("the shared folder is found");
+    assert!(!overlap.nested);
+    assert!(overlap.outer.planned != overlap.inner.planned);
+}
+
+#[test]
+fn a_planned_folder_nested_with_another_titles_current_folder_overlaps() {
+    let planned = vec![planned_folder(
+        "title-moving",
+        "/media/movies/Outer Name (2020)/Inner Name",
+    )];
+    let standing = vec![planned_folder(
+        "title-idle",
+        "/media/movies/Outer Name (2020)",
+    )];
+    let overlap = planned_title_folder_overlap(&planned, &standing).expect("inside is found");
+    assert!(overlap.nested);
+    assert_eq!(
+        overlap_titles(&overlap),
+        ("title-idle".to_string(), "title-moving".to_string())
+    );
+
+    let planned = vec![planned_folder(
+        "title-moving",
+        "/media/movies/Outer Name (2020)",
+    )];
+    let standing = vec![planned_folder(
+        "title-idle",
+        "/media/movies/Outer Name (2020)/Inner Name",
+    )];
+    let overlap = planned_title_folder_overlap(&planned, &standing).expect("around is found");
+    assert!(overlap.nested);
+    assert_eq!(
+        overlap_titles(&overlap),
+        ("title-moving".to_string(), "title-idle".to_string())
     );
 }

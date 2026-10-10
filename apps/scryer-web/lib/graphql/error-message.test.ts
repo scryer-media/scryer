@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { classifyStatusToastLevel } from "../utils/status-toast.ts";
 import {
   isMfaStepUpRequiredError,
   normalizeGraphQlErrorMessage,
@@ -35,7 +34,7 @@ test("normalizeGraphQlErrorMessage strips plain GraphQL prefixes", () => {
   );
 });
 
-test("expired release candidates show an actionable error toast", () => {
+test("expired release candidates show an actionable message", () => {
   const rawMessage = "unauthorized: invalid release candidate token: ExpiredSignature";
   for (const error of [
     new Error(rawMessage),
@@ -45,7 +44,6 @@ test("expired release candidates show an actionable error toast", () => {
     const message = userFacingGraphQlErrorMessage(error, "queue failed");
     assert.equal(message, "Search results expired, please search again");
     assert.equal(normalizeGraphQlErrorMessage(message), message);
-    assert.equal(classifyStatusToastLevel(message), "ERROR");
   }
 });
 
@@ -101,7 +99,7 @@ test("userFacingGraphQlErrorMessage uses fallback when no message exists", () =>
   assert.equal(userFacingGraphQlErrorMessage({ graphQLErrors: [] }, "queue failed"), "queue failed");
 });
 
-test("queue validation failure normalizes into global status text that toasts as error", () => {
+test("queue validation failure normalizes into the global status text", () => {
   const message = userFacingGraphQlErrorMessage(
     {
       graphQLErrors: [
@@ -115,7 +113,6 @@ test("queue validation failure normalizes into global status text that toasts as
   );
 
   assert.equal(message, "no download client enabled for library movie_default_library");
-  assert.equal(classifyStatusToastLevel(message), "ERROR");
 });
 
 test("GraphQL internal errors mask repository details and include the reference id", () => {
@@ -136,5 +133,4 @@ test("GraphQL internal errors mask repository details and include the reference 
     message,
     "Internal server error. Reference ID: err-123",
   );
-  assert.equal(classifyStatusToastLevel(message), "ERROR");
 });

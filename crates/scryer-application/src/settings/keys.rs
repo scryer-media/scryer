@@ -7,6 +7,7 @@ pub const SETTINGS_SOURCE_TYPED_GRAPHQL: &str = "typed_graphql";
 
 pub const SCORING_PERSONA_KEY: &str = "quality.scoring_persona";
 pub const REQUIRED_AUDIO_LANGUAGES_KEY: &str = "audio.required_languages";
+pub const SEARCH_LANGUAGES_KEY: &str = "search.languages";
 pub const TITLE_REQUIRED_AUDIO_OVERRIDE_KEY: &str = "audio.required_languages.title_override";
 pub const AUDIO_PERSONA_MIGRATION_SENTINEL_KEY: &str = "audio_persona_settings_migrated";
 
@@ -85,6 +86,12 @@ pub const AUTO_BACKUP_DISABLED_MISSING_KEY_NOTICE_KEY: &str =
 pub const BACKUP_PATH_KEY: &str = "backup.path";
 pub const AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY: &str =
     "backup.auto.post_upgrade_pending_version";
+// Interpreters that run operator scripts. Absent means the conventional
+// command name resolved through PATH.
+pub const SCRIPT_INTERPRETER_PYTHON_KEY: &str = "scripts.interpreter.python";
+pub const SCRIPT_INTERPRETER_POWERSHELL_KEY: &str = "scripts.interpreter.powershell";
+pub const SCRIPT_INTERPRETER_BATCH_KEY: &str = "scripts.interpreter.batch";
+pub const SCRIPT_INTERPRETER_GO_KEY: &str = "scripts.interpreter.go";
 pub const FORM_LOGIN_ENABLED_KEY: &str = "auth.form_login_enabled";
 pub const PASSWORD_MIN_LENGTH_KEY: &str = "auth.password_min_length";
 pub const SESSION_DURATION_DAYS_KEY: &str = "auth.session_duration_days";

@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { classifyStatusToastLevel } from "./status-toast.ts";
-import { autoSearchOutcomeMessage, autoSearchRejectionFromError } from "./auto-search-outcome.ts";
+import {
+  autoSearchOutcomeMessage,
+  autoSearchRejectionFromError,
+  reportAutomaticSearchFailure,
+} from "./auto-search-outcome.ts";
 
 const t = (key: string, values?: Record<string, unknown>) => {
   switch (key) {
@@ -63,7 +66,6 @@ test("names the blocking rule when every candidate was quality-blocked", () => {
       "quality profile blocked this release: managed_required_audio_missing (3); " +
       "release title does not match the target title (1)",
   );
-  assert.equal(classifyStatusToastLevel(message ?? ""), "WARNING");
 });
 
 test("reports an empty candidate set separately from a rejected one", () => {
@@ -73,7 +75,6 @@ test("reports an empty candidate set separately from a rejected one", () => {
     message,
     "No release found for Silver Horizon: no indexer returned a candidate.",
   );
-  assert.equal(classifyStatusToastLevel(message ?? ""), "WARNING");
 });
 
 test("caps the reason list and tolerates malformed extension entries", () => {
@@ -94,4 +95,30 @@ test("caps the reason list and tolerates malformed extension entries", () => {
   const message = autoSearchOutcomeMessage(error, t, "X");
   assert.ok(message?.includes("reason c (2)"));
   assert.ok(!message?.includes("reason d"));
+});
+
+test("a search that found nothing to grab is reported as a warning, not a failure", () => {
+  const reported: Array<[string, string | undefined]> = [];
+  reportAutomaticSearchFailure(
+    (status, options) => reported.push([status, options?.level]),
+    t,
+    rejectionError({ autoCandidateCount: 0, autoDecisionReasons: [] }),
+    "Silver Horizon",
+  );
+  assert.deepEqual(reported, [
+    ["No release found for Silver Horizon: no indexer returned a candidate.", "WARNING"],
+  ]);
+});
+
+test("a search that could not run is reported as an error whatever the server said", () => {
+  const reported: Array<[string, string | undefined]> = [];
+  reportAutomaticSearchFailure(
+    (status, options) => reported.push([status, options?.level]),
+    t,
+    new Error("category_mismatch: indexer category 'TV > HD' contradicts the movie subject"),
+    "Silver Horizon",
+  );
+  assert.deepEqual(reported, [
+    ["category_mismatch: indexer category 'TV > HD' contradicts the movie subject", "ERROR"],
+  ]);
 });

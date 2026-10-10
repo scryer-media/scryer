@@ -223,7 +223,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
           ? caught.message
           : tRef.current("discovery.failedToLoad");
       setError(message);
-      setGlobalStatusRef.current(message);
+      setGlobalStatusRef.current(message, { level: "ERROR" });
     } finally {
       if (mountedRef.current && refreshRequestIdRef.current === requestId) {
         setLoading(false);
@@ -302,7 +302,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
       }
       const facet = discoveryItemFacet(item);
       if (!facet) {
-        setGlobalStatus(t("status.apiError"));
+        setGlobalStatus(t("status.apiError"), { level: "ERROR" });
         return;
       }
       const canManageFacet = (librariesByFacet[facet] ?? []).length > 0;
@@ -364,6 +364,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
       } catch (caught) {
         setGlobalStatus(
           caught instanceof Error ? caught.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       }
     },

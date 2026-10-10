@@ -16,6 +16,122 @@ fn departed_added(subscription_id: &str, key: &str) -> scryer_domain::ListMember
 }
 
 #[tokio::test]
+async fn a_series_movie_departure_never_changes_its_parent() {
+    for on_leave in [ListOnLeave::Unmonitor, ListOnLeave::Tag, ListOnLeave::Log] {
+        let mut list = subscription("movie-list");
+        list.on_leave = on_leave;
+        let store = MemoryListStore::with_subscriptions(vec![list.clone()]);
+        let mut row = departed_added(&list.id, "movie");
+        row.series_movie = Some(scryer_domain::ListSeriesMovieTarget {
+            parent_smg_id: 42,
+            parent_tvdb_id: 43,
+            parent_name: "Fixture parent".into(),
+            link_id: Some("movie-link".into()),
+        });
+        store.insert_rows(vec![row]);
+        let actions = RecordingActions::default();
+        let report = handle_departures(&list, &store, &store, &actions)
+            .await
+            .unwrap();
+        assert_eq!(report.acted, 0);
+        assert!(actions.calls().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn personal_departure_preserves_monitoring_and_tags_after_owner_grants_are_revoked() {
+    for on_leave in [ListOnLeave::Unmonitor, ListOnLeave::Tag] {
+        let mut list = subscription("private-follow");
+        list.scope = scryer_domain::ListScope::Personal;
+        list.on_leave = on_leave;
+        let store = MemoryListStore::with_subscriptions(vec![list.clone()]);
+        store.insert_rows(vec![departed_added(&list.id, "alpha")]);
+        let actions = RecordingActions {
+            owner_manages_titles: false,
+            ..Default::default()
+        };
+        let report = handle_departures(&list, &store, &store, &actions)
+            .await
+            .unwrap();
+        assert_eq!(report.acted, 0);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.not_permitted, 1);
+        // The title is left alone; the owner's history records the departure
+        // as logged so the reason nothing changed stays visible.
+        let recorded = vec![RecordedAction::Departure {
+            title_id: "title-alpha".into(),
+            action: ListOnLeave::Log,
+        }];
+        assert_eq!(actions.calls(), recorded);
+        // Settled once: the next sync neither counts it nor touches the title.
+        assert!(store.row(&list.id, "alpha").left_handled);
+        let again = handle_departures(&list, &store, &store, &actions)
+            .await
+            .unwrap();
+        assert_eq!(again, LeaveReport::default());
+        assert_eq!(actions.calls(), recorded);
+    }
+}
+
+#[tokio::test]
+async fn personal_departure_without_a_library_route_stays_owed() {
+    let mut list = subscription("private-follow");
+    list.scope = scryer_domain::ListScope::Personal;
+    list.on_leave = ListOnLeave::Unmonitor;
+    let routed = list.routes.clone();
+    list.routes.clear();
+    let store = MemoryListStore::with_subscriptions(vec![list.clone()]);
+    store.insert_rows(vec![departed_added(&list.id, "alpha")]);
+    let actions = RecordingActions {
+        owner_manages_titles: true,
+        ..Default::default()
+    };
+    let report = handle_departures(&list, &store, &store, &actions)
+        .await
+        .unwrap();
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.not_permitted, 0);
+    assert!(actions.calls().is_empty());
+    assert!(!store.row(&list.id, "alpha").left_handled);
+
+    // Once the kind is routed again the owed departure runs.
+    list.routes = routed;
+    let retried = handle_departures(&list, &store, &store, &actions)
+        .await
+        .unwrap();
+    assert_eq!(retried.acted, 1);
+    assert!(store.row(&list.id, "alpha").left_handled);
+}
+
+#[tokio::test]
+async fn personal_departure_stays_owed_when_the_owner_permission_cannot_be_read() {
+    let mut list = subscription("private-follow");
+    list.scope = scryer_domain::ListScope::Personal;
+    list.on_leave = ListOnLeave::Unmonitor;
+    let store = MemoryListStore::with_subscriptions(vec![list.clone()]);
+    store.insert_rows(vec![departed_added(&list.id, "alpha")]);
+    let mut actions = RecordingActions {
+        owner_manages_titles: true,
+        owner_permission_unreadable: true,
+        ..Default::default()
+    };
+    let report = handle_departures(&list, &store, &store, &actions)
+        .await
+        .unwrap();
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.not_permitted, 0);
+    assert!(actions.calls().is_empty());
+    assert!(!store.row(&list.id, "alpha").left_handled);
+
+    actions.owner_permission_unreadable = false;
+    let retried = handle_departures(&list, &store, &store, &actions)
+        .await
+        .unwrap();
+    assert_eq!(retried.acted, 1);
+    assert!(store.row(&list.id, "alpha").left_handled);
+}
+
+#[tokio::test]
 async fn keep_records_the_departure_and_does_nothing_else() {
     let list = subscription("list-a");
     let store = MemoryListStore::with_subscriptions(vec![list.clone()]);

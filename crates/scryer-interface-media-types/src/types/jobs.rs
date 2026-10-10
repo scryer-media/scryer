@@ -68,6 +68,9 @@ pub enum JobKeyValue {
     ApplicationUpgrade,
     /// Location operation: a root move, transfer, or other placement change.
     LocationOperation,
+    /// A user-defined scheduled script; each script is told apart by its
+    /// `customJobId`.
+    CustomJob,
 }
 
 /// Broad category assigned to a job.
@@ -108,6 +111,10 @@ pub enum JobScheduleKindValue {
     StartupAndInterval,
     /// Runs once per day at a configured local time.
     DailyAtTime,
+    /// Runs on a five-field crontab expression in host-local time.
+    Cron,
+    /// Runs on chosen weekdays at a configured local time.
+    WeeklyAtTime,
 }
 
 /// Source that started a job run.
@@ -238,6 +245,9 @@ pub struct JobScheduleInfoPayload {
 pub struct JobDefinitionPayload {
     /// Stable job key.
     pub key: JobKeyValue,
+    /// ID of the scheduled script behind a `CUSTOM_JOB` definition, or null
+    /// for built-in jobs.
+    pub custom_job_id: Option<ID>,
     /// Display name of the job.
     pub display_name: String,
     /// Human-readable job description.
@@ -261,6 +271,9 @@ pub struct JobRunPayload {
     pub id: ID,
     /// Stable key of the job being run.
     pub job_key: JobKeyValue,
+    /// ID of the scheduled script a `CUSTOM_JOB` run executes, or null for
+    /// built-in jobs.
+    pub custom_job_id: Option<ID>,
     /// Display name of the job.
     pub display_name: String,
     /// Broad job category.

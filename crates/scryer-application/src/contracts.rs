@@ -481,7 +481,13 @@ pub struct ImportArtifact {
     pub source_system: String,
     pub source_ref: String,
     pub import_id: Option<String>,
+    /// The source path relative to the download folder, when it lies there.
     pub relative_path: Option<String>,
+    /// Where the source sat in the owned archive workspace it was imported
+    /// from, when it came out of one: the workspace directory name, then the
+    /// path inside it (`<workspace>/out/...`), so it identifies the workspace
+    /// as well as the file.
+    pub workspace_relative_path: Option<String>,
     pub normalized_file_name: String,
     pub media_kind: String,
     pub title_id: Option<String>,
@@ -506,6 +512,7 @@ impl ImportArtifact {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StagedNzbRef {
+    pub password_candidates: DownloadPasswordCandidates,
     pub id: String,
     pub compressed_path: PathBuf,
     pub raw_size_bytes: u64,
@@ -934,48 +941,36 @@ impl CollectionUpdate {
     }
 }
 
+/// Every `Option<Option<_>>` field shares one convention: `None` leaves the
+/// stored value alone, `Some(value)` rewrites it, and `Some(None)` clears it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EpisodeUpdate {
     pub episode_type: Option<scryer_domain::EpisodeType>,
     pub episode_number: Option<String>,
     pub season_number: Option<String>,
-    pub episode_label: Option<String>,
-    pub title: Option<String>,
-    pub air_date: Option<String>,
+    pub episode_label: Option<Option<String>>,
+    pub title: Option<Option<String>>,
+    pub air_date: Option<Option<String>>,
     pub duration_seconds: Option<i64>,
     pub has_multi_audio: Option<bool>,
     pub has_subtitle: Option<bool>,
+    pub is_filler: Option<bool>,
+    pub is_recap: Option<bool>,
     pub monitored: Option<bool>,
     pub collection_id: Option<String>,
-    pub overview: Option<String>,
-    pub tvdb_id: Option<String>,
-    pub tmdb_id: Option<String>,
+    pub overview: Option<Option<String>>,
+    pub tvdb_id: Option<Option<String>>,
+    pub tmdb_id: Option<Option<String>>,
     pub image_url: Option<String>,
     pub clear_image_url: bool,
-    /// `Some(value)` rewrites the stored contiguous absolute number, including
-    /// clearing it with `Some(None)`; `None` leaves it alone.
+    /// The raw upstream absolute number.
+    pub absolute_number: Option<Option<String>>,
     pub contiguous_absolute_number: Option<Option<i32>>,
 }
 
 impl EpisodeUpdate {
     pub fn has_changes(&self) -> bool {
-        self.episode_type.is_some()
-            || self.episode_number.is_some()
-            || self.season_number.is_some()
-            || self.episode_label.is_some()
-            || self.title.is_some()
-            || self.air_date.is_some()
-            || self.duration_seconds.is_some()
-            || self.has_multi_audio.is_some()
-            || self.has_subtitle.is_some()
-            || self.monitored.is_some()
-            || self.collection_id.is_some()
-            || self.overview.is_some()
-            || self.tvdb_id.is_some()
-            || self.tmdb_id.is_some()
-            || self.image_url.is_some()
-            || self.clear_image_url
-            || self.contiguous_absolute_number.is_some()
+        self.monitored.is_some() || self.has_non_monitor_changes()
     }
 
     pub fn has_non_monitor_changes(&self) -> bool {
@@ -988,12 +983,15 @@ impl EpisodeUpdate {
             || self.duration_seconds.is_some()
             || self.has_multi_audio.is_some()
             || self.has_subtitle.is_some()
+            || self.is_filler.is_some()
+            || self.is_recap.is_some()
             || self.collection_id.is_some()
             || self.overview.is_some()
             || self.tvdb_id.is_some()
             || self.tmdb_id.is_some()
             || self.image_url.is_some()
             || self.clear_image_url
+            || self.absolute_number.is_some()
             || self.contiguous_absolute_number.is_some()
     }
 }
@@ -1320,7 +1318,7 @@ pub fn indexer_search_eligibility(
     IndexerSearchEligibility::Eligible
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DownloadClientAddRequest {
     pub title: Title,
     /// The facet this grab was searched and validated as, when it differs
@@ -1366,7 +1364,57 @@ pub struct DownloadClientAddRequest {
     pub pinned_download_client_id: Option<String>,
 }
 
+impl std::fmt::Debug for DownloadClientAddRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DownloadClientAddRequest")
+            .field("download_id", &self.download_id)
+            .field("source_kind", &self.source_kind)
+            .field("password_candidates", &self.password_candidates())
+            .finish_non_exhaustive()
+    }
+}
+
 impl DownloadClientAddRequest {
+    pub fn source_title_without_password(&self) -> Option<String> {
+        self.source_title.as_deref().map(|name| {
+            crate::import::archive_passwords::release_name_without_password(name).to_string()
+        })
+    }
+
+    pub fn release_title_without_password(&self) -> Option<String> {
+        self.release_title.as_deref().map(|name| {
+            crate::import::archive_passwords::release_name_without_password(name).to_string()
+        })
+    }
+
+    /// Release-specific candidates only. Plugin-wide settings never enter this path.
+    pub fn password_candidates(&self) -> DownloadPasswordCandidates {
+        let mut candidates = self
+            .staged_nzb
+            .as_ref()
+            .map(|staged| staged.password_candidates.clone())
+            .unwrap_or_default();
+        if let Some(ResolvedDownloadArtifact::Nzb {
+            password_candidates,
+            ..
+        }) = &self.resolved_download_artifact
+        {
+            candidates.extend(password_candidates.iter().map(String::as_str));
+        }
+        if let Some(password) = self.source_password.as_deref() {
+            candidates.push(password);
+        }
+        for name in [self.source_title.as_deref(), self.release_title.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(password) = crate::import::archive_passwords::release_name_password(name) {
+                candidates.push(&password);
+            }
+        }
+        candidates
+    }
+
     pub fn from_legacy(
         title: &Title,
         source_hint: Option<String>,
@@ -1406,9 +1454,10 @@ impl DownloadClientAddRequest {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum ResolvedDownloadArtifact {
     Nzb {
+        password_candidates: DownloadPasswordCandidates,
         bytes: Vec<u8>,
         file_name: Option<String>,
         content_type: Option<String>,
@@ -1423,6 +1472,70 @@ pub enum ResolvedDownloadArtifact {
         content_type: Option<String>,
         info_hash_hint: Option<String>,
     },
+}
+
+impl std::fmt::Debug for ResolvedDownloadArtifact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Nzb {
+                bytes,
+                password_candidates,
+                ..
+            } => f
+                .debug_struct("Nzb")
+                .field("byte_count", &bytes.len())
+                .field("password_candidates", password_candidates)
+                .finish_non_exhaustive(),
+            Self::Magnet { .. } => f.debug_struct("Magnet").finish_non_exhaustive(),
+            Self::TorrentFile { bytes, .. } => f
+                .debug_struct("TorrentFile")
+                .field("byte_count", &bytes.len())
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+/// Whether a single remote retry was acknowledged; uncertain dispatches require reconciliation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DownloadClientRetryOutcome {
+    Accepted { item_id: String },
+    Refused,
+    Uncertain,
+}
+
+/// Ordered literal secrets; persistence owners must encrypt their serialization.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct DownloadPasswordCandidates(Vec<String>);
+
+impl std::fmt::Debug for DownloadPasswordCandidates {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DownloadPasswordCandidates")
+            .field("count", &self.0.len())
+            .finish()
+    }
+}
+
+impl DownloadPasswordCandidates {
+    pub fn push(&mut self, value: &str) {
+        if !value.is_empty() && !self.0.iter().any(|existing| existing == value) {
+            self.0.push(value.to_string());
+        }
+    }
+    pub fn extend<'a>(&mut self, values: impl IntoIterator<Item = &'a str>) {
+        for value in values {
+            self.push(value);
+        }
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &String> {
+        self.0.iter()
+    }
+    pub fn first(&self) -> Option<&str> {
+        self.0.first().map(String::as_str)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// The indexer-owned context used to turn a release source into a submission

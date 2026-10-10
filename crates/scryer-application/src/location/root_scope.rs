@@ -2247,7 +2247,7 @@ mod plan_test_support {
             mode: LocationExecutionMode::MoveWithScryer,
             titles,
             entries: Vec::new(),
-            verification_depth: VerificationDepth::default(),
+            verification_depth: VerificationDepth::Full,
             free_space: FreeSpaceEstimate::unknown(),
             same_volume: Some(false),
             case_rule: PathCaseRule::CaseSensitive,

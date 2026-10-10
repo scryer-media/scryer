@@ -154,6 +154,8 @@ pub struct AppConfigServices {
     pub(crate) plugin_http_trust_runtime: RuntimeFeature<Arc<dyn PluginHttpTrustConfigRuntime>>,
     pub(crate) logical_backup_exporter: Arc<dyn LogicalBackupExporter>,
     pub(crate) backup_dir: PathBuf,
+    /// Root directory inline scripts are materialized under.
+    pub(crate) scripts_dir: PathBuf,
     pub(crate) smg_registration_secret: Option<String>,
     pub(crate) smg_gateway_url: Option<String>,
 }
@@ -254,6 +256,9 @@ pub struct AppListServices {
     pub(crate) accounts: Arc<dyn crate::lists::UserListAccountRepository>,
     pub(crate) policies: Arc<dyn crate::lists::UserListPolicyRepository>,
     pub(crate) plugins: Arc<dyn crate::lists::ListPluginProvider>,
+    pub(crate) auth: Arc<dyn crate::lists::account_transport::ListAccountAuthGateway>,
+    pub(crate) account_runtime: Arc<crate::lists::accounts::ListAccountRuntime>,
+    pub(crate) vocabulary: Arc<crate::lists::vocabulary::VocabularyRuntime>,
 }
 
 impl AppListServices {
@@ -266,6 +271,9 @@ impl AppListServices {
             accounts: store.clone(),
             policies: store,
             plugins: Arc::new(crate::lists::NullListPluginProvider),
+            auth: Arc::new(crate::lists::account_transport::NullListAccountAuthGateway),
+            account_runtime: Arc::new(crate::lists::accounts::ListAccountRuntime::default()),
+            vocabulary: Arc::new(crate::lists::vocabulary::VocabularyRuntime::default()),
         }
     }
 }
@@ -453,6 +461,7 @@ impl AppServices {
                 system_info: Arc::new(NullSystemInfoProvider),
                 plugin_http_trust_runtime: RuntimeFeature::Disabled,
                 logical_backup_exporter: Arc::new(NullLogicalBackupExporter),
+                scripts_dir: default_scripts_dir(&backup_dir),
                 backup_dir,
                 smg_registration_secret: None,
                 smg_gateway_url: None,
@@ -484,4 +493,13 @@ impl AppServices {
             lists: AppListServices::disabled(),
         }
     }
+}
+
+/// Scripts live beside backups under the data directory unless the assembly
+/// names another directory.
+fn default_scripts_dir(backup_dir: &std::path::Path) -> PathBuf {
+    backup_dir
+        .parent()
+        .map(|data_dir| data_dir.join("scripts"))
+        .unwrap_or_else(|| backup_dir.join("scripts"))
 }

@@ -500,6 +500,15 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     lastUpdatedAt
     attentionRequired
     attentionReason
+    passwordFailureCode
+    passwordRetryImportId
+    heldImportSources {
+      importId
+      importIds
+      titleNames
+      reason
+      clientPolicy
+    }
     downloadClientItemId
     downloadId
     importStatus
@@ -1330,6 +1339,8 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
       elapsedMs
       failureReason
       rateLimited
+      skipReason
+      skippedUntil
     }
     startedAt
     completedAt
@@ -1587,6 +1598,7 @@ export const mediaRequestRequesterLibrariesQuery = `query MediaRequestRequesterL
 
 export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
   librarySettings(libraryId: $libraryId) {
+    searchLanguages
     requiredAudioLanguagesOverride
     requiredAudioLanguages
     metadataLanguageOverride
@@ -1993,6 +2005,7 @@ export const mediaRenamePreviewBulkQuery = `query MediaRenamePreviewBulk($input:
     noop
     conflicts
     errors
+    folderRepairs
     items {
       collectionId
       currentPath
@@ -2015,6 +2028,7 @@ export const mediaRenamePreviewQuery = `query MediaRenamePreview($input: MediaRe
     noop
     conflicts
     errors
+    folderRepairs
     items {
       collectionId
       seriesMovieLinkIds
@@ -2143,6 +2157,7 @@ ${LIBRARY_SCAN_PROGRESS_FIELDS}
 export const jobsQuery = `query Jobs {
   jobs {
     key
+    customJobId
     displayName
     description
     category
@@ -2162,6 +2177,7 @@ export const jobsQuery = `query Jobs {
 export const JOB_RUN_FIELDS = `
   id
   jobKey
+  customJobId
   displayName
   category
   section
@@ -2184,8 +2200,8 @@ ${JOB_RUN_FIELDS}
   }
 }`;
 
-export const jobRunsQuery = `query JobRuns($jobKey: JobKeyValue!, $limit: Int) {
-  jobRuns(jobKey: $jobKey, limit: $limit) {
+export const jobRunsQuery = `query JobRuns($jobKey: JobKeyValue!, $customJobId: ID, $limit: Int) {
+  jobRuns(jobKey: $jobKey, customJobId: $customJobId, limit: $limit) {
 ${JOB_RUN_FIELDS}
   }
 }`;
@@ -2601,7 +2617,22 @@ const serviceSettingsFieldSelection = `
     tlsKeyPath
     trustedProxyIps
     trustedProxyOverride
-    trustedProxySource`;
+    trustedProxySource
+    publicUrl
+    publicUrlSource
+    publicUrlSaved
+    publicUrlError
+    publicUrlErrorCode
+    publicUrlEditable
+    basePath
+    basePathSource
+    bindAddress
+    bindSource
+    passkeyRpId
+    passkeyRpOrigin
+    passkeyRpSource
+    passkeyUserCount
+    passkeyOnlyUserCount`;
 
 // Batched query for quality profiles page: 5 requests → 1
 export const qualityProfilesInitQuery = `query QualityProfilesInit {
@@ -2813,6 +2844,21 @@ export const tlsSettingsQuery = `query TlsSettings {
   }
 }`;
 
+// What saving a public URL would do, computed by the server without saving.
+export const publicUrlChangePreviewQuery = `query PublicUrlChangePreview($publicUrl: String, $reset: Boolean) {
+  publicUrlChangePreview(publicUrl: $publicUrl, reset: $reset) {
+    normalizedPublicUrl
+    error
+    errorCode
+    passkeyImpact
+    currentPasskeyRpId
+    nextPasskeyRpId
+    passkeyUserCount
+    passkeyOnlyUserCount
+    acknowledgementRequired
+  }
+}`;
+
 // Acquisition settings query
 export const acquisitionSettingsQuery = `query AcquisitionSettings {
   acquisitionSettings {
@@ -2857,12 +2903,19 @@ export const myUiSettingsQuery = `query MyUiSettings {
     density
     sidebarMode
     defaultLandingView
+    language
     tableColumns {
+      deviceClass
       facet
       tableViewMode
       columnId
       columnOrder
       visible
+    }
+    catalogViews {
+      deviceClass
+      facet
+      viewMode
     }
   }
 }`;
@@ -4451,8 +4504,15 @@ export const browsePathQuery = `query BrowsePath($path: String!, $includeFiles: 
   }
 }`;
 
-export const postProcessingScriptsQuery = `query PostProcessingScripts {
-  postProcessingScripts {
+export const SCRIPT_SCHEDULE_FIELDS = `
+      kind
+      everySeconds
+      timeLocal
+      days
+      expression
+`;
+
+export const POST_PROCESSING_SCRIPT_FIELDS = `
     id
     name
     description
@@ -4464,9 +4524,43 @@ export const postProcessingScriptsQuery = `query PostProcessingScripts {
     priority
     enabled
     debug
+    language
+    trigger
+    schedule {${SCRIPT_SCHEDULE_FIELDS}    }
+    runOnStartup
+    scheduleDescription
     createdAt
     updatedAt
+`;
+
+/** Scripts that run after an import, the ones the post-processing settings manage. */
+export const postProcessingScriptsQuery = `query PostProcessingScripts {
+  postProcessingScripts(trigger: POST_IMPORT) {${POST_PROCESSING_SCRIPT_FIELDS}  }
+}`;
+
+/** Scripts that run on their own schedule, listed on the Jobs page. */
+export const scheduledScriptsQuery = `query ScheduledScripts {
+  postProcessingScripts(trigger: SCHEDULE) {${POST_PROCESSING_SCRIPT_FIELDS}  }
+}`;
+
+export const validateScriptScheduleQuery = `query ValidateScriptSchedule($schedule: ScriptScheduleInput!) {
+  validateScriptSchedule(schedule: $schedule) {
+    valid
+    error
+    description
+    nextRuns
   }
+}`;
+
+export const SCRIPT_INTERPRETER_SETTINGS_FIELDS = `
+    python
+    powershell
+    batch
+    go
+`;
+
+export const scriptInterpreterSettingsQuery = `query ScriptInterpreterSettings {
+  scriptInterpreterSettings {${SCRIPT_INTERPRETER_SETTINGS_FIELDS}  }
 }`;
 
 export const postProcessingScriptRunsQuery = `query PostProcessingScriptRuns($scriptId: ID!, $limit: Int) {
@@ -4532,8 +4626,8 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
   }
 }`;
 
-export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue) {
-  mediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status) {
+export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue, $requesterUserId: ID) {
+  mediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status, requesterUserId: $requesterUserId) {
     id
     libraryId
     facet
@@ -5338,6 +5432,10 @@ export const LIST_SUBSCRIPTION_FIELDS = `
       tags
     }
     filters {
+      facet
+      matchAny
+      minimums { source value }
+      unresolvedLabels
       kind
       scale
       value
@@ -5377,6 +5475,12 @@ const LIST_PREVIEW_FIELDS = `
     excluded
     unresolved
     wouldAdd {
+      canonicalSmgId
+      seriesMovieParentSmgId
+      externalRatings { source value score normalized votes url }
+      genresAndThemes
+      originalLanguage
+      releaseDate
       itemKey
       displayTitle
       year
@@ -5528,6 +5632,7 @@ export const listSubscriptionDetailQuery = `query ListSubscriptionDetail($id: ID
       displayTitle
       year
       titleId
+      seriesMovieLinkId
       requestId
       addedByList
       firstSeenAt
@@ -5545,8 +5650,8 @@ export const listSubscriptionDetailQuery = `query ListSubscriptionDetail($id: ID
   }
 }`;
 
-export const listSubscriptionPreviewQuery = `query ListSubscriptionPreview($id: ID!) {
-  listSubscriptionPreview(id: $id) {${LIST_PREVIEW_FIELDS}
+export const listSubscriptionPreviewQuery = `query ListSubscriptionPreview($id: ID!, $filters: [ListFilterInput!], $kinds: [MediaFacetValue!], $maxPerSync: Int) {
+  listSubscriptionPreview(id: $id, filters: $filters, kinds: $kinds, maxPerSync: $maxPerSync) {${LIST_PREVIEW_FIELDS}
   }
 }`;
 
@@ -5555,8 +5660,8 @@ export const listUrlPreviewQuery = `query ListUrlPreview($url: String!) {
   }
 }`;
 
-export const listSourcePreviewQuery = `query ListSourcePreview($input: ListSourceInput!) {
-  listSourcePreview(input: $input) {${LIST_PREVIEW_FIELDS}
+export const listSourcePreviewQuery = `query ListSourcePreview($input: ListSourceInput!, $filters: [ListFilterInput!]!, $kinds: [MediaFacetValue!], $maxPerSync: Int) {
+  listSourcePreview(input: $input, filters: $filters, kinds: $kinds, maxPerSync: $maxPerSync) {${LIST_PREVIEW_FIELDS}
   }
 }`;
 
@@ -5573,6 +5678,17 @@ export const listMemberPoliciesQuery = `query ListMemberPolicies {
     }
     policy
     listRequestsLast30d
+  }
+}`;
+
+export const listLibraryEpisodePoliciesQuery = `query ListLibraryEpisodePolicies {
+  libraries(facet: ANIME, permission: MANAGE_LIBRARY) {
+    id
+    settings {
+      monitorSpecials
+      fillerPolicy
+      recapPolicy
+    }
   }
 }`;
 

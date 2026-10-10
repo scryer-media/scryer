@@ -297,7 +297,7 @@ export function SettingsPluginsContainer() {
         reconcilePluginOperationState(nextPlugins);
       } catch (error) {
         if (reportErrors) {
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
         }
       } finally {
         setInitialLoading(false);
@@ -322,7 +322,7 @@ export function SettingsPluginsContainer() {
       if (error) throw error;
       setAutoUpdateEnabled(data?.pluginAutoUpdateSettings?.enabled ?? false);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     } finally {
       setAutoUpdateLoading(false);
     }
@@ -343,9 +343,9 @@ export function SettingsPluginsContainer() {
         .toPromise();
       if (error) throw error;
       setAutoUpdateEnabled(data?.updatePluginAutoUpdateSettings?.enabled ?? enabled);
-      setGlobalStatus(t("status.pluginAutoUpdateSettingsSaved"));
+      setGlobalStatus(t("status.pluginAutoUpdateSettingsSaved"), { level: "SUCCESS" });
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setAutoUpdateSaving(false);
     }
@@ -424,7 +424,7 @@ export function SettingsPluginsContainer() {
                       ...current,
                       [plugin.id]: message,
                     }));
-                    setGlobalStatus(message);
+                    setGlobalStatus(message, { level: "ERROR" });
                   }
                 } finally {
                   clearPluginProgress(plugin.id);
@@ -446,7 +446,7 @@ export function SettingsPluginsContainer() {
               ...current,
               [plugin.id]: message,
             }));
-            setGlobalStatus(message);
+            setGlobalStatus(message, { level: "ERROR" });
           },
           complete: () => {
             installProgressSubscriptionsRef.current.delete(plugin.id);
@@ -491,7 +491,7 @@ export function SettingsPluginsContainer() {
       dispatchNavigationBadgesRefresh();
       setGlobalStatus(t("status.catalogRefreshed"));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     } finally {
       setRefreshing(false);
     }
@@ -516,7 +516,7 @@ export function SettingsPluginsContainer() {
         await refreshPlugins();
         dispatchNavigationBadgesRefresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       } finally {
         endPluginMutation(plugin.id);
       }
@@ -547,7 +547,7 @@ export function SettingsPluginsContainer() {
         ...current,
         [plugin.id]: message,
       }));
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
       endPluginMutation(plugin.id);
     }
   };
@@ -602,7 +602,7 @@ export function SettingsPluginsContainer() {
     } catch (error) {
       const message = error instanceof Error ? error.message : t("status.failedToLoad");
       setPluginErrors((current) => ({ ...current, __manual: message }));
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setManualBusy(false);
     }
@@ -660,7 +660,7 @@ export function SettingsPluginsContainer() {
     } catch (error) {
       const message = extractPluginMutationErrorMessage(error) ?? t("status.failedToUpdate");
       setPluginErrors((current) => ({ ...current, __manualUpload: message }));
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setManualBusy(false);
     }
@@ -687,7 +687,7 @@ export function SettingsPluginsContainer() {
     } catch (error) {
       const message = formatPluginInstallError(preview.plugin, error, t);
       setPluginErrors((current) => ({ ...current, __manual: message }));
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setManualBusy(false);
       endPluginMutation(preview.plugin.id);
@@ -718,7 +718,7 @@ export function SettingsPluginsContainer() {
         ...current,
         [plugin.id]: message,
       }));
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
       endPluginMutation(plugin.id);
       return false;
     } finally {
@@ -747,6 +747,7 @@ export function SettingsPluginsContainer() {
           t("status.pluginsUpgradeQueued", {
             count: startedCount,
           }),
+          { level: "SUCCESS" },
         );
       }
     } finally {
@@ -772,7 +773,7 @@ export function SettingsPluginsContainer() {
       await refreshPlugins();
       dispatchNavigationBadgesRefresh();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       endPluginMutation(plugin.id);
       setPendingUninstall(null);

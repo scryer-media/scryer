@@ -8,8 +8,8 @@
 //! so the check does not confirm that someone else's list is there.
 //!
 //! The one path that reads across owners is the sync job itself, which runs as
-//! the system and reports personal failures by owner id, provider and error
-//! class only ([`job_failure_label`]).
+//! the system and reports personal failures by error class only
+//! ([`job_failure_label`]).
 
 use scryer_domain::{ListScope, ListSubscription, User, UserListAccount};
 use scryer_plugin_sdk::ListCredential;
@@ -84,8 +84,8 @@ pub fn credential_for(
     }
 }
 
-/// How a job summary names one subscription's failure. A personal list is
-/// named by its owner id and provider only; its name and items never appear.
+/// Global job summaries contain no personal owner or provider association.
+/// Private details remain in the owner's subscription status and events.
 pub fn job_failure_label(subscription: &ListSubscription, failure: &ListFailure) -> String {
     match subscription.scope {
         ListScope::Public => format!(
@@ -94,12 +94,7 @@ pub fn job_failure_label(subscription: &ListSubscription, failure: &ListFailure)
             subscription.source.provider,
             failure.class.as_str()
         ),
-        ListScope::Personal => format!(
-            "personal list of user {} ({}): {}",
-            subscription.owner_user_id,
-            subscription.source.provider,
-            failure.class.as_str()
-        ),
+        ListScope::Personal => format!("personal list: {}", failure.class.as_str()),
     }
 }
 

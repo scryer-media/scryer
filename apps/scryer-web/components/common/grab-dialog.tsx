@@ -310,7 +310,7 @@ export function GrabDialog({
       );
       assertNoReplaceConflict(payload, conflictMessage);
       if (!payload?.jobId) throw new Error(t("status.queueFailed"));
-      setGlobalStatus(t("status.queueSuccess", { name: release.title }));
+      setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
     },
     [
       client,
@@ -391,6 +391,7 @@ export function GrabDialog({
           setErrorMessage(reason);
           setGlobalStatus(
             t("grabDialog.status.failed", { name: release.title, reason }),
+            { level: "ERROR" },
           );
         }
       }

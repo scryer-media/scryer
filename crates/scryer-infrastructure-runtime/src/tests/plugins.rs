@@ -188,6 +188,8 @@ async fn reverting_downloaded_builtin_clears_downloaded_artifact_state() {
     reverted.wasm_digest_algo = None;
     reverted.source_url = None;
     reverted.wasm_digest = None;
+    let bundled_descriptor = test_descriptor_json("newznab", "0.2.1", "usenet_indexer", "newznab");
+    reverted.descriptor_json = Some(bundled_descriptor.clone());
 
     let reverted = customization
         .update_plugin_installation(&reverted, None)
@@ -205,6 +207,24 @@ async fn reverting_downloaded_builtin_clears_downloaded_artifact_state() {
     assert!(reverted.wasm_digest_algo.is_none());
     assert!(reverted.wasm_digest.is_none());
     assert!(reverted.source_url.is_none());
+    assert_eq!(
+        reverted.descriptor_json.as_deref(),
+        Some(bundled_descriptor.as_str())
+    );
+    let mut toggled = reverted.clone();
+    toggled.is_enabled = false;
+    let toggled = customization
+        .update_plugin_installation(&toggled, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        toggled.descriptor_json.as_deref(),
+        Some(bundled_descriptor.as_str())
+    );
+    customization
+        .update_plugin_installation(&reverted, None)
+        .await
+        .unwrap();
 
     let enabled = customization
         .get_enabled_plugin_wasm_bytes()

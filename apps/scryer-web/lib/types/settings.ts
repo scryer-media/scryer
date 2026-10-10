@@ -80,7 +80,12 @@ export type UiDateTimeFormat = "LOCALE" | "ISO24H";
  */
 export type VerificationDepth = "FULL" | "QUICK";
 
+export type UiDeviceClass = "DESKTOP" | "MOBILE";
+
+export type UiCatalogViewMode = "COMPACT" | "POSTER_TABLE" | "POSTER";
+
 export type UiTableColumnSetting = {
+  deviceClass: UiDeviceClass;
   facet: string;
   tableViewMode: string;
   columnId: string;
@@ -108,7 +113,40 @@ export type UiSettings = {
     | "HISTORY"
     | "SETTINGS"
     | "SYSTEM";
+  /** Interface language saved on the profile; null follows the browser. */
+  language: string | null;
   tableColumns: UiTableColumnSetting[];
+  catalogViews: UiCatalogViewSetting[];
+};
+
+export type UiCatalogViewSetting = {
+  deviceClass: UiDeviceClass;
+  facet: string;
+  viewMode: UiCatalogViewMode;
+};
+
+/**
+ * The whole-settings save. Language and table columns are omitted unless a
+ * caller changes them, so a save from one tab or device cannot overwrite what
+ * another saved meanwhile.
+ */
+export type SetMyUiSettingsInput = Omit<
+  UiSettings,
+  "language" | "tableColumns" | "catalogViews"
+> & {
+  language?: string;
+};
+
+export type SetMyCatalogViewInput = {
+  deviceClass: UiDeviceClass;
+  facet: string;
+  viewMode?: UiCatalogViewMode;
+  columns?: {
+    tableViewMode: string;
+    columnId: string;
+    columnOrder: number;
+    visible: boolean;
+  }[];
 };
 
 export type TrustedCertificateEntry = {
@@ -384,4 +422,48 @@ export type ServiceSettings = {
   trustedProxyIps: string[];
   trustedProxyOverride: string[] | null;
   trustedProxySource: "settings" | "environment";
+  publicUrl: string | null;
+  publicUrlSource: ConfigValueSource;
+  publicUrlSaved: string | null;
+  publicUrlError: string | null;
+  publicUrlErrorCode: PublicUrlErrorCode | null;
+  publicUrlEditable: boolean;
+  basePath: string;
+  basePathSource: ConfigValueSource;
+  bindAddress: string;
+  bindSource: ConfigValueSource;
+  passkeyRpId: string | null;
+  passkeyRpOrigin: string | null;
+  passkeyRpSource: PasskeyRelyingPartySource;
+  passkeyUserCount: number | null;
+  passkeyOnlyUserCount: number | null;
+};
+
+export type ConfigValueSource = "ENVIRONMENT" | "SETTINGS" | "DEFAULT";
+
+export type PasskeyRelyingPartySource = "ENVIRONMENT" | "PUBLIC_URL" | "NONE";
+
+export type PublicUrlErrorCode =
+  | "INVALID_URL"
+  | "WILDCARD_HOST"
+  | "CREDENTIALS"
+  | "QUERY_OR_FRAGMENT"
+  | "PATH_NOT_ALLOWED"
+  | "PATH_MISMATCH"
+  | "ENVIRONMENT_LOCKED"
+  | "SAVE_AND_RESET"
+  | "PASSKEY_ACKNOWLEDGEMENT_REQUIRED";
+
+export type PasskeyImpact = "UNAFFECTED" | "UNCHANGED" | "CHANGED" | "DISABLED";
+
+export type PublicUrlChangePreview = {
+  normalizedPublicUrl: string | null;
+  error: string | null;
+  errorCode: PublicUrlErrorCode | null;
+  passkeyImpact: PasskeyImpact;
+  currentPasskeyRpId: string | null;
+  nextPasskeyRpId: string | null;
+  passkeyUserCount: number | null;
+  passkeyOnlyUserCount: number | null;
+  acknowledgementRequired: boolean;
 };

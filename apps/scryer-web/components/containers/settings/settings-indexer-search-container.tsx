@@ -19,7 +19,6 @@ import { indexersQuery } from "@/lib/graphql/queries";
 import {
   runIterativeReleaseSearch,
   type InteractiveSearchIndexerProgress,
-  type InteractiveSearchKind,
 } from "@/lib/graphql/release-search";
 import type { IndexerRecord, Release } from "@/lib/types";
 import {
@@ -36,12 +35,11 @@ import {
   buildIndexerSearchFacets,
   downloadableReleases,
   filterIndexerSearchReleases,
-  indexerPriorityByName,
   indexerSearchRowKey,
-  isReleaseRejected,
   mergeIndexerProgress,
   mergeIndexerSearchReleases,
   parseCategoryList,
+  rawSearchPageSize,
   readSavedIndexerSearches,
   releaseSizeBoundsGiB,
   sortIndexerSearchReleases,
@@ -81,7 +79,6 @@ export function SettingsIndexerSearchContainer() {
     IndexerSearchIndexerOption[]
   >([]);
   const [query, setQuery] = React.useState("");
-  const kind: InteractiveSearchKind = "RAW";
   const [selectedIndexerIds, setSelectedIndexerIds] = React.useState<string[]>(
     presetIndexerId ? [presetIndexerId] : [],
   );
@@ -106,7 +103,7 @@ export function SettingsIndexerSearchContainer() {
   const [sizeRangeGiB, setSizeRangeGiB] = React.useState<
     [number, number] | null
   >(null);
-  const [sort, setSort] = React.useState<IndexerSearchSortKey>("newest");
+  const [sort, setSort] = React.useState<IndexerSearchSortKey>("age-asc");
   const [selectedRowKeys, setSelectedRowKeys] = React.useState<string[]>([]);
   const [expandedRowKey, setExpandedRowKey] = React.useState<string | null>(
     null,
@@ -210,14 +207,11 @@ export function SettingsIndexerSearchContainer() {
           return;
         }
         const records = (data?.indexers ?? []) as IndexerRecord[];
+        // A raw query asks every enabled indexer; the interactive-search flag
+        // only scopes title searches.
         setIndexerOptions(
           records
-            .filter(
-              (record) =>
-                record.isEnabled &&
-                record.enableInteractiveSearch &&
-                !record.supportsManagedChildrenSync,
-            )
+            .filter((record) => record.isEnabled && !record.supportsManagedChildrenSync)
             .map((record) => ({ id: record.id, name: record.name })),
         );
       } catch (error) {
@@ -226,6 +220,7 @@ export function SettingsIndexerSearchContainer() {
         }
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToLoad"),
+          { level: "ERROR" },
         );
       }
     })();
@@ -273,19 +268,17 @@ export function SettingsIndexerSearchContainer() {
 
       const scopedIndexerIds = retryIndexerIds ?? selectedIndexerIds;
       const parsedCategories = parseCategoryList(categories);
-      const limit = positiveNumberOrNull(advanced.limit);
 
       try {
         await runIterativeReleaseSearch(
           client,
           {
             query: trimmedQuery,
-            kind,
             indexerIds:
               scopedIndexerIds.length > 0 ? scopedIndexerIds : undefined,
             categories:
               parsedCategories.length > 0 ? parsedCategories : undefined,
-            limit: limit ?? undefined,
+            limit: rawSearchPageSize(advanced.limit),
           },
           {
             signal: controller.signal,
@@ -324,6 +317,7 @@ export function SettingsIndexerSearchContainer() {
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       } finally {
         if (searchAbortRef.current === controller) {
@@ -339,7 +333,6 @@ export function SettingsIndexerSearchContainer() {
       client,
       expireResults,
       indexers,
-      kind,
       publishRowOwners,
       query,
       selectedIndexerIds,
@@ -398,14 +391,13 @@ export function SettingsIndexerSearchContainer() {
     setSavedSearches((current) => {
       const next = addSavedIndexerSearch(current, {
         query,
-        kind,
         indexerIds: selectedIndexerIds,
         categories: parseCategoryList(categories),
       });
       writeSavedIndexerSearches(next);
       return next;
     });
-  }, [categories, kind, query, selectedIndexerIds]);
+  }, [categories, query, selectedIndexerIds]);
 
   const handleApplySavedSearch = React.useCallback(
     (index: number) => {
@@ -472,6 +464,7 @@ export function SettingsIndexerSearchContainer() {
         } catch (error) {
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.failedToLoad"),
+            { level: "ERROR" },
           );
         } finally {
           setDownloading(false);
@@ -488,10 +481,6 @@ export function SettingsIndexerSearchContainer() {
   const sizeBoundsGiB = React.useMemo(
     () => releaseSizeBoundsGiB(releases),
     [releases],
-  );
-  const priorityByIndexer = React.useMemo(
-    () => indexerPriorityByName(indexers),
-    [indexers],
   );
   const filteredReleases = React.useMemo(
     () =>
@@ -519,12 +508,8 @@ export function SettingsIndexerSearchContainer() {
     ],
   );
   const rows = React.useMemo(
-    () => sortIndexerSearchReleases(filteredReleases, sort, priorityByIndexer),
-    [filteredReleases, priorityByIndexer, sort],
-  );
-  const passingCount = React.useMemo(
-    () => rows.filter((release) => !isReleaseRejected(release)).length,
-    [rows],
+    () => sortIndexerSearchReleases(filteredReleases, sort),
+    [filteredReleases, sort],
   );
   const savedSearchLabels = React.useMemo(
     () => savedSearches.map((entry) => entry.query),
@@ -565,9 +550,7 @@ export function SettingsIndexerSearchContainer() {
         sort={sort}
         onSortChange={setSort}
         matchedCount={releases.length}
-        passingCount={passingCount}
         rows={rows}
-        priorityByIndexer={priorityByIndexer}
         nowMs={nowMs}
         selectedRowKeys={selectedRowKeys}
         onToggleRow={handleToggleRow}

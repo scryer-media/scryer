@@ -364,10 +364,10 @@ impl WasmListPluginProvider {
         ) {
             return Err("list provider descriptor rejected".to_string());
         }
-        Ok(LoadedPluginRecord::new(LoadedPlugin::from_owned(
-            plugin.descriptor,
-            plugin.wasm_bytes,
-        )))
+        Ok(LoadedPluginRecord::new(
+            LoadedPlugin::from_owned(plugin.descriptor, plugin.wasm_bytes)
+                .with_settings(plugin.settings),
+        ))
     }
 
     fn prepare_builtin_asset_record(
@@ -476,17 +476,18 @@ impl WasmListPluginProvider {
             }
         }
 
-        // Only the keys the descriptor declares reach the guest; anything
-        // else a caller put in the map stays on the host.
+        // The OAuth app's public client id is supplied by the host after
+        // account linking, not declared as a user-editable plugin setting.
+        // All other keys must be declared by the descriptor.
         let declared = loaded
             .descriptor
             .config_fields()
             .iter()
             .map(|field| field.key.as_str())
             .collect::<std::collections::HashSet<_>>();
-        let plugin_config = config
+        let mut plugin_config = config
             .iter()
-            .filter(|(key, _)| declared.contains(key.as_str()))
+            .filter(|(key, _)| key.as_str() == "client_id" || declared.contains(key.as_str()))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<BTreeMap<_, _>>();
         let config_json = serde_json::to_string(&plugin_config).unwrap_or_default();
@@ -498,6 +499,7 @@ impl WasmListPluginProvider {
             allowed_hosts_for_descriptor(&loaded.descriptor, base_url, Some(&config_json));
         let egress_policy = operator_egress_policy_for_descriptor(None, Some(&config_json));
 
+        loaded.bind_settings(&mut plugin_config);
         let command_host = CommandHost::with_archive_provider(
             loaded.descriptor.id.clone(),
             plugin_config.clone(),

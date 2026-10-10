@@ -642,6 +642,8 @@ pub enum DomainEventTypeValue {
     MediaRequestSubmitted,
     /// A media request changed.
     MediaRequestUpdated,
+    /// A dismissed media request was reopened.
+    MediaRequestReopened,
     /// A media request was approved.
     MediaRequestApproved,
     /// A media request was rejected.
@@ -753,6 +755,7 @@ impl DomainEventTypeValue {
             DomainEventType::ImportSpaceRestored => Self::ImportSpaceRestored,
             DomainEventType::MediaRequestSubmitted => Self::MediaRequestSubmitted,
             DomainEventType::MediaRequestUpdated => Self::MediaRequestUpdated,
+            DomainEventType::MediaRequestReopened => Self::MediaRequestReopened,
             DomainEventType::MediaRequestApproved => Self::MediaRequestApproved,
             DomainEventType::MediaRequestRejected => Self::MediaRequestRejected,
             DomainEventType::MediaRequestCanceled => Self::MediaRequestCanceled,
@@ -813,6 +816,7 @@ impl DomainEventTypeValue {
             Self::ImportSpaceRestored => DomainEventType::ImportSpaceRestored,
             Self::MediaRequestSubmitted => DomainEventType::MediaRequestSubmitted,
             Self::MediaRequestUpdated => DomainEventType::MediaRequestUpdated,
+            Self::MediaRequestReopened => DomainEventType::MediaRequestReopened,
             Self::MediaRequestApproved => DomainEventType::MediaRequestApproved,
             Self::MediaRequestRejected => DomainEventType::MediaRequestRejected,
             Self::MediaRequestCanceled => DomainEventType::MediaRequestCanceled,
@@ -1073,6 +1077,27 @@ impl ImportErrorCodeValue {
     }
 }
 
+/// Password-related reason a download failed; never contains credentials.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum DownloadPasswordFailureCodeValue {
+    /// The archive needs a new password.
+    ArchivePasswordRequired,
+    /// The password may be incorrect or the archive may be damaged.
+    ArchivePasswordOrCorruption,
+}
+
+impl DownloadPasswordFailureCodeValue {
+    pub fn from_domain(value: scryer_domain::DownloadPasswordFailure) -> Self {
+        match value {
+            scryer_domain::DownloadPasswordFailure::Required => Self::ArchivePasswordRequired,
+            scryer_domain::DownloadPasswordFailure::PasswordOrCorruption => {
+                Self::ArchivePasswordOrCorruption
+            }
+        }
+    }
+}
+
 /// State of a queued download deletion request.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -1147,6 +1172,8 @@ pub enum ImportSkipReasonValue {
     UnparseableEpisode,
     /// No video files were found.
     NoVideoFiles,
+    /// No video files were found and the download held only executables.
+    UnwantedExecutables,
     /// The download client is still writing or unpacking the source file.
     DownloadInProgress,
     /// Storage is full.
@@ -1171,6 +1198,7 @@ impl ImportSkipReasonValue {
             ImportSkipReason::UnresolvedIdentity => Self::UnresolvedIdentity,
             ImportSkipReason::UnparseableEpisode => Self::UnparseableEpisode,
             ImportSkipReason::NoVideoFiles => Self::NoVideoFiles,
+            ImportSkipReason::UnwantedExecutables => Self::UnwantedExecutables,
             ImportSkipReason::DownloadInProgress => Self::DownloadInProgress,
             ImportSkipReason::DiskFull => Self::DiskFull,
             ImportSkipReason::PermissionDenied => Self::PermissionDenied,
@@ -1330,6 +1358,8 @@ impl CatalogRefreshStateValue {
 pub enum StreamKindValue {
     /// Events from the global stream.
     Global,
+    /// Private events for the authenticated member.
+    User,
     /// Events for one title.
     Title,
     /// Events for one library scan.

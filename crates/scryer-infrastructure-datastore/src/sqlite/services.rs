@@ -12,7 +12,7 @@ use crate::types::MigrationMode;
 
 const DEFAULT_SQLITE_MAX_CONNECTIONS: u32 = 16;
 const MAX_SQLITE_CONNECTIONS_CAP: u32 = 64;
-const SQLITE_SLOW_STATEMENT_WARN_MS: u64 = 1000;
+const SQLITE_SLOW_STATEMENT_MS: u64 = 2000;
 /// SQLite's built-in default is 1000 pages, which under a library scan's write
 /// rate (~1100 WAL pages/s) checkpoints roughly once a second and rewrites the
 /// same hot btree pages over and over. 16k pages (~64 MB at a 4 KiB page size)
@@ -148,8 +148,8 @@ impl SqliteServices {
             .parse()
             .map_err(|err: sqlx::Error| AppError::Repository(err.to_string()))?;
         connect_opts = connect_opts.log_slow_statements(
-            tracing::log::LevelFilter::Warn,
-            std::time::Duration::from_millis(SQLITE_SLOW_STATEMENT_WARN_MS),
+            tracing::log::LevelFilter::Debug,
+            std::time::Duration::from_millis(SQLITE_SLOW_STATEMENT_MS),
         );
         if !is_memory {
             connect_opts = connect_opts

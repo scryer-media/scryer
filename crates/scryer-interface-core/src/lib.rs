@@ -279,6 +279,54 @@ pub fn default_persist_session_from_ctx(ctx: &Context<'_>) -> bool {
 #[derive(Clone, Copy)]
 pub struct RequestClientIp(pub std::net::IpAddr);
 
+/// Where the callback origins approved for account linking come from.
+/// Transport adapters implement it from operator configuration, never from
+/// client headers. It is consulted only when a resolver links an account, so
+/// ordinary requests pay nothing for it.
+pub trait ListAccountLinkOriginSource: Send + Sync {
+    fn approved_origins(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::sync::Arc<[String]>> + Send + '_>>;
+}
+
+/// The account-link origin source for this HTTP request. Absent from
+/// schema-level and WebSocket contexts, which therefore approve nothing.
+#[derive(Clone, Default)]
+pub struct RequestListAccountLinkOrigins(Option<std::sync::Arc<dyn ListAccountLinkOriginSource>>);
+
+impl RequestListAccountLinkOrigins {
+    pub fn new(source: std::sync::Arc<dyn ListAccountLinkOriginSource>) -> Self {
+        Self(Some(source))
+    }
+
+    pub async fn approved_origins(&self) -> std::sync::Arc<[String]> {
+        match &self.0 {
+            Some(source) => source.approved_origins().await,
+            None => std::sync::Arc::from([]),
+        }
+    }
+}
+
+pub async fn list_account_link_origin_from_ctx(
+    ctx: &Context<'_>,
+    requested: &str,
+) -> GqlResult<String> {
+    let approved = match ctx.data_opt::<RequestListAccountLinkOrigins>() {
+        Some(source) => source.approved_origins().await,
+        None => std::sync::Arc::from([]),
+    };
+    approved
+        .iter()
+        .find(|origin| origin.as_str() == requested)
+        .cloned()
+        .ok_or_else(|| {
+            coded_gql_error(
+                "Account linking is unavailable from this address. When Scryer is reached through a published container port, a reverse proxy, or a hostname, set the public URL in settings or SCRYER_PUBLIC_URL; otherwise open Scryer at localhost or the address it listens on",
+                "LIST_ACCOUNT_ORIGIN_NOT_ALLOWED",
+            )
+        })
+}
+
 pub fn request_client_ip_from_ctx(ctx: &Context<'_>) -> Option<std::net::IpAddr> {
     ctx.data_opt::<RequestClientIp>()
         .map(|client_ip| client_ip.0)
@@ -286,6 +334,92 @@ pub fn request_client_ip_from_ctx(ctx: &Context<'_>) -> Option<std::net::IpAddr>
 
 pub fn persist_session_or_default(requested: Option<bool>, default: bool) -> bool {
     requested.unwrap_or(default)
+}
+
+#[cfg(test)]
+mod request_list_account_origin_tests {
+    use super::{
+        ListAccountLinkOriginSource, RequestListAccountLinkOrigins,
+        list_account_link_origin_from_ctx,
+    };
+    use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Request, Schema};
+    use std::sync::Arc;
+
+    struct FixedOrigins(Arc<[String]>);
+
+    impl ListAccountLinkOriginSource for FixedOrigins {
+        fn approved_origins(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Arc<[String]>> + Send + '_>>
+        {
+            Box::pin(async move { self.0.clone() })
+        }
+    }
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn approved_origin(
+            &self,
+            ctx: &Context<'_>,
+            origin: String,
+        ) -> async_graphql::Result<String> {
+            list_account_link_origin_from_ctx(ctx, &origin).await
+        }
+    }
+
+    #[tokio::test]
+    async fn account_link_origin_requires_transport_context_and_exact_approved_origin() {
+        let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
+        let policy = RequestListAccountLinkOrigins::new(Arc::new(FixedOrigins(
+            vec!["https://media.home".to_string()].into(),
+        )));
+        for (requested, context, accepted) in [
+            ("https://media.home", None, false),
+            (
+                "https://media.home",
+                Some(RequestListAccountLinkOrigins::default()),
+                false,
+            ),
+            ("https://attacker.invalid", Some(policy.clone()), false),
+            (
+                "https://media.home.attacker.invalid",
+                Some(policy.clone()),
+                false,
+            ),
+            ("http://media.home", Some(policy.clone()), false),
+            ("https://media.home", Some(policy), true),
+        ] {
+            let mut request =
+                Request::new(format!("{{ approvedOrigin(origin: \"{requested}\") }}"));
+            if let Some(context) = context {
+                request = request.data(context);
+            }
+            let response =
+                tokio::time::timeout(std::time::Duration::from_secs(30), schema.execute(request))
+                    .await
+                    .expect("origin check completes");
+            if accepted {
+                assert!(response.errors.is_empty());
+                assert_eq!(
+                    response.data,
+                    async_graphql::value!({"approvedOrigin": requested})
+                );
+            } else {
+                assert_eq!(response.errors.len(), 1);
+                assert_eq!(
+                    response.errors[0]
+                        .extensions
+                        .as_ref()
+                        .and_then(|value| value.get("code")),
+                    Some(&async_graphql::Value::from(
+                        "LIST_ACCOUNT_ORIGIN_NOT_ALLOWED"
+                    ))
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -422,6 +556,15 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::Validation(message) => {
             coded_gql_error(format!("validation: {message}"), "VALIDATION_ERROR")
         }
+        // Still a validation error to every client that reads `code`. The
+        // reason rides beside it for clients that translate the failure
+        // instead of showing the sentence.
+        AppError::ValidationRefused { message, reason } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "VALIDATION_ERROR");
+                extensions.set("reason", reason);
+            })
+        }
         AppError::LocationOperationBusy(message) => {
             coded_gql_error(message, "LOCATION_OPERATION_BUSY")
         }
@@ -446,6 +589,16 @@ pub fn to_gql_error(err: AppError) -> Error {
             Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
                 extensions.set("code", "LOCATION_ROOT_REFUSED");
                 extensions.set("refusalCode", code);
+            })
+        }
+        // A refused public URL change. The reason is a stable code the web
+        // client localizes.
+        AppError::PublicUrlRejected { message, code } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "PUBLIC_URL_REJECTED");
+                // Spelled like the PublicUrlErrorCodeValue enum, so one client
+                // lookup serves both this error and the preview payloads.
+                extensions.set("reason", code.as_str().to_ascii_uppercase());
             })
         }
         // The retired direct root write (FR-077). Its own code, so a client can
@@ -502,6 +655,12 @@ pub fn to_gql_error(err: AppError) -> Error {
         }),
         AppError::ArchiveExtractionTimedOut { message } => {
             coded_gql_error(message, "ARCHIVE_EXTRACTION_TIMED_OUT")
+        }
+        AppError::ArchiveExtractionFailed { message } => {
+            coded_gql_error(message, "ARCHIVE_EXTRACTION_FAILED")
+        }
+        AppError::ArchivePasswordRequired { message } => {
+            coded_gql_error(message, "ARCHIVE_PASSWORD_REQUIRED")
         }
         AppError::NewznabQuotaExceeded { code, message } => {
             Error::new(message).extend_with(|_, extensions| {
@@ -618,10 +777,12 @@ fn login_progression_error(err: &AppError) -> bool {
 fn app_error_kind(err: &AppError) -> &'static str {
     match err {
         AppError::Unauthorized(_) => "Unauthorized",
-        AppError::Validation(_) => "Validation",
+        // Named or not, it is the same kind of failure to logs and metrics.
+        AppError::Validation(_) | AppError::ValidationRefused { .. } => "Validation",
         AppError::LocationOperationBusy(_) => "LocationOperationBusy",
         AppError::LocationPlanRefused { .. } => "LocationPlanRefused",
         AppError::LocationRootRefused { .. } => "LocationRootRefused",
+        AppError::PublicUrlRejected { .. } => "PublicUrlRejected",
         AppError::DirectRootWriteRetired { .. } => "DirectRootWriteRetired",
         AppError::NoAutoEligibleRelease { .. } => "NoAutoEligibleRelease",
         AppError::PluginInstallInProgress(_) => "PluginInstallInProgress",
@@ -635,6 +796,8 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::DownloadSubmitFailoverExhausted(_) => "DownloadSubmitFailoverExhausted",
         AppError::ArchiveExtractionPluginRequired { .. } => "ArchiveExtractionPluginRequired",
         AppError::ArchiveExtractionTimedOut { .. } => "ArchiveExtractionTimedOut",
+        AppError::ArchiveExtractionFailed { .. } => "ArchiveExtractionFailed",
+        AppError::ArchivePasswordRequired { .. } => "ArchivePasswordRequired",
         AppError::TemporaryUnavailable { .. } => "TemporaryUnavailable",
         AppError::NewznabQuotaExceeded { .. } => "NewznabQuotaExceeded",
         AppError::MfaStepUpRequired(_) => "MfaStepUpRequired",
@@ -968,6 +1131,43 @@ mod tests {
             assert_eq!(error.message, LOGIN_FAILED_MESSAGE);
             assert_eq!(graphql_error_code(&error), Some("LOGIN_FAILED"));
         }
+    }
+
+    #[test]
+    fn a_rejected_public_url_carries_its_reason_code() {
+        let error = to_gql_error(AppError::PublicUrlRejected {
+            message: "the public URL must name a single host".into(),
+            code: scryer_application::public_url::PublicUrlErrorCode::WildcardHost,
+        });
+        assert_eq!(
+            error.message,
+            "validation: the public URL must name a single host"
+        );
+        assert_eq!(graphql_error_code(&error), Some("PUBLIC_URL_REJECTED"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("WILDCARD_HOST")
+        );
+    }
+
+    #[test]
+    fn a_named_validation_failure_stays_a_validation_error_and_carries_its_reason() {
+        let named = AppError::validation_refused("SAMPLE_ALREADY_PRESENT", "that is already here");
+        assert_eq!(named.to_string(), "validation: that is already here");
+        assert_eq!(app_error_kind(&named), "Validation");
+
+        let error = to_gql_error(named);
+        assert_eq!(error.message, "validation: that is already here");
+        assert_eq!(graphql_error_code(&error), Some("VALIDATION_ERROR"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("SAMPLE_ALREADY_PRESENT")
+        );
+
+        let plain = to_gql_error(AppError::Validation("that is already here".into()));
+        assert_eq!(plain.message, error.message);
+        assert_eq!(graphql_error_code(&plain), Some("VALIDATION_ERROR"));
+        assert_eq!(graphql_error_extension_string(&plain, "reason"), None);
     }
 
     #[test]

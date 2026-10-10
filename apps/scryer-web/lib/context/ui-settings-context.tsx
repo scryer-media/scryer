@@ -5,7 +5,7 @@ import { myUiSettingsQuery } from "@/lib/graphql/queries";
 import { AUTH_SESSION_CHANGED_EVENT, getAuthToken } from "@/lib/hooks/use-auth";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { applyHighlightColor, fromUiThemeValue, isDarkTheme, toUiThemeValue } from "@/lib/theme";
-import type { UiSettings } from "@/lib/types/settings";
+import type { SetMyUiSettingsInput, UiSettings } from "@/lib/types/settings";
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   theme: "DARK",
@@ -18,7 +18,9 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   density: "COMFORTABLE",
   sidebarMode: "EXPANDED",
   defaultLandingView: "MOVIES",
+  language: null,
   tableColumns: [],
+  catalogViews: [],
 };
 
 type UiSettingsContextValue = {
@@ -37,16 +39,40 @@ function normalizeUiSettings(settings: Partial<UiSettings> | null | undefined): 
     ...DEFAULT_UI_SETTINGS,
     ...settings,
     theme: toUiThemeValue(fromUiThemeValue(settings?.theme)),
+    language: settings?.language ?? null,
     tableColumns: settings?.tableColumns ?? [],
+    catalogViews: settings?.catalogViews ?? [],
   };
+}
+
+/**
+ * The login page before sign-in has no profile to read: user-scoped settings
+ * are not requested there and their defaults are authoritative.
+ */
+export function isSignedOutLoginSurface(): boolean {
+  if (typeof window === "undefined" || getAuthToken() !== null) {
+    return false;
+  }
+  const basePath = getRuntimeBasePath();
+  const loginPath = basePath === "/" ? "/login" : `${basePath}/login`;
+  return window.location.pathname.startsWith(loginPath);
 }
 
 function uiSettingsErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Failed to load UI settings";
 }
 
-export function uiSettingsInputFromSettings(settings: UiSettings): UiSettings {
+/**
+ * Builds the whole-settings save. The language is sent only when `language`
+ * is given, and table columns never are: catalog layouts save through
+ * setMyCatalogView, one device class and facet at a time.
+ */
+export function uiSettingsInputFromSettings(
+  settings: UiSettings,
+  language?: string,
+): SetMyUiSettingsInput {
   return {
+    ...(language === undefined ? {} : { language }),
     theme: toUiThemeValue(fromUiThemeValue(settings.theme)),
     dateTimeFormat: settings.dateTimeFormat,
     highlightColor: settings.highlightColor,
@@ -57,13 +83,6 @@ export function uiSettingsInputFromSettings(settings: UiSettings): UiSettings {
     density: settings.density,
     sidebarMode: settings.sidebarMode,
     defaultLandingView: settings.defaultLandingView,
-    tableColumns: settings.tableColumns.map((column) => ({
-      facet: column.facet,
-      tableViewMode: column.tableViewMode,
-      columnId: column.columnId,
-      columnOrder: column.columnOrder,
-      visible: column.visible,
-    })),
   };
 }
 
@@ -87,15 +106,11 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
     // firing the user-scoped query there turns every auth-session flap into a
     // rejected-request storm that can exhaust the origin connection pool and
     // starve the login page's own bootstrap queries.
-    if (typeof window !== "undefined" && getAuthToken() === null) {
-      const basePath = getRuntimeBasePath();
-      const loginPath = basePath === "/" ? "/login" : `${basePath}/login`;
-      if (window.location.pathname.startsWith(loginPath)) {
-        setUiSettingsLoading(false);
-        setUiSettingsLoaded(false);
-        setUiSettingsLoadError(null);
-        return;
-      }
+    if (isSignedOutLoginSurface()) {
+      setUiSettingsLoading(false);
+      setUiSettingsLoaded(false);
+      setUiSettingsLoadError(null);
+      return;
     }
     setUiSettingsLoading(true);
     setUiSettingsLoaded(false);

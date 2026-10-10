@@ -552,6 +552,9 @@ struct MockPluginProvider {
     plugin_sdk_constraints: HashMap<String, String>,
     plugin_types: HashMap<String, String>,
     extra_config_fields: HashMap<String, Vec<scryer_domain::ConfigFieldDef>>,
+    builtin_descriptors: HashMap<String, scryer_plugin_sdk::PluginDescriptor>,
+    builtin_settings:
+        StdMutex<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
     removed_provider_types: StdArc<StdMutex<Vec<String>>>,
     reload_count: AtomicUsize,
     upsert_count: AtomicUsize,
@@ -573,6 +576,8 @@ impl MockPluginProvider {
             plugin_sdk_constraints: HashMap::new(),
             plugin_types: HashMap::new(),
             extra_config_fields: HashMap::new(),
+            builtin_descriptors: HashMap::new(),
+            builtin_settings: StdMutex::new(Default::default()),
             removed_provider_types: StdArc::new(StdMutex::new(vec![])),
             reload_count: AtomicUsize::new(0),
             upsert_count: AtomicUsize::new(0),
@@ -650,6 +655,23 @@ impl MockPluginProvider {
 }
 
 impl IndexerPluginProvider for MockPluginProvider {
+    fn builtin_descriptor_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
+        self.builtin_descriptors.get(provider_type).cloned()
+    }
+
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        *self.builtin_settings.lock().unwrap() = settings.clone();
+        self.reload_runtime_plugins(runtime_plugins, disabled_builtins)
+    }
+
     fn client_for_provider(&self, _config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
         None
     }
@@ -786,6 +808,18 @@ impl IndexerPluginProvider for MockPluginProvider {
         disabled.retain(|value| value != provider_type);
         self.restore_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        self.builtin_settings
+            .lock()
+            .unwrap()
+            .insert(provider_type.into(), settings);
+        self.restore_builtin_plugin(provider_type)
     }
 
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
@@ -1090,7 +1124,10 @@ fn make_runtime_plugin_load(
     };
 
     RuntimePluginLoad {
+        installation_id: Some(format!("installation-{plugin_id}")),
+        settings: Default::default(),
         descriptor: scryer_plugin_sdk::PluginDescriptor {
+            settings: Vec::new(),
             id: plugin_id.to_string(),
             name: format!("{plugin_id} Plugin"),
             version: "0.1.0".to_string(),
@@ -3920,6 +3957,7 @@ fn validate_downloaded_plugin_descriptor_rejects_invalid_allowed_hosts() {
     let release =
         downloaded_release_contract("0.2.0", &scryer_plugin_sdk::current_sdk_constraint(), None);
     let descriptor = scryer_plugin_sdk::PluginDescriptor {
+        settings: Vec::new(),
         id: "alpha".to_string(),
         name: "Alpha Plugin".to_string(),
         version: "0.2.0".to_string(),
@@ -3985,6 +4023,7 @@ fn validate_downloaded_plugin_descriptor_accepts_release_sdk_constraint_override
     );
     let release = downloaded_release_contract("0.2.0", &narrow_sdk_constraint, None);
     let descriptor = scryer_plugin_sdk::PluginDescriptor {
+        settings: Vec::new(),
         id: "jellyfin".to_string(),
         name: "Jellyfin".to_string(),
         version: "0.2.0".to_string(),
@@ -4021,6 +4060,7 @@ fn validate_downloaded_plugin_descriptor_accepts_release_sdk_constraint_override
 fn validate_catalog_downloaded_plugin_descriptor_skips_release_host_compatibility_check() {
     let release = downloaded_release_contract("0.2.0", ">=99.0.0", None);
     let descriptor = scryer_plugin_sdk::PluginDescriptor {
+        settings: Vec::new(),
         id: "email".to_string(),
         name: "Email".to_string(),
         version: "0.2.0".to_string(),
@@ -4058,6 +4098,7 @@ fn validate_downloaded_plugin_descriptor_rejects_unverified_host_process_capabil
     let release =
         downloaded_release_contract("0.2.0", &scryer_plugin_sdk::current_sdk_constraint(), None);
     let descriptor = scryer_plugin_sdk::PluginDescriptor {
+        settings: Vec::new(),
         id: "customscript".to_string(),
         name: "Custom Script".to_string(),
         version: "0.2.0".to_string(),
@@ -4103,6 +4144,7 @@ fn validate_downloaded_plugin_descriptor_allows_only_official_host_process_capab
     let release =
         downloaded_release_contract("0.2.0", &scryer_plugin_sdk::current_sdk_constraint(), None);
     let descriptor = scryer_plugin_sdk::PluginDescriptor {
+        settings: Vec::new(),
         id: "customscript".to_string(),
         name: "Custom Script".to_string(),
         version: "0.2.0".to_string(),
@@ -4497,6 +4539,131 @@ async fn rebuild_plugin_provider_seeds_builtin_installations() {
 // ── reconcile_indexer_configs ────────────────────────────────────────────────
 
 #[tokio::test]
+async fn builtin_settings_failure_isolates_only_the_misconfigured_plugin() {
+    let mut provider = MockPluginProvider::new()
+        .with_builtin_provider("synthetic-invalid", "Invalid fixture", None)
+        .with_builtin_provider("synthetic-valid", "Valid fixture", None);
+    for (id, default_value) in [
+        ("synthetic-invalid", None),
+        ("synthetic-valid", Some("fixture-value")),
+    ] {
+        let mut descriptor = make_runtime_plugin_load(id, "indexer", id).descriptor;
+        descriptor.settings = serde_json::from_value(serde_json::json!([
+            {"key":"required_value", "label":"Value", "field_type":"string", "required":true, "default_value":default_value}
+        ])).unwrap();
+        provider.builtin_descriptors.insert(id.into(), descriptor);
+    }
+    let h = bootstrap_plugins_with_settings(
+        Some(provider),
+        MockSettingsStore::with_plugin_auto_update(false),
+    );
+    let mut installations = [
+        make_installation("synthetic-invalid", "0.1.0", true, true),
+        make_installation("synthetic-valid", "0.1.0", true, true),
+    ];
+    for installation in &mut installations {
+        installation.descriptor_json = Some(
+            serde_json::to_string(
+                &h.plugin_provider.as_ref().unwrap().builtin_descriptors
+                    [&installation.provider_type],
+            )
+            .unwrap(),
+        );
+    }
+    h.plugin_repo
+        .installations
+        .lock()
+        .await
+        .extend(installations);
+    h.app.reload_plugin_providers().await.unwrap();
+    let provider = h.plugin_provider.as_ref().unwrap();
+    assert_eq!(provider.available_provider_types(), ["synthetic-valid"]);
+    assert_eq!(
+        provider.builtin_settings.lock().unwrap()["synthetic-valid"]["required_value"],
+        "fixture-value"
+    );
+    assert_eq!(
+        h.app.runtime.plugins.compatibility_blockers.read().await["synthetic-invalid"],
+        "plugin settings require configuration"
+    );
+    assert_eq!(
+        h.plugin_repo
+            .list_plugin_installations()
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        h.plugin_repo
+            .list_plugin_installations()
+            .await
+            .unwrap()
+            .iter()
+            .all(|installation| installation.is_enabled)
+    );
+    h.app
+        .toggle_plugin(&admin(), "synthetic-invalid", false)
+        .await
+        .unwrap();
+    h.app
+        .update_installed_plugin_settings(
+            &admin(),
+            "synthetic-invalid",
+            std::collections::BTreeMap::from([(
+                "required_value".into(),
+                Some("recovered-fixture".into()),
+            )]),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !provider
+            .available_provider_types()
+            .contains(&"synthetic-invalid".into())
+    );
+    h.app
+        .toggle_plugin(&admin(), "synthetic-invalid", true)
+        .await
+        .unwrap();
+    assert!(
+        provider
+            .available_provider_types()
+            .contains(&"synthetic-invalid".into())
+    );
+    assert!(
+        !h.app
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .contains_key("synthetic-invalid")
+    );
+    assert_eq!(
+        provider.builtin_settings.lock().unwrap()["synthetic-invalid"]["required_value"],
+        "recovered-fixture"
+    );
+}
+
+#[tokio::test]
+async fn installed_plugin_without_settings_descriptor_has_no_settings_panel() {
+    let h = bootstrap_plugins(None);
+    let mut installation = make_installation("synthetic-builtin", "1.0.0", true, true);
+    installation.descriptor_json = None;
+    h.plugin_repo.installations.lock().await.push(installation);
+    let view = h
+        .app
+        .installed_plugin_settings(&admin(), "synthetic-builtin")
+        .await
+        .unwrap();
+    assert_eq!(
+        view,
+        serde_json::json!({"pluginId":"synthetic-builtin", "fields":[]})
+    );
+}
+
+#[tokio::test]
 async fn reconcile_creates_config_for_default_url_plugin() {
     let provider = MockPluginProvider::new().with_provider(
         "example_indexer",
@@ -4769,12 +4936,14 @@ async fn plugin_catalog_status_returns_cached_status_without_rewriting_it() {
 /// Answers exactly the one system setting the auto-update scheduler reads.
 struct MockSettingsStore {
     plugin_auto_update_enabled: bool,
+    plugin_settings: StdMutex<HashMap<String, String>>,
 }
 
 impl MockSettingsStore {
     fn with_plugin_auto_update(enabled: bool) -> Arc<Self> {
         Arc::new(Self {
             plugin_auto_update_enabled: enabled,
+            plugin_settings: StdMutex::new(HashMap::new()),
         })
     }
 }
@@ -4787,6 +4956,11 @@ impl SettingsRepository for MockSettingsStore {
         key_name: &str,
         scope_id: Option<String>,
     ) -> AppResult<Option<String>> {
+        if scope == crate::SETTINGS_SCOPE_SYSTEM && key_name == "plugins.config" {
+            return Ok(
+                scope_id.and_then(|id| self.plugin_settings.lock().unwrap().get(&id).cloned())
+            );
+        }
         let is_plugin_auto_update = scope == crate::SETTINGS_SCOPE_SYSTEM
             && key_name == crate::PLUGIN_AUTO_UPDATE_ENABLED_KEY
             && scope_id.is_none();
@@ -4795,13 +4969,19 @@ impl SettingsRepository for MockSettingsStore {
 
     async fn upsert_setting_json(
         &self,
-        _scope: &str,
-        _key_name: &str,
-        _scope_id: Option<String>,
-        _value_json: String,
+        scope: &str,
+        key_name: &str,
+        scope_id: Option<String>,
+        value_json: String,
         _source: &str,
         _updated_by_user_id: Option<String>,
     ) -> AppResult<()> {
+        if scope == crate::SETTINGS_SCOPE_SYSTEM
+            && key_name == "plugins.config"
+            && let Some(id) = scope_id
+        {
+            self.plugin_settings.lock().unwrap().insert(id, value_json);
+        }
         Ok(())
     }
 

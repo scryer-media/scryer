@@ -986,7 +986,7 @@ impl MediaFileRepository for MediaFileStore {
                   LEFT JOIN episodes e ON e.id = fem.episode_id
                  WHERE media_files.title_id IN ({placeholders})
                    AND {}
-                   AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
+                   AND media_files.role = 'primary'
                    AND {normalized_quality} IS NOT NULL
                    AND (fem.episode_id IS NULL OR {})
              ) ranked
@@ -1039,10 +1039,11 @@ impl MediaFileRepository for MediaFileStore {
         } else {
             "1 = 1".to_string()
         };
-        let live_file = format!(
-            "{} AND mf.scan_status <> 'review_required'",
-            live_media_file_predicate(dialect, "mf")
-        );
+        // A file awaiting review is still the scope's file: the scope is not
+        // missing, and it is searched only as an upgrade below cutoff. Leaving
+        // it out made every review-held scope look missing, so each search
+        // grabbed a release that import then refused against that same file.
+        let live_file = live_media_file_predicate(dialect, "mf");
         let title_filter = if title_id.is_some() {
             "AND t.id = {}"
         } else {
@@ -1753,6 +1754,100 @@ impl MediaFileRepository for MediaFileStore {
         .await
     }
 
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool> {
+        if episode_ids.is_empty() {
+            return Ok(false);
+        }
+        let dialect = dialect_for_datastore(&self.datastore);
+        // Postgres takes the episode row lock so two promotions of the same
+        // episode serialize; SQLite already runs every write behind one gate.
+        // A Primary written concurrently by any other path is still refused
+        // by `idx_file_episode_map_one_primary_per_episode`.
+        let lock_episode = format!(
+            "SELECT id FROM episodes WHERE id = {{}} AND title_id = {{}}{}",
+            if matches!(dialect, SqlDialect::Postgres) {
+                " FOR UPDATE"
+            } else {
+                ""
+            }
+        );
+        let title_id = title_id.to_string();
+        let file_id = file_id.to_string();
+        let episode_ids = episode_ids.to_vec();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "promote_sole_additional_media_file_for_episodes",
+            move |tx| {
+                let lock_episode = lock_episode.clone();
+                let title_id = title_id.clone();
+                let file_id = file_id.clone();
+                let episode_ids = episode_ids.clone();
+                Box::pin(async move {
+                    for episode_id in &episode_ids {
+                        if SqlRuntime::fetch_optional(
+                            SqlExec::Tx(tx),
+                            &lock_episode,
+                            &[
+                                SqlArg::Text(episode_id.clone()),
+                                SqlArg::Text(title_id.clone()),
+                            ],
+                        )
+                        .await?
+                        .is_none()
+                        {
+                            return Ok(false);
+                        }
+                        let links = SqlRuntime::fetch_all(
+                            SqlExec::Tx(tx),
+                            "SELECT fem.file_id, fem.role, mf.title_id
+                               FROM file_episode_map fem
+                               INNER JOIN media_files mf ON mf.id = fem.file_id
+                              WHERE fem.episode_id = {}",
+                            &[SqlArg::Text(episode_id.clone())],
+                        )
+                        .await?;
+                        let [link] = links.as_slice() else {
+                            return Ok(false);
+                        };
+                        if link.text("file_id")? != file_id
+                            || link.text("title_id")? != title_id
+                            || link.text("role")? == "primary"
+                        {
+                            return Ok(false);
+                        }
+                    }
+                    for episode_id in &episode_ids {
+                        let promoted = SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "UPDATE file_episode_map
+                                SET role = 'primary'
+                              WHERE episode_id = {}
+                                AND file_id = {}
+                                AND role <> 'primary'",
+                            &[
+                                SqlArg::Text(episode_id.clone()),
+                                SqlArg::Text(file_id.clone()),
+                            ],
+                        )
+                        .await?;
+                        if promoted != 1 {
+                            return Err(AppError::Repository(format!(
+                                "episode {episode_id} changed while promoting media file {file_id}"
+                            )));
+                        }
+                    }
+                    Ok(true)
+                })
+            },
+        )
+        .await
+    }
+
     async fn replace_media_file_for_upgrade(
         &self,
         old_file_id: &str,
@@ -2206,32 +2301,34 @@ fn total_size_bytes_sum_expression(dialect: SqlDialect, expr: &str) -> String {
     }
 }
 
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn normalized_quality_expression(alias: &str) -> String {
     format!(
         "CASE
             WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN '4320P'
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN '2160P'
-            WHEN {alias}.video_height >= 1300 THEN '1440P'
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN '1080P'
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN '720P'
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN '480P'
-            WHEN {alias}.video_height >= 300 THEN '360P'
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN '2160P'
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN '1440P'
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN '1080P'
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN '720P'
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN '576P'
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN '480P'
             WHEN trim(COALESCE({alias}.quality_id, '')) = '' THEN NULL
             ELSE upper(trim({alias}.quality_id))
          END"
     )
 }
 
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn quality_rank_expression(alias: &str) -> String {
     format!(
         "CASE
             WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 0
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN 1
-            WHEN {alias}.video_height >= 1300 THEN 2
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN 3
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN 5
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN 6
-            WHEN {alias}.video_height >= 300 THEN 7
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN 1
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN 2
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN 3
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN 5
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN 6
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN 7
             ELSE CASE upper(trim(COALESCE({alias}.quality_id, '')))
                 WHEN '4320P' THEN 0
                 WHEN '2160P' THEN 1
@@ -2239,8 +2336,9 @@ fn quality_rank_expression(alias: &str) -> String {
                 WHEN '1080P' THEN 3
                 WHEN '1080I' THEN 4
                 WHEN '720P' THEN 5
-                WHEN '480P' THEN 6
-                WHEN '360P' THEN 7
+                WHEN '576P' THEN 6
+                WHEN '480P' THEN 7
+                WHEN '360P' THEN 8
                 ELSE 999
             END
          END"
@@ -2811,10 +2909,7 @@ mod tests {
             .await
             .expect("sqlite services should initialize");
 
-        let live_file = format!(
-            "{} AND mf.scan_status <> 'review_required'",
-            live_media_file_predicate(SqlDialect::Sqlite, "mf")
-        );
+        let live_file = live_media_file_predicate(SqlDialect::Sqlite, "mf");
         let sql = missing_scope_episode_sql(
             SqlDialect::Sqlite,
             &bool_column_is_true(SqlDialect::Sqlite, "t.monitored"),
@@ -3898,6 +3993,347 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(db);
+    }
+
+    /// A scope whose Primary file awaits review keeps that file for search
+    /// purposes: it is not a missing candidate (so the missing walk never
+    /// grabs a release that import would refuse against it again), and it is
+    /// still enumerated as an upgrade candidate below cutoff.
+    #[tokio::test]
+    async fn a_file_awaiting_review_keeps_its_scope_out_of_the_missing_search() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let services = SqliteServices::new(dir.path().join("review.db").to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let shows = show_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-review-held");
+        titles
+            .create(title.clone())
+            .await
+            .expect("title should insert");
+        let collection = Collection {
+            id: "collection-review-held".to_string(),
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("2".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        ShowRepository::create_collection(&shows, collection.clone())
+            .await
+            .expect("collection should insert");
+        for number in ["1", "2"] {
+            ShowRepository::create_episode(
+                &shows,
+                Episode {
+                    id: format!("episode-review-held-{number}"),
+                    title_id: title.id.clone(),
+                    collection_id: Some(collection.id.clone()),
+                    episode_type: scryer_domain::EpisodeType::Standard,
+                    episode_number: Some(number.to_string()),
+                    season_number: Some("1".to_string()),
+                    episode_label: Some(format!("S01E0{number}")),
+                    title: Some(format!("Episode {number}")),
+                    air_date: Some("2026-04-01".to_string()),
+                    duration_seconds: None,
+                    has_multi_audio: false,
+                    has_subtitle: false,
+                    is_filler: false,
+                    is_recap: false,
+                    absolute_number: None,
+                    contiguous_absolute_number: None,
+                    overview: None,
+                    tvdb_id: None,
+                    tmdb_id: None,
+                    image_url: None,
+                    monitored: true,
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("episode should insert");
+        }
+        let file_id = media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: "/data/series/Harbor Lights/Season 1/Harbor Lights - S01E01.mkv"
+                    .to_string(),
+                size_bytes: 1_000,
+                quality_label: Some("720p".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("media file should insert");
+        media_files
+            .link_file_to_episode(&file_id, "episode-review-held-1")
+            .await
+            .expect("file should link");
+        media_files
+            .set_media_file_roles_for_episode(&title.id, "episode-review-held-1", &file_id, &[])
+            .await
+            .expect("file should be primary");
+        execute_write(
+            &services.datastore(),
+            "test_hold_for_review",
+            "UPDATE media_files SET scan_status = 'review_required' WHERE id = {}",
+            vec![SqlArg::Text(file_id.clone())],
+        )
+        .await
+        .expect("hold file for review");
+
+        let missing = media_files
+            .list_missing_scope_candidates_for_title(Some(&title.id))
+            .await
+            .expect("missing candidates");
+        assert_eq!(
+            missing
+                .episodes
+                .iter()
+                .map(|episode| episode.episode_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["episode-review-held-2"],
+            "only the episode with no file at all is missing"
+        );
+        let cutoff = media_files
+            .list_cutoff_unmet_quality_summaries(std::slice::from_ref(&title.id))
+            .await
+            .expect("cutoff summaries");
+        assert_eq!(
+            cutoff
+                .iter()
+                .map(|summary| summary.episode_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("episode-review-held-1")],
+            "the held file is still weighed as an upgrade candidate"
+        );
+        let availability = media_files
+            .list_episode_media_availability(std::slice::from_ref(&title.id))
+            .await
+            .expect("availability");
+        assert!(
+            availability
+                .iter()
+                .any(|episode| episode.episode_id == "episode-review-held-1"
+                    && episode.state == EpisodeMediaAvailabilityState::ReviewRequired)
+        );
+    }
+
+    /// Conditional promotion relabels the sole Additional file of episodes
+    /// that have no Primary, refuses once anything else holds or shares the
+    /// episode, and never demotes a Primary that appeared first.
+    #[tokio::test]
+    async fn conditional_episode_promotion_never_demotes_a_primary_that_appeared_first() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_conditional_promotion_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let shows = show_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-conditional-promotion");
+        titles
+            .create(title.clone())
+            .await
+            .expect("title should insert");
+        let collection = Collection {
+            id: "collection-conditional-promotion".to_string(),
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("2".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        ShowRepository::create_collection(&shows, collection.clone())
+            .await
+            .expect("collection should insert");
+        let mut episode_ids = Vec::new();
+        for number in ["1", "2"] {
+            let episode = Episode {
+                id: format!("episode-conditional-promotion-{number}"),
+                title_id: title.id.clone(),
+                collection_id: Some(collection.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some(number.to_string()),
+                season_number: Some("1".to_string()),
+                episode_label: Some(format!("S01E0{number}")),
+                title: Some(format!("Episode {number}")),
+                air_date: Some("2026-04-01".to_string()),
+                duration_seconds: None,
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                contiguous_absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                tmdb_id: None,
+                image_url: None,
+                monitored: true,
+                created_at: Utc::now(),
+            };
+            ShowRepository::create_episode(&shows, episode.clone())
+                .await
+                .expect("episode should insert");
+            episode_ids.push(episode.id);
+        }
+        let add_file = |name: &'static str, episode_id: String| {
+            let media_files = &media_files;
+            let title_id = title.id.clone();
+            async move {
+                let file_id = media_files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id,
+                        file_path: format!("/data/series/Harbor Lights/Season 1/{name}.mkv"),
+                        size_bytes: 1_000,
+                        ..Default::default()
+                    })
+                    .await
+                    .expect("media file should insert");
+                media_files
+                    .link_file_to_episode(&file_id, &episode_id)
+                    .await
+                    .expect("file should link");
+                file_id
+            }
+        };
+        let roles_of = |episode_id: String| {
+            let media_files = &media_files;
+            let title_id = title.id.clone();
+            async move {
+                let mut roles = media_files
+                    .list_media_files_for_title(&title_id)
+                    .await
+                    .expect("list media files")
+                    .into_iter()
+                    .filter(|file| file.episode_id.as_deref() == Some(episode_id.as_str()))
+                    .map(|file| (file.id, file.role))
+                    .collect::<Vec<_>>();
+                roles.sort_by(|left, right| left.0.cmp(&right.0));
+                roles
+            }
+        };
+
+        // Episode 1: the Primary leaves, one Additional is left.
+        let first_primary = add_file("first-primary", episode_ids[0].clone()).await;
+        let candidate = add_file("candidate", episode_ids[0].clone()).await;
+        media_files
+            .set_media_file_roles_for_episode(
+                &title.id,
+                &episode_ids[0],
+                &first_primary,
+                std::slice::from_ref(&candidate),
+            )
+            .await
+            .expect("seed roles");
+        media_files
+            .delete_media_file(&first_primary)
+            .await
+            .expect("primary leaves");
+        // Episode 2: an unrelated Primary that must stay as it is.
+        let bystander = add_file("bystander", episode_ids[1].clone()).await;
+        media_files
+            .set_media_file_roles_for_episode(&title.id, &episode_ids[1], &bystander, &[])
+            .await
+            .expect("seed bystander role");
+
+        // An import makes its own file Primary before the promotion writes.
+        let imported = add_file("imported", episode_ids[0].clone()).await;
+        media_files
+            .set_media_file_roles_for_episode(
+                &title.id,
+                &episode_ids[0],
+                &imported,
+                std::slice::from_ref(&candidate),
+            )
+            .await
+            .expect("import takes primary");
+        assert!(
+            !media_files
+                .promote_sole_additional_media_file_for_episodes(
+                    &title.id,
+                    &candidate,
+                    std::slice::from_ref(&episode_ids[0]),
+                )
+                .await
+                .expect("promotion should run")
+        );
+        let mut expected = vec![
+            (candidate.clone(), MediaFileRole::Additional),
+            (imported.clone(), MediaFileRole::Primary),
+        ];
+        expected.sort_by(|left, right| left.0.cmp(&right.0));
+        assert_eq!(roles_of(episode_ids[0].clone()).await, expected);
+
+        // With the import gone but a second Additional file present, there is
+        // no sole candidate either.
+        media_files
+            .delete_media_file(&imported)
+            .await
+            .expect("import leaves");
+        let second = add_file("second", episode_ids[0].clone()).await;
+        assert!(
+            !media_files
+                .promote_sole_additional_media_file_for_episodes(
+                    &title.id,
+                    &candidate,
+                    std::slice::from_ref(&episode_ids[0]),
+                )
+                .await
+                .expect("promotion should run")
+        );
+        media_files
+            .delete_media_file(&second)
+            .await
+            .expect("second leaves");
+
+        // A file of another title is never a candidate.
+        assert!(
+            !media_files
+                .promote_sole_additional_media_file_for_episodes(
+                    "title-elsewhere",
+                    &candidate,
+                    std::slice::from_ref(&episode_ids[0]),
+                )
+                .await
+                .expect("promotion should run")
+        );
+
+        // Now the candidate is alone and nothing is Primary: it is promoted.
+        assert!(
+            media_files
+                .promote_sole_additional_media_file_for_episodes(
+                    &title.id,
+                    &candidate,
+                    std::slice::from_ref(&episode_ids[0]),
+                )
+                .await
+                .expect("promotion should run")
+        );
+        assert_eq!(
+            roles_of(episode_ids[0].clone()).await,
+            vec![(candidate.clone(), MediaFileRole::Primary)]
+        );
+        assert_eq!(
+            roles_of(episode_ids[1].clone()).await,
+            vec![(bystander, MediaFileRole::Primary)],
+            "another episode's file is untouched"
+        );
     }
 
     /// An in-flight same-path upgrade stages the replacement beside the final
@@ -6117,6 +6553,94 @@ mod tests {
             .expect("quality summaries should succeed");
         assert_eq!(quality_summaries.len(), 1);
         assert_eq!(quality_summaries[0].quality_tier, "1080P");
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn title_quality_summaries_classify_cropped_dimensions_like_import() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_title_quality_cropped_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+
+        let analysis = |width: i32, height: i32| MediaFileAnalysis {
+            details: Default::default(),
+            video_codec: None,
+            video_width: Some(width),
+            video_height: Some(height),
+            video_bitrate_kbps: None,
+            video_bit_depth: None,
+            video_hdr_format: None,
+            dovi_profile: None,
+            dovi_bl_compat_id: None,
+            video_frame_rate: None,
+            video_profile: None,
+            audio_codec: None,
+            audio_profile: None,
+            audio_channels: None,
+            audio_bitrate_kbps: None,
+            audio_languages: vec![],
+            audio_streams: vec![],
+            subtitle_languages: vec![],
+            subtitle_codecs: vec![],
+            subtitle_streams: vec![],
+            has_multiaudio: false,
+            duration_seconds: None,
+            num_chapters: None,
+            container_format: None,
+        };
+
+        let cases = [
+            ("cropped-1080", 1916, 800, "1080P"),
+            ("cropped-720", 1276, 536, "720P"),
+            ("cropped-1440", 2556, 1068, "1440P"),
+            ("pal-576", 720, 576, "576P"),
+            ("small-480", 640, 360, "480P"),
+        ];
+        let mut title_ids = Vec::new();
+        for (key, width, height, _) in cases {
+            let title = make_test_series_title(&format!("title-quality-{key}"));
+            titles
+                .create(title.clone())
+                .await
+                .expect("title should insert");
+            let file_id = media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/library/Synthetic {key}/Season 01/Episode 01.mkv"),
+                    size_bytes: 1_000,
+                    ..Default::default()
+                })
+                .await
+                .expect("media file should insert");
+            media_files
+                .update_media_file_analysis(&file_id, analysis(width, height))
+                .await
+                .expect("analysis should update");
+            title_ids.push(title.id);
+        }
+
+        let quality_summaries = media_files
+            .list_title_quality_summaries(&title_ids)
+            .await
+            .expect("quality summaries should succeed");
+        assert_eq!(quality_summaries.len(), cases.len());
+        for (title_id, (key, width, height, expected)) in title_ids.iter().zip(cases) {
+            let summary = quality_summaries
+                .iter()
+                .find(|summary| &summary.title_id == title_id)
+                .unwrap_or_else(|| panic!("{key} should have a quality summary"));
+            assert_eq!(
+                summary.quality_tier, expected,
+                "{width}x{height} should rank as {expected}"
+            );
+        }
 
         let _ = std::fs::remove_file(db);
     }

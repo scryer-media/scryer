@@ -605,6 +605,7 @@ pub fn from_library_scan_session(
 pub fn from_job_definition(definition: JobDefinition) -> JobDefinitionPayload {
     JobDefinitionPayload {
         key: JobKeyValue::from_application(definition.key),
+        custom_job_id: definition.custom_job_id.map(Into::into),
         display_name: definition.display_name,
         description: definition.description,
         category: JobCategoryValue::from_application(definition.category),
@@ -628,9 +629,11 @@ pub fn from_job_definition(definition: JobDefinition) -> JobDefinitionPayload {
 }
 
 pub fn from_job_run(run: JobRun) -> JobRunPayload {
+    let custom_job_id = run.custom_job_id().map(|id| id.to_string().into());
     JobRunPayload {
         id: run.id.into(),
         job_key: JobKeyValue::from_application(run.job_key),
+        custom_job_id,
         display_name: run.display_name,
         category: JobCategoryValue::from_application(run.category),
         section: JobSectionValue::from_application(run.section),
@@ -663,6 +666,7 @@ pub fn from_media_rename_plan(plan: RenamePlan) -> MediaRenamePlanPayload {
         noop: plan.noop as i32,
         conflicts: plan.conflicts as i32,
         errors: plan.errors as i32,
+        folder_repairs: plan.folder_repairs.len() as i32,
         items: plan
             .items
             .into_iter()

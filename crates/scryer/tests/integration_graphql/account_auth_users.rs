@@ -1240,6 +1240,44 @@ async fn graphql_post_processing_inline_shell_requires_acknowledgement() {
     .await;
     assert_no_errors(&update_inline_with_ack);
 
+    let update_language = r#"mutation($input: UpdatePostProcessingScriptInput!) {
+        updatePostProcessingScript(input: $input) { id language }
+    }"#;
+    let language_without_ack = gql(
+        &ctx,
+        update_language,
+        json!({ "input": { "id": inline_id, "language": "PYTHON" } }),
+    )
+    .await;
+    assert!(
+        language_without_ack.get("errors").is_some(),
+        "inline language change should require acknowledgement: {language_without_ack}"
+    );
+    let language_with_ack = gql(
+        &ctx,
+        update_language,
+        json!({
+            "input": {
+                "id": inline_id,
+                "language": "PYTHON",
+                "inlineShellAcknowledged": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&language_with_ack);
+    assert_eq!(
+        language_with_ack["data"]["updatePostProcessingScript"]["language"],
+        "PYTHON"
+    );
+    let unchanged_language = gql(
+        &ctx,
+        update_language,
+        json!({ "input": { "id": inline_id, "language": "PYTHON" } }),
+    )
+    .await;
+    assert_no_errors(&unchanged_language);
+
     let toggle = r#"mutation($id: ID!, $inlineShellAcknowledged: Boolean) {
         togglePostProcessingScript(id: $id, inlineShellAcknowledged: $inlineShellAcknowledged) {
             id
@@ -1274,6 +1312,222 @@ async fn graphql_post_processing_inline_shell_requires_acknowledgement() {
         enable_inline_with_ack["data"]["togglePostProcessingScript"]["enabled"],
         true
     );
+}
+
+#[tokio::test]
+async fn graphql_scheduled_script_round_trips_and_schedules_validate() {
+    let ctx = TestContext::new().await;
+    let create = r#"mutation($input: CreatePostProcessingScriptInput!) {
+        createPostProcessingScript(input: $input) {
+            id language trigger runOnStartup scheduleDescription
+            schedule { kind expression everySeconds timeLocal days }
+        }
+    }"#;
+
+    let missing_schedule = gql(
+        &ctx,
+        create,
+        json!({
+            "input": {
+                "name": "Scheduled without schedule",
+                "scriptType": "file",
+                "scriptContent": "/bin/true",
+                "trigger": "SCHEDULE"
+            }
+        }),
+    )
+    .await;
+    assert!(
+        missing_schedule.get("errors").is_some(),
+        "scheduled script without a schedule should fail: {missing_schedule}"
+    );
+
+    let short_interval = gql(
+        &ctx,
+        create,
+        json!({
+            "input": {
+                "name": "Scheduled too often",
+                "scriptType": "file",
+                "scriptContent": "/bin/true",
+                "trigger": "SCHEDULE",
+                "schedule": { "kind": "INTERVAL", "everySeconds": 30 }
+            }
+        }),
+    )
+    .await;
+    assert!(
+        short_interval.get("errors").is_some(),
+        "interval under the floor should fail: {short_interval}"
+    );
+
+    let created = gql(
+        &ctx,
+        create,
+        json!({
+            "input": {
+                "name": "Scheduled fixture",
+                "scriptType": "file",
+                "scriptContent": "/bin/true",
+                "language": "PYTHON",
+                "trigger": "SCHEDULE",
+                "runOnStartup": true,
+                "schedule": { "kind": "CRON", "expression": "*/15 * * * *" }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&created);
+    let script = &created["data"]["createPostProcessingScript"];
+    assert_eq!(script["language"], "PYTHON");
+    assert_eq!(script["trigger"], "SCHEDULE");
+    assert_eq!(script["runOnStartup"], true);
+    assert_eq!(script["schedule"]["kind"], "CRON");
+    assert_eq!(script["schedule"]["expression"], "*/15 * * * *");
+    let script_id = script["id"].as_str().expect("scheduled script id");
+
+    let import_script = gql(
+        &ctx,
+        create,
+        json!({
+            "input": {
+                "name": "Import fixture",
+                "scriptType": "file",
+                "scriptContent": "/bin/true"
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&import_script);
+    let import = &import_script["data"]["createPostProcessingScript"];
+    assert_eq!(import["language"], "SHELL");
+    assert_eq!(import["trigger"], "POST_IMPORT");
+    assert_eq!(import["runOnStartup"], false);
+    assert!(import["schedule"].is_null(), "{import}");
+    assert!(import["scheduleDescription"].is_null(), "{import}");
+
+    let scheduled = gql(
+        &ctx,
+        r#"query {
+            postProcessingScripts(trigger: SCHEDULE) {
+                id trigger scheduleDescription schedule { kind expression }
+            }
+        }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&scheduled);
+    let scheduled = scheduled["data"]["postProcessingScripts"]
+        .as_array()
+        .expect("script list");
+    assert_eq!(scheduled.len(), 1, "{scheduled:?}");
+    assert_eq!(scheduled[0]["id"], script_id);
+    assert_eq!(scheduled[0]["scheduleDescription"], "*/15 * * * *");
+
+    let all = gql(&ctx, r#"query { postProcessingScripts { id } }"#, json!({})).await;
+    assert_no_errors(&all);
+    assert_eq!(
+        all["data"]["postProcessingScripts"]
+            .as_array()
+            .expect("script list")
+            .len(),
+        2
+    );
+
+    let updated = gql(
+        &ctx,
+        r#"mutation($input: UpdatePostProcessingScriptInput!) {
+            updatePostProcessingScript(input: $input) { id scheduleDescription }
+        }"#,
+        json!({
+            "input": {
+                "id": script_id,
+                "schedule": { "kind": "DAILY", "timeLocal": "03:30" }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&updated);
+    assert_eq!(
+        updated["data"]["updatePostProcessingScript"]["scheduleDescription"],
+        "Daily at 03:30"
+    );
+
+    let change_trigger = gql(
+        &ctx,
+        r#"mutation($input: UpdatePostProcessingScriptInput!) {
+            updatePostProcessingScript(input: $input) { id trigger }
+        }"#,
+        json!({ "input": { "id": script_id, "trigger": "POST_IMPORT" } }),
+    )
+    .await;
+    assert!(
+        change_trigger.get("errors").is_some(),
+        "changing a script's trigger should fail: {change_trigger}"
+    );
+
+    let created_disabled = gql(
+        &ctx,
+        r#"mutation($input: CreatePostProcessingScriptInput!) {
+            createPostProcessingScript(input: $input) { id enabled trigger }
+        }"#,
+        json!({
+            "input": {
+                "name": "Disabled scheduled fixture",
+                "scriptType": "file",
+                "scriptContent": "/bin/true",
+                "trigger": "SCHEDULE",
+                "enabled": false,
+                "schedule": { "kind": "MANUAL" }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&created_disabled);
+    assert_eq!(
+        created_disabled["data"]["createPostProcessingScript"]["enabled"],
+        false
+    );
+
+    let validate = r#"query($schedule: ScriptScheduleInput!) {
+        validateScriptSchedule(schedule: $schedule) { valid error description nextRuns }
+    }"#;
+    let valid = gql(
+        &ctx,
+        validate,
+        json!({ "schedule": { "kind": "CRON", "expression": "30 3 * * 1" } }),
+    )
+    .await;
+    assert_no_errors(&valid);
+    let valid = &valid["data"]["validateScriptSchedule"];
+    assert_eq!(valid["valid"], true);
+    assert!(valid["error"].is_null(), "{valid}");
+    assert_eq!(valid["description"], "30 3 * * 1");
+    let next_runs = valid["nextRuns"].as_array().expect("next runs");
+    assert_eq!(next_runs.len(), 3, "{valid}");
+    let next_runs = next_runs
+        .iter()
+        .map(|run| {
+            chrono::DateTime::parse_from_rfc3339(run.as_str().expect("next run text"))
+                .expect("next run timestamp")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        next_runs.windows(2).all(|pair| pair[0] < pair[1]),
+        "next runs should be increasing: {next_runs:?}"
+    );
+
+    let invalid = gql(
+        &ctx,
+        validate,
+        json!({ "schedule": { "kind": "CRON", "expression": "not a cron" } }),
+    )
+    .await;
+    assert_no_errors(&invalid);
+    let invalid = &invalid["data"]["validateScriptSchedule"];
+    assert_eq!(invalid["valid"], false);
+    assert!(invalid["error"].is_string(), "{invalid}");
+    assert_eq!(invalid["nextRuns"], json!([]));
 }
 
 #[tokio::test]

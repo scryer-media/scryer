@@ -251,6 +251,25 @@ impl RootMoveFixture {
         paths
     }
 
+    /// Media rows of these titles that still have no full content hash.
+    async fn unhashed_media_count(&self, title_ids: &[&str]) -> usize {
+        let mut count = 0;
+        for title_id in title_ids {
+            count += self
+                .app
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(title_id)
+                .await
+                .expect("list media files")
+                .iter()
+                .filter(|file| file.content_hashes.is_none())
+                .count();
+        }
+        count
+    }
+
     async fn preview(&self, title_ids: &[&str]) -> crate::location::operations::RootMovePreview {
         self.app
             .preview_root_move(
@@ -2471,6 +2490,12 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
         "an interrupted operation keeps its claims"
     );
 
+    // Where same-filesystem placement is unavailable (any non-unix platform),
+    // the move places files by verified copy, which records the full hash of
+    // the file it already moved. Only files still awaiting a hash are queued;
+    // the second title was never reached, so its file always is.
+    let awaiting = fixture.unhashed_media_count(&[&first.id, &second.id]).await;
+    assert!(awaiting >= 1, "the unreached title still awaits its hash");
     let during = fixture
         .app
         .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
@@ -2478,8 +2503,8 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
         .expect("backfill during the operation");
     assert_eq!(during.hashed, 0);
     assert_eq!(
-        during.skipped_owned, 2,
-        "both titles are owned by the operation, so neither file is read"
+        during.skipped_owned, awaiting,
+        "both titles are owned by the operation, so no queued file is read"
     );
 
     // Finish the operation; its claims are released and the same files converge.
@@ -2498,13 +2523,19 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
     assert_eq!(outcome.state, LocationOperationState::Completed);
     assert_eq!(fixture.operations.open_claim_count(), 0);
 
+    let awaiting = fixture.unhashed_media_count(&[&first.id, &second.id]).await;
     let after = fixture
         .app
         .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
         .await
         .expect("backfill after the operation");
     assert_eq!(after.skipped_owned, 0);
-    assert_eq!(after.hashed, 2);
+    assert_eq!(after.hashed, awaiting);
+    assert_eq!(
+        fixture.unhashed_media_count(&[&first.id, &second.id]).await,
+        0,
+        "every file of both titles converges on a full hash"
+    );
 }
 
 // ── Activity (FR-091) ────────────────────────────────────────────────────────
@@ -2944,6 +2975,152 @@ async fn a_vanished_source_folder_moves_the_title_into_the_needs_resolution_grou
         reason.contains("could not be read") && reason.contains("Gone By Hand"),
         "the group carries the planner's reason, naming the title: {reason}"
     );
+}
+
+/// Every file and directory under `base`, relative, so a test can prove a
+/// preview or a refused start touched nothing.
+fn tree_snapshot(base: &Path) -> Vec<(PathBuf, u64)> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(PathBuf, u64)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let metadata = entry.metadata().expect("stat snapshot entry");
+            let relative = path.strip_prefix(base).expect("relative").to_path_buf();
+            if metadata.is_dir() {
+                out.push((relative, 0));
+                walk(base, &path, out);
+            } else {
+                out.push((relative, metadata.len()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(base, base, &mut out);
+    out.sort();
+    out
+}
+
+/// A title whose recorded folder is a library root, an ancestor of one, or
+/// somewhere outside every root of its library is held back from a move:
+/// planning would otherwise walk that folder and move every title beneath it.
+/// The healthy title in the same selection still moves, the refused titles are
+/// named with the reason, the start is refused, and nothing on disk changes.
+#[tokio::test]
+async fn a_recorded_folder_that_is_not_a_title_folder_is_refused_by_a_move() {
+    let fixture = RootMoveFixture::new().await;
+    let healthy = fixture
+        .seed_title(
+            "Healthy Fixture",
+            2021,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Healthy Fixture (2021)",
+            &[("Healthy.Fixture.2021.1080p.mkv", 2048)],
+        )
+        .await;
+    let outside = fixture.temp.path().join("elsewhere");
+    std::fs::create_dir_all(&outside).expect("create outside folder");
+    let mut refused = Vec::new();
+    for (name, recorded) in [
+        ("Root Folder Fixture", fixture.root_a()),
+        ("Above Root Fixture", fixture.temp.path().to_path_buf()),
+        ("Outside Fixture", outside.clone()),
+    ] {
+        let title = fixture
+            .seed_title(
+                name,
+                2022,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                &format!("{name} (2022)"),
+                &[(&format!("{}.mkv", name.replace(' ', ".")), 1024)],
+            )
+            .await;
+        fixture
+            .app
+            .services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, recorded.to_string_lossy().as_ref())
+            .await
+            .expect("record a damaged folder");
+        refused.push(title.id);
+    }
+    let before = tree_snapshot(fixture.temp.path());
+
+    let mut selection = vec![healthy.id.as_str()];
+    selection.extend(refused.iter().map(String::as_str));
+    let preview = fixture.preview(&selection).await;
+
+    let classification = &preview.classification;
+    assert_eq!(
+        classification.title_ids_in(TitleLocationClass::RootMove),
+        vec![healthy.id.clone()]
+    );
+    assert_eq!(
+        classification.title_ids_in(TitleLocationClass::NeedsResolution),
+        refused
+    );
+    for title_id in &refused {
+        let blocked = classification
+            .classification_of(title_id)
+            .expect("refused title is classified");
+        assert_eq!(
+            blocked.reason_code.as_deref(),
+            Some(crate::location::classify::reason_codes::SOURCE_FOLDER_NOT_A_TITLE_FOLDER)
+        );
+        assert!(
+            blocked
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("correct the title's folder"),
+            "{:?}",
+            blocked.reason
+        );
+    }
+    assert!(preview.plan.blocks_start());
+    let planned_files = preview
+        .execution
+        .titles
+        .iter()
+        .flat_map(|title| title.files.iter().map(move |file| (&title.title_id, file)))
+        .collect::<Vec<_>>();
+    assert!(
+        planned_files
+            .iter()
+            .all(|(title_id, _)| **title_id == healthy.id),
+        "only the healthy title contributes files"
+    );
+
+    let start = fixture
+        .app
+        .start_root_move(
+            &fixture.user,
+            StartRootMoveRequest {
+                title_ids: selection.iter().map(|id| (*id).to_string()).collect(),
+                destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                confirmation: PlanConfirmationRequest {
+                    fingerprint: preview.plan.fingerprint.clone(),
+                    typed_confirmation: None,
+                },
+            },
+        )
+        .await;
+    assert!(
+        start.is_err(),
+        "a selection holding a refused title cannot start"
+    );
+    assert_eq!(tree_snapshot(fixture.temp.path()), before);
+    for title_id in &refused {
+        assert_eq!(
+            fixture.media_paths(title_id).await.len(),
+            1,
+            "the refused title's catalog is untouched"
+        );
+    }
 }
 
 // ── Name collisions in the preview: the quick check, and what it reads ───────

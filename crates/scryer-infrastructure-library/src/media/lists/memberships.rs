@@ -17,9 +17,9 @@ use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime};
 const MEMBERSHIP_COLUMNS: &str = "subscription_id, item_key, rank, season, display_title, year,
     external_ids_json,
     smg_title_id, title_id, request_id, kind, state, state_reason, added_by_list,
-    first_seen_at, last_seen_at, left_at, left_handled";
+    first_seen_at, last_seen_at, left_at, left_handled, series_movie_json";
 
-const MEMBERSHIP_WIDTH: usize = 18;
+const MEMBERSHIP_WIDTH: usize = 19;
 
 /// `first_seen_at` is deliberately absent: a refreshed row is the same item.
 /// `left_at` and `left_handled` reset because the item is present again.
@@ -38,7 +38,8 @@ const MEMBERSHIP_UPSERT_SUFFIX: &str = "ON CONFLICT (subscription_id, item_key) 
          added_by_list = excluded.added_by_list,
          last_seen_at = excluded.last_seen_at,
          left_at = NULL,
-         left_handled = excluded.left_handled";
+         left_handled = excluded.left_handled,
+         series_movie_json = excluded.series_movie_json";
 
 #[async_trait]
 impl ListMembershipRepository for ListStore {
@@ -209,11 +210,13 @@ fn membership_args(membership: &ListMembership) -> AppResult<Vec<SqlArg>> {
         SqlArg::Timestamp(membership.last_seen_at),
         SqlArg::OptTimestamp(membership.left_at),
         SqlArg::Bool(membership.left_handled),
+        json_arg(&membership.series_movie)?,
     ])
 }
 
 fn row_to_membership(row: &SqlRow) -> AppResult<ListMembership> {
     Ok(ListMembership {
+        series_movie: json_column(row, "series_movie_json", "null")?,
         subscription_id: row.text("subscription_id")?,
         item_key: row.text("item_key")?,
         rank: row.opt_i64("rank")?,

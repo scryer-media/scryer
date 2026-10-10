@@ -2308,7 +2308,7 @@ async fn graphql_titles_expose_episode_progress_excluding_specials() {
         .update_episode(
             &regular_episode_2.id,
             EpisodeUpdate {
-                air_date: Some("2024-01-08".to_string()),
+                air_date: Some(Some("2024-01-08".to_string())),
                 monitored: Some(false),
                 ..Default::default()
             },
@@ -2321,7 +2321,7 @@ async fn graphql_titles_expose_episode_progress_excluding_specials() {
         .update_episode(
             &regular_episode_1.id,
             EpisodeUpdate {
-                air_date: Some("2024-01-01".to_string()),
+                air_date: Some(Some("2024-01-01".to_string())),
                 ..Default::default()
             },
         )
@@ -2332,7 +2332,7 @@ async fn graphql_titles_expose_episode_progress_excluding_specials() {
         .update_episode(
             &regular_episode_3.id,
             EpisodeUpdate {
-                air_date: Some("2024-01-15".to_string()),
+                air_date: Some(Some("2024-01-15".to_string())),
                 ..Default::default()
             },
         )
@@ -5603,4 +5603,260 @@ async fn graphql_tmdb_primary_series_is_added_hydrated_and_searched_by_smg_id() 
             .map(|request| request.url.to_string())
             .collect::<Vec<_>>()
     );
+}
+
+#[tokio::test]
+async fn graphql_library_search_languages_round_trip_in_order() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    // Saving library settings also touches the import, permission and routing
+    // keys, which the shared typed-settings seed does not cover.
+    ctx.settings_store
+        .batch_ensure_setting_definitions(vec![
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "import.mode".into(),
+                data_type: "string".into(),
+                default_value_json: "\"hardlink_or_copy\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "permissions.set_linux".into(),
+                data_type: "boolean".into(),
+                default_value_json: "false".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "permissions.file_chmod".into(),
+                data_type: "string".into(),
+                default_value_json: "null".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "permissions.folder_chmod".into(),
+                data_type: "string".into(),
+                default_value_json: "\"755\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "permissions.chown_group".into(),
+                data_type: "string".into(),
+                default_value_json: "null".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "download_client.routing".into(),
+                data_type: "string".into(),
+                default_value_json: "{}".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "nzbget.client_routing".into(),
+                data_type: "string".into(),
+                default_value_json: "{}".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "indexer.routing".into(),
+                data_type: "string".into(),
+                default_value_json: "{}".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+        ])
+        .await
+        .expect("seed library import settings definitions");
+    let library_id =
+        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Series);
+    let update = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) { id }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "settings": { "searchLanguages": ["sv", "deu", "swe"] }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let read = gql(
+        &ctx,
+        r#"query($libraryId: ID!) {
+            librarySettings(libraryId: $libraryId) { searchLanguages }
+        }"#,
+        json!({ "libraryId": library_id }),
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(
+        read["data"]["librarySettings"]["searchLanguages"],
+        json!(["swe", "deu"]),
+        "codes are normalized, deduplicated and keep the operator's order"
+    );
+
+    let rejected = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) { id }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "settings": { "searchLanguages": ["@@"] }
+            }
+        }),
+    )
+    .await;
+    assert!(
+        rejected.get("errors").is_some(),
+        "an unknown search language must be refused: {rejected}"
+    );
+
+    // A well-formed ISO code the language picker does not offer is refused
+    // too, and the stored list is left as it was.
+    for unknown in ["xyz", "tgl"] {
+        let rejected = gql(
+            &ctx,
+            r#"mutation($input: UpdateLibraryInput!) {
+                updateLibrary(input: $input) { id }
+            }"#,
+            json!({
+                "input": {
+                    "libraryId": library_id,
+                    "settings": { "searchLanguages": ["swe", unknown] }
+                }
+            }),
+        )
+        .await;
+        let message = rejected["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            message.contains(&format!("unknown search language \"{unknown}\"")),
+            "{rejected}"
+        );
+        assert_eq!(
+            rejected["errors"][0]["extensions"]["code"], "VALIDATION_ERROR",
+            "{rejected}"
+        );
+    }
+    let read = gql(
+        &ctx,
+        r#"query($libraryId: ID!) {
+            librarySettings(libraryId: $libraryId) { searchLanguages }
+        }"#,
+        json!({ "libraryId": library_id }),
+    )
+    .await;
+    assert_eq!(
+        read["data"]["librarySettings"]["searchLanguages"],
+        json!(["swe", "deu"])
+    );
+}
+
+/// The per-title override validates against the same picker set as the
+/// library setting and distinguishes inherit (null), searching only the
+/// primary name (empty) and an ordered list.
+#[tokio::test]
+async fn graphql_title_search_language_override_accepts_picker_languages_only() {
+    let ctx = TestContext::new().await;
+    let added = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) { title { id tags } }
+        }"#,
+        json!({
+            "input": {
+                "name": "Search Language Override",
+                "facet": "MOVIE",
+                "monitored": true,
+                "tags": [],
+                "externalIds": [{ "source": "tvdb", "value": "130279" }],
+                "options": { "searchLanguages": ["sv", "ger", "swe"] }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&added);
+    let title = &added["data"]["addTitle"]["title"];
+    let title_id = title["id"].clone();
+    let language_tags = |title: &serde_json::Value| -> Vec<String> {
+        title["tags"]
+            .as_array()
+            .expect("tags array")
+            .iter()
+            .filter_map(|tag| tag.as_str())
+            .filter(|tag| tag.starts_with("scryer:search-languages:"))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(
+        language_tags(title),
+        ["scryer:search-languages:swe", "scryer:search-languages:deu"],
+        "codes are canonicalized to the picker spelling and keep their order"
+    );
+
+    let update = |options: serde_json::Value| {
+        let ctx = &ctx;
+        let title_id = title_id.clone();
+        async move {
+            gql(
+                ctx,
+                r#"mutation($input: UpdateTitleInput!) {
+                    updateTitle(input: $input) { tags }
+                }"#,
+                json!({ "input": { "titleId": title_id, "options": options } }),
+            )
+            .await
+        }
+    };
+
+    for unknown in ["xyz", "tgl", "@@"] {
+        let rejected = update(json!({ "searchLanguages": ["swe", unknown] })).await;
+        let message = rejected["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            message.contains(&format!("unknown search language \"{unknown}\"")),
+            "{rejected}"
+        );
+    }
+
+    let disabled = update(json!({ "searchLanguages": [] })).await;
+    assert_no_errors(&disabled);
+    assert_eq!(
+        language_tags(&disabled["data"]["updateTitle"]),
+        ["scryer:search-languages:"],
+        "an empty list is an explicit override, not inheritance"
+    );
+
+    let inherited = update(json!({ "searchLanguages": null })).await;
+    assert_no_errors(&inherited);
+    assert!(language_tags(&inherited["data"]["updateTitle"]).is_empty());
 }

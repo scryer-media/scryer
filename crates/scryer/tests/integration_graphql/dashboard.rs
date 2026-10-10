@@ -192,6 +192,8 @@ fn upgraded_payload(title_name: &str) -> DomainEventPayload {
         old_score: Some(100),
         new_score: Some(200),
         size_bytes: Some(UPGRADED_SIZE_BYTES),
+        import_id: None,
+        source_ref: None,
     })
 }
 
@@ -248,6 +250,7 @@ fn import_rejected_payload(
 
 fn download_failed_payload(title_name: &str) -> DomainEventPayload {
     DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+        canonical_download_id: None,
         title: Some(dashboard_title_snapshot(title_name)),
         source_title: Some("Dashboard.Failed.2026.1080p.WEB-DL".to_string()),
         source_hint: Some("Fixture Indexer".to_string()),

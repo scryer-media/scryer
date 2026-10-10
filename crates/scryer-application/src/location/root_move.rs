@@ -1504,6 +1504,12 @@ mod tests {
         }
     }
 
+    /// Planned destinations are joined with the platform separator, so a
+    /// Unix-shaped expectation is compared component by component.
+    fn assert_same_path(actual: &str, expected: &str) {
+        assert_eq!(Path::new(actual), Path::new(expected), "{actual:?}");
+    }
+
     fn draft(class: TitleLocationClass) -> RootMoveTitleDraft {
         RootMoveTitleDraft {
             title_id: "title-1".to_string(),
@@ -1616,9 +1622,9 @@ mod tests {
             execution.destination_folder_path.as_deref(),
             Some("/b/Some Movie (2024)")
         );
-        assert_eq!(
-            execution.files[0].destination_path,
-            "/b/Some Movie (2024)/movie.mkv"
+        assert_same_path(
+            &execution.files[0].destination_path,
+            "/b/Some Movie (2024)/movie.mkv",
         );
     }
 
@@ -1666,13 +1672,13 @@ mod tests {
         let planned = build_root_move_plan(&request(vec![title]));
         let execution = planned.execution.title("title-1").expect("planned");
 
-        assert_eq!(
-            execution.files[0].destination_path,
-            "/b/Some Show/Season 01/S01E01.mkv"
+        assert_same_path(
+            &execution.files[0].destination_path,
+            "/b/Some Show/Season 01/S01E01.mkv",
         );
-        assert_eq!(
-            execution.files[1].destination_path,
-            "/b/Some Show/poster.jpg"
+        assert_same_path(
+            &execution.files[1].destination_path,
+            "/b/Some Show/poster.jpg",
         );
         // Deepest first, so a parent is only pruned after its children.
         assert_eq!(
@@ -1821,9 +1827,9 @@ mod tests {
         // and the file keeps its own destination name for the transfer.
         assert!(execution.deduplicated_sources.is_empty());
         assert_eq!(execution.files.len(), 1);
-        assert_eq!(
-            execution.files[0].destination_path,
-            "/b/Some Movie/movie.mkv"
+        assert_same_path(
+            &execution.files[0].destination_path,
+            "/b/Some Movie/movie.mkv",
         );
         assert!(execution.renamed_destinations.is_empty());
         let work = planned.work_plan();
@@ -1849,9 +1855,9 @@ mod tests {
 
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
-        assert_eq!(
-            execution.files[0].destination_path,
-            "/b/Some Movie/movie (from Movies).mkv"
+        assert_same_path(
+            &execution.files[0].destination_path,
+            "/b/Some Movie/movie (from Movies).mkv",
         );
         assert_eq!(execution.renamed_destinations.len(), 1);
         let work = planned.work_plan();

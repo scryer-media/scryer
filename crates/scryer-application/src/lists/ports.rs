@@ -43,6 +43,18 @@ impl ListSubscriptionQuery {
 
 #[async_trait]
 pub trait ListSubscriptionRepository: Send + Sync {
+    async fn vocabulary_cache(&self) -> AppResult<Option<super::vocabulary::VocabularySnapshot>> {
+        Ok(None)
+    }
+    async fn save_vocabulary_cache(
+        &self,
+        _snapshot: &super::vocabulary::VocabularySnapshot,
+        _unchanged: bool,
+    ) -> AppResult<()> {
+        Err(crate::AppError::Repository(
+            "vocabulary cache is not configured".into(),
+        ))
+    }
     /// Stores a new subscription. A public subscription whose source
     /// (provider, source type and params) another public subscription already
     /// follows is refused with a validation error; the check and the insert
@@ -101,6 +113,10 @@ pub trait ListSubscriptionRepository: Send + Sync {
         subscription_id: &str,
         limit: usize,
     ) -> AppResult<Vec<ListSyncRun>>;
+
+    /// Removes the sync runs of every list that started before `cutoff` and
+    /// returns how many went.
+    async fn delete_sync_runs_older_than(&self, cutoff: DateTime<Utc>) -> AppResult<u32>;
 }
 
 #[async_trait]
@@ -171,6 +187,14 @@ pub trait UserListAccountRepository: Send + Sync {
     async fn get_by_id(&self, id: &str) -> AppResult<Option<UserListAccount>>;
 
     async fn list_by_user_id(&self, user_id: &str) -> AppResult<Vec<UserListAccount>>;
+
+    /// Atomically remove an owner's account and personal subscriptions that
+    /// use it. Library titles, requests and files remain untouched.
+    async fn unlink(&self, _id: &str, _user_id: &str) -> AppResult<()> {
+        Err(crate::AppError::Repository(
+            "atomic list account unlink is unavailable".into(),
+        ))
+    }
 
     async fn delete(&self, id: &str) -> AppResult<()>;
 }

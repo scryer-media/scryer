@@ -13,6 +13,34 @@ use crate::lists::test_support::{
     ScriptedLists, ScriptedProvider, at, keys_of, subscription,
 };
 
+#[test]
+fn bound_series_movie_keeps_parent_but_can_complete_its_link_reference() {
+    use crate::lists::test_support::{membership, resolved_item};
+    let list = subscription("fixture-list");
+    let mut previous = membership(&list.id, "film", ListMembershipState::Added);
+    previous.title_id = Some("original-parent".into());
+    previous.series_movie = Some(scryer_domain::ListSeriesMovieTarget {
+        parent_smg_id: 42,
+        parent_tvdb_id: 43,
+        parent_name: "Parent".into(),
+        link_id: None,
+    });
+    let mut item = resolved_item("film");
+    item.library_title_id = previous.title_id.clone();
+    item.series_movie = previous.series_movie.clone();
+    item.series_movie.as_mut().unwrap().link_id = Some("movie-link".into());
+    let linked = membership_row(&list, &item, Some(&previous), at(1));
+    assert_eq!(
+        linked.series_movie.as_ref().unwrap().link_id.as_deref(),
+        Some("movie-link")
+    );
+    item.library_title_id = Some("different-parent".into());
+    item.series_movie.as_mut().unwrap().parent_smg_id = 99;
+    let preserved = membership_row(&list, &item, Some(&linked), at(2));
+    assert_eq!(preserved.series_movie, linked.series_movie);
+    assert_eq!(preserved.title_id, linked.title_id);
+}
+
 struct Harness {
     store: MemoryListStore,
     lists: std::sync::Arc<ScriptedLists>,
@@ -91,6 +119,20 @@ fn rate_limited(retry_after_seconds: Option<i64>) -> PluginError {
 }
 
 #[tokio::test]
+async fn unchanged_source_reconsiders_unresolved_memberships_without_filters() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha"]);
+    assert_eq!(harness.sync_at(at(0)).await.added, 1);
+    let mut row = harness.store.row("list-a", "alpha");
+    row.title_id = None;
+    row.added_by_list = false;
+    row.state = ListMembershipState::Unresolved;
+    harness.store.insert_rows(vec![row]);
+    assert_eq!(harness.sync_at(at(360)).await.added, 1);
+    assert_eq!(harness.lists.fetched.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn a_first_sync_adds_candidates_and_records_counts() {
     let harness = Harness::new(vec![subscription("list-a")]);
     harness.lists.serve("list-a", &["alpha", "beta"]);
@@ -113,6 +155,152 @@ async fn a_first_sync_adds_candidates_and_records_counts() {
             item_key: "alpha".to_string(),
             search: false
         }
+    );
+}
+
+#[tokio::test]
+async fn unchanged_membership_rechecks_filtered_candidates_without_refetching() {
+    let mut list = subscription("list-a");
+    list.filters = vec![scryer_domain::ListFilter::ReleaseYear {
+        from: Some(2020),
+        to: None,
+    }];
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2019),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(0)).await.added, 0);
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Filtered
+    );
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2021),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(360)).await.added, 1);
+    assert_eq!(
+        harness.lists.fetched.lock().unwrap().len(),
+        2,
+        "one provider request per scheduled sync, including unchanged"
+    );
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Added
+    );
+}
+
+#[tokio::test]
+async fn unchanged_membership_with_format_rechecks_metadata_after_full_fetch() {
+    let mut list = subscription("list-a");
+    list.filters = vec![
+        scryer_domain::ListFilter::ReleaseYear {
+            from: Some(2020),
+            to: None,
+        },
+        scryer_domain::ListFilter::Format {
+            formats: vec!["movie".into()],
+        },
+    ];
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    {
+        let mut pages = harness.lists.pages.lock().unwrap();
+        let scryer_plugin_sdk::PluginResult::Ok(page) = pages.get_mut("list-a-source").unwrap()
+        else {
+            panic!("fixture page");
+        };
+        page.items[0].format = Some("movie".into());
+    }
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2019),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(0)).await.added, 0);
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Filtered
+    );
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2021),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(360)).await.added, 1);
+    assert_eq!(
+        harness.lists.fetched.lock().unwrap().len(),
+        3,
+        "unchanged response requires one full fetch to recover provider-only format facts"
+    );
+}
+
+#[tokio::test]
+async fn unchanged_membership_does_not_reinterpret_an_unroutable_provider_kind() {
+    let mut list = subscription("list-a");
+    list.filters = vec![scryer_domain::ListFilter::ReleaseYear {
+        from: Some(2020),
+        to: None,
+    }];
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    {
+        let mut pages = harness.lists.pages.lock().unwrap();
+        let scryer_plugin_sdk::PluginResult::Ok(page) = pages.get_mut("list-a-source").unwrap()
+        else {
+            panic!("fixture page");
+        };
+        page.items[0].kind_hint = Some(scryer_plugin_sdk::ListMediaKind::Series);
+    }
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2021),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(0)).await.added, 0);
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Filtered
+    );
+    assert_eq!(harness.sync_at(at(360)).await.added, 0);
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Filtered
+    );
+    assert_eq!(harness.lists.fetched.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn enrichment_failure_preserves_memberships_and_never_runs_departures() {
+    let mut list = subscription("list-a");
+    list.filters = vec![scryer_domain::ListFilter::ReleaseYear {
+        from: Some(2020),
+        to: None,
+    }];
+    list.on_leave = ListOnLeave::Unmonitor;
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2021),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(0)).await.added, 1);
+    harness.lists.serve("list-a", &["beta"]);
+    harness
+        .resolver
+        .fail_enrichment
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(harness.sync_at(at(360)).await.failed, 1);
+    let retained = harness.store.row("list-a", "alpha");
+    assert_eq!(retained.state, ListMembershipState::Added);
+    assert!(retained.left_at.is_none());
+    assert_eq!(
+        harness
+            .actions
+            .calls()
+            .iter()
+            .filter(|call| !matches!(call, RecordedAction::SyncFailure { .. }))
+            .count(),
+        1
     );
 }
 
@@ -232,7 +420,7 @@ async fn a_public_failure_is_announced_once_until_it_changes() {
 }
 
 #[tokio::test]
-async fn a_personal_failure_is_not_announced() {
+async fn a_personal_failure_reaches_the_owner_event_port() {
     let list = ListSubscription {
         scope: ListScope::Personal,
         credential_id: Some("missing-account".to_string()),
@@ -243,7 +431,13 @@ async fn a_personal_failure_is_not_announced() {
     let report = harness.sync_at(at(0)).await;
 
     assert_eq!(report.failed, 1);
-    assert!(sync_failures(&harness.actions).is_empty());
+    assert_eq!(
+        sync_failures(&harness.actions),
+        vec![RecordedAction::SyncFailure {
+            subscription_id: "list-a".into(),
+            class: "account_required".into()
+        }]
+    );
 }
 
 #[tokio::test]
@@ -275,6 +469,32 @@ async fn one_failing_list_does_not_stop_the_next() {
     assert_eq!(report.failed, 1);
     assert_eq!(report.synced, 1);
     assert_eq!(keys_of(&harness.store.rows("list-b")).len(), 1);
+}
+
+#[tokio::test]
+async fn narrowing_include_preserves_previously_added_memberships_without_library_actions() {
+    let mut list = subscription("list-a");
+    list.on_leave = ListOnLeave::Unmonitor;
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(0)).await;
+    let before = harness.store.row("list-a", "alpha");
+    let calls_before = harness.actions.calls();
+    let mut narrowed = harness.store.subscription("list-a");
+    narrowed.kinds = vec![scryer_domain::MediaFacet::Series];
+    narrowed.source.params.insert(
+        "kind".into(),
+        crate::lists::catalog::INCLUDE_MEDIA_PARAM.into(),
+    );
+    harness.lists.serve("list-a", &["beta"]);
+    harness.sync_one_at(&narrowed, at(360)).await;
+    let after = harness.store.row("list-a", "alpha");
+    assert_eq!(after.left_at, None);
+    assert_eq!(after.title_id, before.title_id);
+    assert_eq!(after.state, before.state);
+    assert_eq!(after.added_by_list, before.added_by_list);
+    assert_eq!(after.last_seen_at, at(360));
+    assert_eq!(harness.actions.calls(), calls_before);
 }
 
 #[tokio::test]
@@ -440,6 +660,29 @@ fn personal_request_harness(policy: Option<ListPolicy>) -> Harness {
     harness
 }
 
+#[tokio::test]
+async fn a_member_app_client_id_overrides_the_gateway_client_id() {
+    let mut harness = personal_request_harness(None);
+    harness.store.accounts.lock().unwrap()[0]
+        .credential
+        .client_id = Some("synthetic-member-app-id".to_string());
+    harness.provider_configs.insert(
+        crate::lists::test_support::PROVIDER,
+        std::collections::BTreeMap::from([(
+            "client_id".to_string(),
+            "synthetic-gateway-id".to_string(),
+        )]),
+    );
+
+    harness.sync_at(at(0)).await;
+
+    let configs = harness.lists.configs.lock().unwrap().clone();
+    assert_eq!(
+        configs[0].get("client_id").map(String::as_str),
+        Some("synthetic-member-app-id")
+    );
+}
+
 fn request_holds(harness: &Harness) -> Vec<bool> {
     harness
         .actions
@@ -490,7 +733,72 @@ async fn a_personal_list_without_an_account_fails_without_fetching() {
 
     assert_eq!(report.failed, 1);
     assert!(harness.lists.fetched.lock().unwrap().is_empty());
-    assert!(report.failures[0].contains("owner-one"));
+    assert_eq!(report.failures, vec!["personal list: account_required"]);
+}
+
+#[tokio::test]
+async fn global_job_report_redacts_private_associations_and_preserves_owner_status() {
+    let mut private = subscription("private-subscription-marker");
+    private.scope = ListScope::Personal;
+    private.owner_user_id = "private-owner-marker".into();
+    private.name = "Private subscription name marker".into();
+    private.source.provider = "private-provider-marker".into();
+    private.credential_id = Some("private-account-marker".into());
+    let public = subscription("public-subscription-marker");
+    let harness = Harness::new(vec![private.clone(), public.clone()]);
+    harness.lists.fail(
+        &public.id,
+        PluginError {
+            code: PluginErrorCode::Permanent,
+            public_message: "fixture provider failure".into(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        },
+    );
+
+    let report = harness.sync_at(at(0)).await;
+
+    assert_eq!(report.failed, 2);
+    let serialized = serde_json::to_string(&report).unwrap();
+    for marker in [
+        &private.id,
+        &private.owner_user_id,
+        &private.name,
+        &private.source.provider,
+        private.credential_id.as_ref().unwrap(),
+    ] {
+        assert!(
+            !serialized.contains(marker),
+            "global report exposed a private association"
+        );
+    }
+    assert!(
+        report
+            .failures
+            .contains(&"personal list: account_required".into())
+    );
+    assert!(
+        report.failures.contains(&format!(
+            "public list {} ({}): failed",
+            public.id, public.source.provider
+        )),
+        "public reports retain their existing association"
+    );
+    let saved = harness.store.subscription(&private.id);
+    assert_eq!(saved.owner_user_id, private.owner_user_id);
+    assert_eq!(saved.sync.state, ListSyncState::Fail);
+    assert_eq!(
+        saved.sync.error_message.as_deref(),
+        Some("This list needs a linked private-provider-marker account.")
+    );
+    assert!(
+        sync_failures(&harness.actions).contains(&RecordedAction::SyncFailure {
+            subscription_id: private.id,
+            class: "account_required".into(),
+        }),
+        "the owner event port retains the private failure association"
+    );
 }
 
 #[tokio::test]
@@ -574,6 +882,38 @@ async fn a_personal_add_list_submits_requests_instead() {
             hold: false
         }]
     );
+}
+
+#[tokio::test]
+async fn personal_manager_add_preserves_search_intent_and_revoked_grants_request() {
+    for (mode, search) in [(ListMode::Add, false), (ListMode::Search, true)] {
+        let list = ListSubscription {
+            scope: ListScope::Personal,
+            mode,
+            ..subscription("manager-list")
+        };
+        let item = crate::lists::test_support::resolved_item("alpha");
+        let mut actions = RecordingActions {
+            owner_manages_titles: true,
+            ..Default::default()
+        };
+        let outcome = crate::lists::act::act_on_candidate(&actions, &list, &item, false).await;
+        assert_eq!(outcome.state, ListMembershipState::Added);
+        assert_eq!(
+            actions.calls(),
+            vec![RecordedAction::Add {
+                item_key: "alpha".into(),
+                search
+            }]
+        );
+        actions.owner_manages_titles = false;
+        let outcome = crate::lists::act::act_on_candidate(&actions, &list, &item, false).await;
+        assert_eq!(outcome.state, ListMembershipState::Requested);
+        assert!(matches!(
+            actions.calls().last(),
+            Some(RecordedAction::Request { hold: false, .. })
+        ));
+    }
 }
 
 #[tokio::test]
@@ -824,6 +1164,55 @@ async fn an_edited_list_is_processed_even_when_unchanged() {
 }
 
 #[tokio::test]
+async fn an_unrouted_personal_departure_waits_without_forcing_reads_and_runs_once_routed() {
+    let mut harness = personal_request_harness(None);
+    harness.actions.owner_manages_titles = true;
+    let set_routes = |routes: Vec<scryer_domain::ListRoute>, edited_at| {
+        let mut subscriptions = harness.store.subscriptions.lock().unwrap();
+        let edited = subscriptions
+            .iter_mut()
+            .find(|row| row.id == "list-a")
+            .unwrap();
+        edited.routes = routes;
+        edited.updated_at = edited_at;
+    };
+    {
+        let mut subscriptions = harness.store.subscriptions.lock().unwrap();
+        let list = subscriptions
+            .iter_mut()
+            .find(|row| row.id == "list-a")
+            .unwrap();
+        list.mode = ListMode::Add;
+        list.on_leave = ListOnLeave::Unmonitor;
+        list.interval_seconds = 60;
+    }
+    let routed = harness.store.subscription("list-a").routes;
+    harness.lists.serve("list-a", &["alpha", "beta"]);
+    harness.sync_at(at(0)).await;
+    assert!(harness.store.row("list-a", "beta").added_by_list);
+
+    // The kind loses its route, and the title leaves in the same read.
+    set_routes(Vec::new(), at(5));
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(10)).await;
+    assert!(harness.store.row("list-a", "beta").left_at.is_some());
+    assert!(!harness.store.row("list-a", "beta").left_handled);
+    assert_eq!(unmonitors_of(&harness.actions, "title-beta"), 0);
+
+    // Still owed, but it does not force the list to be read again.
+    let quiet = harness.sync_at(at(20)).await;
+    assert_eq!(quiet.unchanged, 1);
+    assert!(!harness.store.row("list-a", "beta").left_handled);
+
+    // Once the kind is routed again, the next sync runs the owed departure.
+    set_routes(routed, at(25));
+    let report = harness.sync_at(at(30)).await;
+    assert_eq!(report.departures_acted, 1);
+    assert!(harness.store.row("list-a", "beta").left_handled);
+    assert_eq!(unmonitors_of(&harness.actions, "title-beta"), 1);
+}
+
+#[tokio::test]
 async fn an_empty_fetch_marks_nobody_left_and_runs_no_leave_action() {
     let mut list = subscription("list-a");
     list.on_leave = ListOnLeave::Unmonitor;
@@ -1059,6 +1448,33 @@ async fn a_title_another_list_still_wants_is_left_alone() {
             .any(|call| matches!(call, RecordedAction::Tag { .. })),
         "no tag while the other list keeps the title"
     );
+    assert!(!harness.store.row("list-a", "alpha").left_handled);
+}
+
+#[tokio::test]
+async fn changing_filters_keeps_cross_list_cleanup_protection() {
+    let harness = title_on_two_lists(ListOnLeave::Unmonitor).await;
+    {
+        let mut rows = harness.store.subscriptions.lock().unwrap();
+        let follower = rows.iter_mut().find(|row| row.id == "list-b").unwrap();
+        follower.filters = vec![scryer_domain::ListFilter::ReleaseYear {
+            from: Some(2020),
+            to: None,
+        }];
+    }
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(1900),
+        ..Default::default()
+    });
+    harness.lists.serve("list-a", &["beta"]);
+    for minutes in [10, 20] {
+        harness.sync_at(at(minutes)).await;
+    }
+    let follower = harness.store.row("list-b", "alpha");
+    assert_eq!(follower.state, ListMembershipState::InLibrary);
+    assert_eq!(follower.title_id.as_deref(), Some("title-alpha"));
+    assert!(follower.left_at.is_none());
+    assert_eq!(unmonitors_of(&harness.actions, "title-alpha"), 0);
     assert!(!harness.store.row("list-a", "alpha").left_handled);
 }
 

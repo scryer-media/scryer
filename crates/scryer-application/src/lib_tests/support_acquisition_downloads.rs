@@ -323,6 +323,16 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     /// Downloads whose `reassign_download_to_title` fails with an error.
     pub(super) failing_reassignments:
         Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
+    /// Release password candidates persisted per download, as the real store
+    /// keeps them for archive extraction and password retry.
+    pub(super) password_candidates: Arc<
+        Mutex<
+            HashMap<
+                scryer_domain::download_identity::DownloadId,
+                crate::DownloadPasswordCandidates,
+            >,
+        >,
+    >,
 }
 
 #[derive(Default, Clone)]
@@ -810,6 +820,31 @@ pub(super) fn test_tracked_state_key(
 
 #[async_trait]
 impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+    async fn set_password_candidates(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+        candidates: &crate::DownloadPasswordCandidates,
+    ) -> AppResult<()> {
+        self.password_candidates
+            .lock()
+            .await
+            .insert(*id, candidates.clone());
+        Ok(())
+    }
+
+    async fn password_candidates(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadPasswordCandidates> {
+        Ok(self
+            .password_candidates
+            .lock()
+            .await
+            .get(id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     fn supports_durable_download_cleanup(&self) -> bool {
         self.durable_cleanup
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -1883,11 +1918,16 @@ impl PendingReleaseRepository for TrackingPendingReleaseRepo {
 #[derive(Default, Clone)]
 pub(super) struct TrackingHousekeepingRepo {
     pub(super) operation_log: Arc<Mutex<Vec<String>>>,
+    /// The rows orphan media-file cleanup walks.
+    pub(super) media_file_roots: Arc<Mutex<Vec<crate::HousekeepingMediaFileRootRow>>>,
 }
 
 impl TrackingHousekeepingRepo {
     pub(super) fn with_operation_log(operation_log: Arc<Mutex<Vec<String>>>) -> Self {
-        Self { operation_log }
+        Self {
+            operation_log,
+            ..Self::default()
+        }
     }
 }
 
@@ -1978,7 +2018,7 @@ impl HousekeepingRepository for TrackingHousekeepingRepo {
     async fn list_media_files_with_roots(
         &self,
     ) -> AppResult<Vec<crate::HousekeepingMediaFileRootRow>> {
-        Ok(Vec::new())
+        Ok(self.media_file_roots.lock().await.clone())
     }
 
     async fn delete_media_files_by_ids(&self, _ids: &[String]) -> AppResult<u32> {
@@ -2040,6 +2080,12 @@ pub(super) struct StubDownloadClient {
     pub(super) queue_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) history_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) completed_downloads: Arc<Mutex<Vec<CompletedDownload>>>,
+    pub(super) cleanup_payloads: Arc<Mutex<HashMap<String, crate::DownloadCleanupPayload>>>,
+    pub(super) cleanup_payload_error: Arc<Mutex<Option<String>>>,
+    /// How many times `get_cleanup_payload_for_source` was asked, so a test
+    /// can prove one cleanup attempt costs a single history read.
+    pub(super) cleanup_payload_lookups: Arc<Mutex<usize>>,
+    pub(super) delete_requires_absent_paths: Arc<Mutex<Vec<std::path::PathBuf>>>,
     pub(super) recent_completed_downloads: Arc<Mutex<Option<Vec<CompletedDownload>>>>,
     pub(super) deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
     pub(super) deleted_requests: DeletedDownloadRequests,
@@ -2146,6 +2192,13 @@ impl StubDownloadClient {
         is_history: bool,
         remove_data: bool,
     ) -> AppResult<()> {
+        for path in self.delete_requires_absent_paths.lock().await.iter() {
+            assert!(
+                !path.exists(),
+                "payload must be removed before the client entry: {}",
+                path.display()
+            );
+        }
         if let Some(error) = self.delete_error.lock().await.clone() {
             return Err(AppError::Repository(error));
         }
@@ -2424,6 +2477,28 @@ impl DownloadClient for StubDownloadClient {
             None => self.completed_downloads.lock().await.clone(),
         };
         Ok(items.into_iter().take(limit).collect())
+    }
+
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        item_id: &str,
+    ) -> AppResult<Option<crate::DownloadCleanupPayload>> {
+        *self.cleanup_payload_lookups.lock().await += 1;
+        if let Some(error) = self.cleanup_payload_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
+        if let Some(payload) = self.cleanup_payloads.lock().await.get(item_id).cloned() {
+            return Ok(Some(payload));
+        }
+        Ok(self
+            .get_completed_download_for_source(client_id, client_type, item_id)
+            .await?
+            .map(|download| crate::DownloadCleanupPayload {
+                download,
+                native_delete_paths: Vec::new(),
+            }))
     }
 
     async fn get_completed_download_for_source(

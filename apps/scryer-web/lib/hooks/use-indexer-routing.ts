@@ -261,7 +261,7 @@ export function useIndexerRouting({
             [scopeId]: nextOrder,
           };
         });
-        setGlobalStatus(t("settings.qualitySettingsSaved"));
+        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
       } catch (error) {
         setIndexerRoutingByScope((previous) => ({
           ...previous,
@@ -273,6 +273,7 @@ export function useIndexerRouting({
         }));
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         saveGuards[scopeId].end();
@@ -310,6 +311,7 @@ export function useIndexerRouting({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     } finally {
       if (!background) setIndexerRoutingLoading(false);

@@ -8,6 +8,7 @@ import {
   Inbox,
   Pencil,
   RefreshCw,
+  RotateCcw,
   ScrollText,
   ShieldX,
   SlidersVertical,
@@ -60,7 +61,9 @@ import {
   requestCountByFacet,
   requestCountByStatus,
   requestsWithStatus,
+  type RequesterFilterOption,
 } from "@/lib/utils/media-request-filters";
+import { mediaRequestRowActions } from "@/lib/utils/media-request-actions";
 import type { LibraryRecord, MediaRequestRecord } from "@/lib/types";
 import type {
   RequestRuleDecisionRecord,
@@ -113,6 +116,7 @@ import {
   mediaRequestMonitorSelectionId,
   mediaRequestPolicyTagsId,
   mediaRequestProfileOptionId,
+  mediaRequestReopenId,
   mediaRequestRowId,
   mediaRequestStatusId,
   titleClaimExtendId,
@@ -134,6 +138,10 @@ type QualityProfileOption = {
 };
 
 type RequestsMode = "admin" | "mine";
+
+/// Radix selects cannot hold an empty value, so "every requester" needs a
+/// sentinel that no user id can take.
+const ALL_REQUESTERS_VALUE = "__all_requesters__";
 type RequestStatusFilter = "all" | MediaRequestRecord["status"];
 type RequestFacetFilter = MediaRequestRecord["facet"];
 
@@ -186,6 +194,10 @@ type RequestsViewProps = {
   libraries: LibraryRecord[];
   selectedLibraryIds: string[];
   onSelectedLibraryIdsChange: (libraryIds: string[]) => void;
+  /// People on the queue's visible requests; the queue mode alone offers them.
+  requesterOptions: RequesterFilterOption[];
+  selectedRequesterId: string | null;
+  onSelectedRequesterIdChange: (userId: string | null) => void;
   requests: MediaRequestRecord[];
   qualityProfileOptions: QualityProfileOption[];
   loading: boolean;
@@ -194,6 +206,8 @@ type RequestsViewProps = {
   onLoadQualityProfileOptions: () => void;
   onApprove: (request: MediaRequestRecord, values: ApproveRequestValues) => void;
   onDismiss: (request: MediaRequestRecord) => void;
+  /// Put a dismissed request back into the pending queue.
+  onReopen: (request: MediaRequestRecord) => void;
   onUpdateRequest: (request: MediaRequestRecord, values: UpdateRequestValues) => void;
   onCancelRequest: (request: MediaRequestRecord) => void;
   /// Retention claims for the titles requests created, keyed by request id and
@@ -711,6 +725,9 @@ export function RequestsView({
   libraries,
   selectedLibraryIds,
   onSelectedLibraryIdsChange,
+  requesterOptions,
+  selectedRequesterId,
+  onSelectedRequesterIdChange,
   requests,
   qualityProfileOptions,
   loading,
@@ -719,6 +736,7 @@ export function RequestsView({
   onLoadQualityProfileOptions,
   onApprove,
   onDismiss,
+  onReopen,
   onUpdateRequest,
   onCancelRequest,
   claimsByRequestId,
@@ -831,7 +849,8 @@ export function RequestsView({
     /// how the API reads that.
     setApprovalLeaseChoice("requested");
     setApprovalCustomLeaseDays(approvalRequest.requestedLeaseDays ?? 30);
-    /// Prefilled from what the policy emitted, and editable: the approver is
+    /// Prefilled from what the policy emitted and the labels a list request's
+    /// list applies, and editable: the approver is
     /// the one who decides what the created title actually carries.
     setApprovalTags([...(approvalRequest.policyTags ?? [])]);
   }, [approvalRequest, libraries, qualityProfileOptions]);
@@ -999,8 +1018,10 @@ export function RequestsView({
     const approveDisabled = actionRequestId !== null;
     const statusMeta = requestStatusTone(t, request.status);
     const StatusIcon = statusMeta.Icon;
-    const canResolveRequest = mode === "admin" && request.status === "PENDING";
-    const canEditOwnRequest = mode === "mine" && request.status === "PENDING";
+    const rowActions = mediaRequestRowActions(mode, request.status);
+    const canResolveRequest = rowActions.resolve;
+    const canEditOwnRequest = rowActions.editOwn;
+    const canReopenRequest = rowActions.reopen;
     const decision = request.decision ?? null;
     const policyTags = request.policyTags ?? [];
     // Claim actions belong to whoever manages the library; admin mode only ever
@@ -1184,6 +1205,23 @@ export function RequestsView({
                     </Button>
                   </>
                 ) : null}
+                {canReopenRequest ? (
+                  <Button
+                    id={mediaRequestReopenId(request.id)}
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onReopen(request)}
+                    disabled={actionsDisabled}
+                  >
+                    {isResolving ? (
+                      <LoadingMark className="h-4 w-4" />
+                    ) : (
+                      <RotateCcw className="h-4 w-4" />
+                    )}
+                    {t("requests.reopen")}
+                  </Button>
+                ) : null}
                 {canEditOwnRequest ? (
                   <>
                     <Button
@@ -1345,9 +1383,12 @@ export function RequestsView({
   };
 
   return (
+    // The gutter is kept whether or not the list overflows, so switching to a
+    // tab with fewer requests does not drop the scrollbar and slide the page
+    // sideways.
     <section
       id="requests-view"
-      className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-[var(--scry-surfE)]"
+      className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-[var(--scry-surfE)] [scrollbar-gutter:stable]"
     >
       <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
         <div className="flex items-start gap-4">
@@ -1358,11 +1399,14 @@ export function RequestsView({
             <h1 className="font-display text-[25px] font-bold leading-tight text-[var(--scry-ink)]">
               {headingTitle}
             </h1>
-            {headingCopy ? (
-              <p className="mt-1 max-w-2xl text-[13.5px] text-[var(--scry-muted)]">
-                {headingCopy}
-              </p>
-            ) : null}
+            {/* The subtitle line is held in both modes so switching between
+                Queue and Mine does not move the filters below it. */}
+            <p
+              aria-hidden={headingCopy ? undefined : true}
+              className="mt-1 min-h-5 max-w-2xl text-[13.5px] leading-5 text-[var(--scry-muted)]"
+            >
+              {headingCopy}
+            </p>
           </div>
         </div>
 
@@ -1426,6 +1470,36 @@ export function RequestsView({
               onSelectedLibraryIdsChange={onSelectedLibraryIdsChange}
               triggerClassName="h-10 min-w-56 rounded-[11px]"
             />
+            {mode === "admin" &&
+            (requesterOptions.length > 0 || selectedRequesterId !== null) ? (
+              <Select
+                value={selectedRequesterId ?? ALL_REQUESTERS_VALUE}
+                onValueChange={(value) =>
+                  onSelectedRequesterIdChange(
+                    value === ALL_REQUESTERS_VALUE ? null : value,
+                  )
+                }
+              >
+                <SelectTrigger
+                  id="requests-requester-filter"
+                  aria-label={t("requests.requesterFilter.label")}
+                  className="h-10 min-w-44 rounded-[11px]"
+                >
+                  <User className="h-4 w-4 shrink-0 text-[var(--scry-muted3)]" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_REQUESTERS_VALUE}>
+                    {t("requests.requesterFilter.all")}
+                  </SelectItem>
+                  {requesterOptions.map((option) => (
+                    <SelectItem key={option.userId} value={option.userId}>
+                      {option.username}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
             {mode === "mine" ? (
               <Button
                 type="button"
