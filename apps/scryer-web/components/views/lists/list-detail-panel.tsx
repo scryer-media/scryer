@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TextActionButton } from "@/components/ui/text-action-button";
+import { ActionTooltip } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -25,13 +26,14 @@ import {
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
-import type { ListPreview, ListProviderManifest, ListSubscription } from "@/lib/types/lists";
+import type { ListMembership, ListPreview, ListProviderManifest, ListSubscription } from "@/lib/types/lists";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
   listIntervalParts,
   listKindLabelKey,
   listMembershipRowId,
   listMembershipTitleHref,
+  listMembershipReasonKey,
   listMembershipStateLabelKey,
   listMembershipStateTone,
   listModeLabelKey,
@@ -296,14 +298,7 @@ export function ListDetailPanel({
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge tone={listMembershipStateTone(membership.state)}>
-                              {t(listMembershipStateLabelKey(membership.state))}
-                            </Badge>
-                            {membership.stateReason ? (
-                              <span className="mt-0.5 block text-[11.5px] text-[var(--scry-muted)]">
-                                {membership.stateReason}
-                              </span>
-                            ) : null}
+                            <MembershipStateBadge membership={membership} />
                           </TableCell>
                         </TableRow>
                       ))}
@@ -418,5 +413,23 @@ export function ListDetailPanel({
         ) : null}
       </SheetContent>
     </Sheet>
+  );
+}
+
+/** A list entry's state. When the server recorded why, hovering or focusing the badge says it. */
+function MembershipStateBadge({ membership }: { membership: Pick<ListMembership, "state" | "stateReason"> }) {
+  const t = useTranslate();
+  const badge = <Badge tone={listMembershipStateTone(membership.state)}>{t(listMembershipStateLabelKey(membership.state))}</Badge>;
+  if (!membership.stateReason) return badge;
+  const reasonKey = listMembershipReasonKey(membership.stateReason);
+  return (
+    <ActionTooltip
+      // A reason this client has no sentence for is shown as the server wrote it.
+      content={reasonKey ? t(reasonKey) : membership.stateReason}
+      wrapperClassName="cursor-help"
+      wrapperTabIndex={0}
+    >
+      {badge}
+    </ActionTooltip>
   );
 }

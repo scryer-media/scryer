@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { listMembershipTitleHref } from "./lists.ts";
-import { sortListSubscriptions } from "./lists.ts";
+import { listMembershipReasonKey, sortListSubscriptions } from "./lists.ts";
+
+test("a list entry's reason code resolves to its sentence, and an unknown code to none", () => {
+  assert.equal(listMembershipReasonKey("media_type_not_included"), "lists.reason.mediaTypeNotIncluded");
+  assert.equal(listMembershipReasonKey("missing_unreleased"), "lists.reason.missingReleaseDate");
+  assert.equal(listMembershipReasonKey("constructor"), null);
+  assert.equal(listMembershipReasonKey("some_future_reason"), null);
+  assert.equal(listMembershipReasonKey(null), null);
+});
 
 test("followed lists sort by name, and by last sync as failed, waiting, synced, then switched off", () => {
   const list = (name: string, state: "OK" | "NEW" | "FAIL", lastAt: string | null, enabled = true) => ({

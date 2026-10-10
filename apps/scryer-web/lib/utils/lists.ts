@@ -150,6 +150,44 @@ export function listMembershipStateLabelKey(state: ListMembershipState): string 
   return `lists.membershipState.${camel(state)}`;
 }
 
+/**
+ * Why a list entry is in its state, as the server records it: a short code
+ * naming the filter it failed or the action that did not go through.
+ */
+const LIST_MEMBERSHIP_REASON_KEYS: Readonly<Record<string, string>> = {
+  media_type_not_included: "lists.reason.mediaTypeNotIncluded",
+  no_route: "lists.reason.noRoute",
+  duplicate_target: "lists.reason.duplicateTarget",
+  specials: "lists.reason.specials",
+  filler: "lists.reason.filler",
+  recap: "lists.reason.recap",
+  rating: "lists.reason.rating",
+  missing_rating: "lists.reason.missingRating",
+  genre: "lists.reason.genre",
+  missing_genre: "lists.reason.missingGenre",
+  release_year: "lists.reason.releaseYear",
+  missing_release_year: "lists.reason.missingReleaseYear",
+  format: "lists.reason.format",
+  language: "lists.reason.language",
+  missing_language: "lists.reason.missingLanguage",
+  streaming_service: "lists.reason.streamingService",
+  unreleased: "lists.reason.unreleased",
+  missing_unreleased: "lists.reason.missingReleaseDate",
+  director_credit: "lists.reason.directorCredit",
+  sequel_without_base: "lists.reason.sequelWithoutBase",
+  ambiguous_series_movie: "lists.reason.ambiguousSeriesMovie",
+  not_permitted: "lists.reason.notPermitted",
+  rejected: "lists.reason.refused",
+  not_found: "lists.reason.notFound",
+  action_failed: "lists.reason.actionFailed",
+  request_rejected: "lists.reason.requestRejected",
+};
+
+/** The translation key for a list entry's reason, or null for one this client does not know. */
+export function listMembershipReasonKey(reason: string | null | undefined): string | null {
+  return reason && Object.hasOwn(LIST_MEMBERSHIP_REASON_KEYS, reason) ? LIST_MEMBERSHIP_REASON_KEYS[reason] : null;
+}
+
 export function listMembershipStateTone(state: ListMembershipState): ListTone {
   switch (state) {
     case "IN_LIBRARY":
