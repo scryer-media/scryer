@@ -287,7 +287,14 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
       };
 
       if (!payload.name || !payload.scriptContent.trim()) {
-        setGlobalStatus(t("settings.ruleValidationRequired"));
+        setGlobalStatus(
+          t(
+            payload.name && scriptDraft.scriptType === "file"
+              ? "script.editor.fileRequired"
+              : "script.editor.required",
+          ),
+          { level: "WARNING" },
+        );
         return;
       }
 
@@ -333,7 +340,14 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
   const submitScript = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!scriptDraft.name.trim() || !scriptDraft.scriptContent.trim()) {
-      setGlobalStatus(t("settings.ruleValidationRequired"));
+      setGlobalStatus(
+        t(
+          scriptDraft.name.trim() && scriptDraft.scriptType === "file"
+            ? "script.editor.fileRequired"
+            : "script.editor.required",
+        ),
+        { level: "WARNING" },
+      );
       return;
     }
     if (scriptDraftRequiresInlineShellAcknowledgement) {

@@ -1,6 +1,7 @@
 import type * as React from "react";
 import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 
+import { InfoHelp } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
@@ -24,7 +25,7 @@ export type ScriptChoiceOption = {
 export function ScriptChoiceGroup({
   id,
   label,
-  description,
+  help,
   value,
   options,
   onValueChange,
@@ -33,7 +34,8 @@ export function ScriptChoiceGroup({
 }: {
   id: string;
   label: string;
-  description?: string;
+  /** Explains the choice from an info icon beside the label. */
+  help?: string;
   value: string;
   options: readonly ScriptChoiceOption[];
   onValueChange: (value: string) => void;
@@ -43,9 +45,13 @@ export function ScriptChoiceGroup({
   const labelId = `${id}-label`;
   return (
     <div className={cn("min-w-0 space-y-1.5", className)}>
-      <Label id={labelId} className="block">
-        {label}
-      </Label>
+      {/* A fixed height keeps neighbouring groups level whether or not one has help. */}
+      <div className="flex h-5 items-center gap-1.5">
+        <Label id={labelId} className="block">
+          {label}
+        </Label>
+        {help ? <InfoHelp text={help} ariaLabel={label} /> : null}
+      </div>
       <ToggleGroupPrimitive.Root
         id={id}
         type="single"
@@ -79,9 +85,6 @@ export function ScriptChoiceGroup({
           </ToggleGroupPrimitive.Item>
         ))}
       </ToggleGroupPrimitive.Root>
-      {description ? (
-        <p className="text-xs leading-5 text-[var(--scry-muted3)]">{description}</p>
-      ) : null}
     </div>
   );
 }

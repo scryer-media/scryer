@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
+import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 import { useClient } from "urql";
 
 import { ScriptChoiceGroup } from "@/components/common/script-choice-group";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { validateScriptScheduleQuery } from "@/lib/graphql/queries";
@@ -277,13 +278,12 @@ function WeekdayToggles({
       <Label id={labelId} className="block">
         {t("script.schedule.days")}
       </Label>
-      <ToggleGroup
+      <ToggleGroupPrimitive.Root
         id="script-schedule-days"
         type="multiple"
-        variant="outline"
-        size="sm"
         aria-labelledby={labelId}
-        className="flex h-auto flex-wrap gap-1 p-1"
+        // Sized to its days, like the single-choice groups beside it.
+        className="inline-flex max-w-full flex-wrap gap-1 rounded-md border border-border p-1"
         value={days}
         disabled={disabled}
         onValueChange={(next) => {
@@ -293,18 +293,19 @@ function WeekdayToggles({
         }}
       >
         {SCHEDULE_WEEKDAYS.map((day) => (
-          <ToggleGroupItem
+          <ToggleGroupPrimitive.Item
             key={day}
             id={`script-schedule-day-${day.toLowerCase()}`}
             value={day}
             data-value={day}
-            size="sm"
-            variant="outline"
+            asChild
           >
-            {t(`script.schedule.day.${day.toLowerCase()}`)}
-          </ToggleGroupItem>
+            <Button type="button" size="sm" variant={days.includes(day) ? "default" : "ghost"}>
+              {t(`script.schedule.day.${day.toLowerCase()}`)}
+            </Button>
+          </ToggleGroupPrimitive.Item>
         ))}
-      </ToggleGroup>
+      </ToggleGroupPrimitive.Root>
     </div>
   );
 }

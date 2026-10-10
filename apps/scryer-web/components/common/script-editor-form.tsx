@@ -77,7 +77,6 @@ export function ScriptEditorForm({
   const cancelIds = ids("cancel", "cancel");
   const inlineTypeId = ids("type-inline", "script-type-inline").control;
   const fileTypeId = ids("type-file", "script-type-file").control;
-  const browseId = ids("browse", "browse").control;
   const blockingId = ids("execution-mode-blocking", "execution-blocking").control;
   const fireAndForgetId = ids(
     "execution-mode-fire-and-forget",
@@ -122,42 +121,43 @@ export function ScriptEditorForm({
         </label>
       </div>
 
-      {/* Script Type */}
-      <ScriptChoiceGroup
-        id="script-editor-type"
-        label={t("settings.pp.scriptType")}
-        value={draft.scriptType}
-        onValueChange={(scriptType) =>
-          setDraft((prev) => ({
-            ...prev,
-            scriptType: scriptType as PostProcessingScriptDraft["scriptType"],
-          }))
-        }
-        options={[
-          {
-            id: inlineTypeId,
-            value: "inline",
-            label: isScheduled ? t("script.editor.inline") : t("settings.pp.inline"),
-          },
-          { id: fileTypeId, value: "file", label: t("settings.pp.filePath") },
-        ]}
-      />
+      {/* Script Type + Interpreter */}
+      <div className="flex flex-wrap gap-x-6 gap-y-4">
+        <ScriptChoiceGroup
+          id="script-editor-type"
+          label={t("settings.pp.scriptType")}
+          value={draft.scriptType}
+          onValueChange={(scriptType) =>
+            setDraft((prev) => ({
+              ...prev,
+              scriptType: scriptType as PostProcessingScriptDraft["scriptType"],
+            }))
+          }
+          options={[
+            {
+              id: inlineTypeId,
+              value: "inline",
+              label: isScheduled ? t("script.editor.inline") : t("settings.pp.inline"),
+            },
+            { id: fileTypeId, value: "file", label: t("settings.pp.filePath") },
+          ]}
+        />
 
-      {/* Language */}
-      <ScriptChoiceGroup
-        id="script-editor-language"
-        label={t("script.editor.language")}
-        description={t("script.editor.languageHelp")}
-        value={draft.language}
-        onValueChange={(language) =>
-          setDraft((prev) => ({ ...prev, language: language as ScriptLanguageValue }))
-        }
-        options={SCRIPT_LANGUAGES.map((language) => ({
-          value: language,
-          label: t(`script.language.${language.toLowerCase()}`),
-          icon: <ScriptLanguageIcon language={language} />,
-        }))}
-      />
+        <ScriptChoiceGroup
+          id="script-editor-language"
+          label={t("script.editor.interpreter")}
+          help={t("script.editor.interpreterHelp")}
+          value={draft.language}
+          onValueChange={(language) =>
+            setDraft((prev) => ({ ...prev, language: language as ScriptLanguageValue }))
+          }
+          options={SCRIPT_LANGUAGES.map((language) => ({
+            value: language,
+            label: t(`script.language.${language.toLowerCase()}`),
+            icon: <ScriptLanguageIcon language={language} />,
+          }))}
+        />
+      </div>
 
       {/* Script Content */}
       <div>
@@ -182,24 +182,22 @@ export function ScriptEditorForm({
             <Label htmlFor={pathIds.control} className="mb-2 block">
               {isScheduled ? t("script.editor.filePathHelp") : t("settings.pp.filePathHelp")}
             </Label>
-            <div id={pathIds.wrapper} className="flex gap-2">
-              <Input
-                id={pathIds.control}
-                value={draft.scriptContent}
-                onChange={(e) => setDraft((prev) => ({ ...prev, scriptContent: e.target.value }))}
-                className="font-[var(--font-code)]"
-                placeholder={
-                  isScheduled ? "/usr/local/bin/scheduled-job.sh" : "/usr/local/bin/post-process.sh"
-                }
-              />
+            {/* The path is always one picked from the host, never typed. */}
+            <div id={pathIds.wrapper} className="flex">
               <Button
-                id={browseId}
+                id={pathIds.control}
                 type="button"
                 variant="outline"
+                aria-haspopup="dialog"
                 onClick={() => setFolderBrowserOpen(true)}
+                className="min-w-0 flex-1 justify-start font-[var(--font-code)]"
+                title={draft.scriptContent || t("script.editor.selectFile")}
+                data-value={draft.scriptContent}
               >
-                <FolderOpen className="mr-1 h-4 w-4" />
-                {t("setup.browse")}
+                <FolderOpen className="mr-2 h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {draft.scriptContent || t("script.editor.selectFile")}
+                </span>
               </Button>
             </div>
             <FolderBrowserDialog

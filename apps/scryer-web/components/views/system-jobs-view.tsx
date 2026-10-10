@@ -1112,7 +1112,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               id="jobs-custom-add"
               type="button"
               size="sm"
-              variant="secondary"
+              variant="primary"
               onClick={customJobEditor.onAdd}
             >
               <Plus className="h-4 w-4" />
@@ -1224,7 +1224,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
       >
         <DialogContent
           id="jobs-custom-editor"
-          className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+          className="max-h-[90vh] overflow-y-auto sm:max-w-3xl"
         >
           <DialogHeader>
             <DialogTitle>
