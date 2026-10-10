@@ -1,8 +1,7 @@
-import { RefreshCw } from "lucide-react";
+import { Power, PowerOff, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   Table,
   TableBody,
@@ -11,7 +10,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ActionTooltip } from "@/components/ui/tooltip";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { ListProviderManifest, ListSubscription } from "@/lib/types/lists";
@@ -128,26 +126,25 @@ export function ListTable({
               {canManageLists ? (
                 <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
                   <div className="flex items-center justify-end gap-2">
-                    <ActionTooltip content={t("lists.action.syncNow")}>
-                      <Button
-                        id={`list-sync-${subscription.id}`}
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("lists.action.syncNow")}
-                        disabled={busy || !subscription.enabled}
-                        onClick={() => onSyncNow(subscription)}
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                      </Button>
-                    </ActionTooltip>
-                    <Switch
+                    <IconButton
+                      id={`list-sync-${subscription.id}`}
+                      label={t("lists.action.syncNow")}
+                      tone="accent"
+                      disabled={busy || !subscription.enabled}
+                      onClick={() => onSyncNow(subscription)}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                    </IconButton>
+                    <IconButton
                       id={`list-enabled-${subscription.id}`}
-                      aria-label={t("lists.action.enabled", { name: subscription.name })}
-                      checked={subscription.enabled}
+                      label={subscription.enabled ? t("label.disable") : t("label.enable")}
+                      tone={subscription.enabled ? "enabled" : "disabled"}
+                      aria-pressed={subscription.enabled}
                       disabled={busy}
-                      onCheckedChange={(checked) => onSetEnabled(subscription, checked)}
-                    />
+                      onClick={() => onSetEnabled(subscription, !subscription.enabled)}
+                    >
+                      {subscription.enabled ? <Power className="h-4 w-4" /> : <PowerOff className="h-4 w-4" />}
+                    </IconButton>
                   </div>
                 </TableCell>
               ) : null}

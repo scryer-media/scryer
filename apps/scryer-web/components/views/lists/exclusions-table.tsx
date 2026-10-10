@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/ui/icon-button";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { SingleSelectField } from "@/components/ui/select";
 import {
@@ -201,17 +202,15 @@ export function ExclusionsTable({
                 </TableCell>
                 <TableCell className="text-right">
                   {/* Not `list-exclusion-…`: that id family belongs to the rows alone. */}
-                  <Button
+                  <IconButton
                     id={`list-exclusions-remove-${exclusion.id}`}
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("lists.exclusions.remove", { name: exclusion.displayTitle })}
+                    label={t("lists.exclusions.remove", { name: exclusion.displayTitle })}
+                    tone="delete"
                     disabled={busyIds.has(exclusion.id)}
                     onClick={() => setPendingRemoval(exclusion)}
                   >
                     <Trash2 className="h-4 w-4" />
-                  </Button>
+                  </IconButton>
                 </TableCell>
               </TableRow>
             ))}

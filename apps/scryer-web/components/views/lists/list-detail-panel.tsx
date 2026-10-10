@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Eye, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { Eye, Pencil, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
@@ -12,7 +12,7 @@ import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
+import { IconButton } from "@/components/ui/icon-button";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import {
   Table,
@@ -146,13 +146,6 @@ export function ListDetailPanel({
               ))}
               {canManageLists ? (
                 <div className="ml-auto flex flex-wrap items-center gap-2">
-                  <Switch
-                    id="list-detail-enabled"
-                    aria-label={t("lists.action.enabled", { name: subscription.name })}
-                    checked={subscription.enabled}
-                    disabled={busy}
-                    onCheckedChange={(checked) => onSetEnabled(subscription, checked)}
-                  />
                   <TextActionButton
                     id="list-detail-sync"
                     tone="accent"
@@ -162,6 +155,16 @@ export function ListDetailPanel({
                   >
                     {t("lists.action.syncNow")}
                   </TextActionButton>
+                  <IconButton
+                    id="list-detail-enabled"
+                    label={subscription.enabled ? t("label.disable") : t("label.enable")}
+                    tone={subscription.enabled ? "enabled" : "disabled"}
+                    aria-pressed={subscription.enabled}
+                    disabled={busy}
+                    onClick={() => onSetEnabled(subscription, !subscription.enabled)}
+                  >
+                    {subscription.enabled ? <Power className="h-4 w-4" /> : <PowerOff className="h-4 w-4" />}
+                  </IconButton>
                   <TextActionButton
                     id="list-detail-edit"
                     tone="edit"
