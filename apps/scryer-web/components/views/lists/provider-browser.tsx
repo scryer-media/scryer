@@ -116,9 +116,9 @@ export function ProviderBrowser({
         >
           <span
             aria-hidden="true"
-            className="inline-flex h-7 w-7 flex-none items-center justify-center rounded-[9px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] text-[var(--scry-ink2)]"
+            className="inline-flex h-8 w-8 flex-none items-center justify-center text-[var(--scry-ink2)]"
           >
-            <Link2 className="h-3.5 w-3.5" />
+            <Link2 className="h-5 w-5" />
           </span>
           <span className="min-w-0">
             <span className="block truncate text-[13px] font-semibold text-[var(--scry-ink2)]">{t("label.custom")}</span>
