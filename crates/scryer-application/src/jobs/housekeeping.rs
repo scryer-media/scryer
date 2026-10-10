@@ -17,6 +17,7 @@ const WORKFLOW_COMPLETED_RETENTION_DAYS: i64 = 7;
 const WORKFLOW_WARNING_FAILED_RETENTION_DAYS: i64 = 30;
 const RELEASE_ATTEMPT_RETENTION_DAYS: i64 = 90;
 pub const INDEXER_ERROR_RETENTION_DAYS: i64 = 30;
+const LIST_SYNC_RUN_RETENTION_DAYS: i64 = 7;
 const DOWNLOAD_DELETE_RETENTION_DAYS: i64 = 7;
 const DISCOVERY_SUCCESSFUL_GENERATIONS_TO_RETAIN: usize = 1;
 const DISCOVERY_DIAGNOSTIC_RETENTION_DAYS: i64 = 30;
@@ -743,6 +744,15 @@ impl AppUseCase {
                     - chrono::Duration::days(INDEXER_ERROR_RETENTION_DAYS),
             )
             .await?;
+        let stale_list_sync_runs = self
+            .services
+            .lists
+            .subscriptions
+            .delete_sync_runs_older_than(
+                self.runtime.environment.now()
+                    - chrono::Duration::days(LIST_SYNC_RUN_RETENTION_DAYS),
+            )
+            .await?;
 
         let (
             stale_history_events,
@@ -821,7 +831,8 @@ impl AppUseCase {
             + stale_download_import_artifacts
             + stale_import_history
             + stale_download_queue_deletes
-            + stale_rule_set_history;
+            + stale_rule_set_history
+            + stale_list_sync_runs;
 
         // 3. Stale staged NZB artifacts (> 1 hour old)
         let now = self.runtime.environment.now();
@@ -935,6 +946,7 @@ impl AppUseCase {
             stale_import_history,
             stale_download_queue_deletes,
             stale_rule_set_history,
+            stale_list_sync_runs,
             stale_history_records,
             staged_nzb_artifacts_pruned,
             recycled_purged,

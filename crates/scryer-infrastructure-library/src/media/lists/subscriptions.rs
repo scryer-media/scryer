@@ -371,6 +371,19 @@ impl ListSubscriptionRepository for ListStore {
         .await?;
         rows.iter().map(row_to_run).collect()
     }
+
+    async fn delete_sync_runs_older_than(&self, cutoff: DateTime<Utc>) -> AppResult<u32> {
+        let deleted = SqlRuntime::execute_write(
+            &self.datastore,
+            "delete_expired_list_sync_runs",
+            "DELETE FROM list_sync_runs WHERE started_at < {}",
+            vec![SqlArg::Timestamp(cutoff)],
+        )
+        .await?;
+        u32::try_from(deleted).map_err(|_| {
+            AppError::Repository("deleted list sync run count exceeds u32 range".to_string())
+        })
+    }
 }
 
 impl ListStore {

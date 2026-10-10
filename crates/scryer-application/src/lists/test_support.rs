@@ -352,6 +352,13 @@ impl ListSubscriptionRepository for MemoryListStore {
             .cloned()
             .collect())
     }
+
+    async fn delete_sync_runs_older_than(&self, cutoff: DateTime<Utc>) -> AppResult<u32> {
+        let mut runs = self.runs.lock().unwrap();
+        let before = runs.len();
+        runs.retain(|run| run.started_at >= cutoff);
+        Ok(u32::try_from(before - runs.len()).unwrap_or(u32::MAX))
+    }
 }
 
 #[async_trait]

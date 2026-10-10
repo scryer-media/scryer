@@ -248,7 +248,7 @@ impl ListQueries {
         ctx: &Context<'_>,
         #[graphql(desc = "ID of a public list or a personal list owned by the current member.")]
         subscription_id: ID,
-        #[graphql(desc = "Most syncs to return, from 1 through 100; defaults to 20.")]
+        #[graphql(desc = "Most syncs to return, from 1 through 1000; defaults to 20.")]
         limit: Option<i32>,
     ) -> GqlResult<Vec<ListSyncRunPayload>> {
         let app = app_from_ctx(ctx)?;

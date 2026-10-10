@@ -56,6 +56,7 @@ type ListDetailPanelProps = {
   membershipPageSize: number;
   onClose: () => void;
   onPage: (id: string, offset: number) => void;
+  onShowAllRuns: (id: string) => void;
   onPreview: (id: string) => Promise<ListPreview | null>;
   onEdit: (subscription: ListSubscription) => void;
   onSetEnabled: (subscription: ListSubscription, enabled: boolean) => void;
@@ -72,6 +73,7 @@ export function ListDetailPanel({
   membershipPageSize,
   onClose,
   onPage,
+  onShowAllRuns,
   onPreview,
   onEdit,
   onSetEnabled,
@@ -380,6 +382,18 @@ export function ListDetailPanel({
               ) : (
                 <p className="text-[12.5px] text-[var(--scry-muted)]">{t("lists.detail.noRuns")}</p>
               )}
+              {detail?.moreRuns ? (
+                <Button
+                  type="button"
+                  id="list-detail-runs-more"
+                  size="xs"
+                  variant="outline"
+                  disabled={detail.loading}
+                  onClick={() => onShowAllRuns(detail.id)}
+                >
+                  {t("lists.detail.olderRuns")}
+                </Button>
+              ) : null}
             </LabeledFieldset>
           </div>
         )}

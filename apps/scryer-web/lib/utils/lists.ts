@@ -710,6 +710,20 @@ export type ListSyncWatchSnapshot = {
  * Whether a requested sync has visibly finished: a run id the baseline did not
  * have, or a change to the subscription's last sync time or sync state.
  */
+/** How many syncs a list's history shows before the reader asks for the rest. */
+export const LIST_SYNC_RUNS_SHOWN = 20;
+/** The most syncs one read returns; the week of history the server keeps fits in it. */
+export const LIST_SYNC_RUNS_MAX = 1000;
+
+/**
+ * The slice of a list's sync history to show. A collapsed history is read one
+ * run past what it shows, which is how it learns that older runs exist.
+ */
+export function shownListSyncRuns<T>(runs: readonly T[], expanded: boolean): { runs: T[]; more: boolean } {
+  if (expanded) return { runs: [...runs], more: false };
+  return { runs: runs.slice(0, LIST_SYNC_RUNS_SHOWN), more: runs.length > LIST_SYNC_RUNS_SHOWN };
+}
+
 export function listSyncWatchSettled(
   baseline: ListSyncWatchSnapshot,
   current: ListSyncWatchSnapshot,

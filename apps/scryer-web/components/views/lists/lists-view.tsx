@@ -45,6 +45,8 @@ export type ListDetailState = {
   subscription: ListSubscription | null;
   memberships: ListMembershipPage | null;
   runs: ListSyncRun[];
+  /** Older syncs exist beyond the ones loaded. */
+  moreRuns: boolean;
   membershipOffset: number;
   error: string | null;
 };
@@ -75,6 +77,7 @@ type ListsViewProps = {
   detail: ListDetailState | null;
   onOpenDetail: (id: string | null) => void;
   onDetailPage: (id: string, offset: number) => void;
+  onShowAllRuns: (id: string) => void;
   membershipPageSize: number;
   onPreviewUrl: (url: string) => Promise<ListPreview | null>;
   onPreviewSource: (source: ListSourceDraft) => Promise<ListPreview | null>;
@@ -333,6 +336,7 @@ export function ListsView(props: ListsViewProps) {
         membershipPageSize={props.membershipPageSize}
         onClose={() => props.onOpenDetail(null)}
         onPage={props.onDetailPage}
+        onShowAllRuns={props.onShowAllRuns}
         onPreview={props.onPreviewSubscription}
         onEdit={(subscription) =>
           setFollowTarget({

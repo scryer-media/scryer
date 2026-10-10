@@ -40,8 +40,9 @@ use crate::{AppError, AppResult, AppUseCase, MediaRequestQuery};
 
 /// The largest page of memberships one read returns.
 pub const LIST_MEMBERSHIP_PAGE_MAX: usize = 500;
-/// The most sync runs one read returns.
-pub const LIST_SYNC_RUNS_MAX: usize = 100;
+/// The most sync runs one read returns. Housekeeping keeps a week of runs, so
+/// this leaves room for a list that syncs every ten minutes.
+pub const LIST_SYNC_RUNS_MAX: usize = 1000;
 /// How many titles a preview lists as would-be adds.
 pub const LIST_PREVIEW_WOULD_ADD_MAX: usize = 100;
 /// The window `list_requests_last_30d` counts over.

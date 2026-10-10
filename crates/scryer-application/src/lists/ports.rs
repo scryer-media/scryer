@@ -113,6 +113,10 @@ pub trait ListSubscriptionRepository: Send + Sync {
         subscription_id: &str,
         limit: usize,
     ) -> AppResult<Vec<ListSyncRun>>;
+
+    /// Removes the sync runs of every list that started before `cutoff` and
+    /// returns how many went.
+    async fn delete_sync_runs_older_than(&self, cutoff: DateTime<Utc>) -> AppResult<u32>;
 }
 
 #[async_trait]

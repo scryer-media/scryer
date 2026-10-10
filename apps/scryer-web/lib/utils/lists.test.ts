@@ -46,8 +46,10 @@ import {
   listMembershipStateLabelKey,
   listMembershipStateTone,
   listModeLabelKey,
+  LIST_SYNC_RUNS_SHOWN,
   listCoverageSegmentTone,
   listSyncStateLabelKey,
+  shownListSyncRuns,
   listSyncStateTone,
   listMembershipRowId,
   listSyncPollDelayMs,
@@ -407,6 +409,19 @@ test("filters are replaced by kind and removed with null", () => {
 test("membership rows get ids scoped to their list", () => {
   assert.equal(listMembershipRowId("sub-1", "tmdb:603"), "list-membership-sub-1-tmdb-603");
   assert.notEqual(listMembershipRowId("sub-1", "tmdb:603"), listMembershipRowId("sub-2", "tmdb:603"));
+});
+
+test("a collapsed sync history shows its newest runs and knows when older ones exist", () => {
+  const runs = Array.from({ length: LIST_SYNC_RUNS_SHOWN + 1 }, (_, index) => `run-${index}`);
+  const collapsed = shownListSyncRuns(runs, false);
+  assert.equal(collapsed.runs.length, LIST_SYNC_RUNS_SHOWN);
+  assert.equal(collapsed.runs[0], "run-0");
+  assert.equal(collapsed.more, true);
+  assert.deepEqual(shownListSyncRuns(runs.slice(0, LIST_SYNC_RUNS_SHOWN), false), {
+    runs: runs.slice(0, LIST_SYNC_RUNS_SHOWN),
+    more: false,
+  });
+  assert.deepEqual(shownListSyncRuns(runs, true), { runs, more: false });
 });
 
 test("a sync watch settles on a new run, a new sync time or a state change", () => {

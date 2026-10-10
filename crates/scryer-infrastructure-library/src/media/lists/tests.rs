@@ -463,6 +463,51 @@ async fn recording_a_sync_does_not_make_the_list_look_edited() {
 }
 
 #[tokio::test]
+async fn expiring_sync_runs_removes_only_runs_started_before_the_cutoff() {
+    let store = test_store(None).await;
+    for id in ["sub-1", "sub-2"] {
+        ListSubscriptionRepository::create(&store, subscription(id, ListScope::Public, OWNER))
+            .await
+            .expect("create");
+    }
+    let now = Utc::now();
+    let cutoff = now - Duration::days(7);
+    let run_at = |subscription_id: &str, started_at| {
+        let mut run = ListSyncRun::started(subscription_id, None);
+        run.started_at = started_at;
+        run.outcome = ListSyncRunOutcome::Succeeded;
+        run
+    };
+    let expired = run_at("sub-1", cutoff - Duration::seconds(1));
+    let at_cutoff = run_at("sub-1", cutoff);
+    let recent = run_at("sub-1", now);
+    let other_expired = run_at("sub-2", cutoff - Duration::days(30));
+    let other_recent = run_at("sub-2", now - Duration::days(1));
+    for run in [&expired, &at_cutoff, &recent, &other_expired, &other_recent] {
+        store
+            .record_sync_run(run.clone())
+            .await
+            .expect("record run");
+    }
+
+    let deleted = store
+        .delete_sync_runs_older_than(cutoff)
+        .await
+        .expect("expire runs");
+
+    assert_eq!(deleted, 2);
+    let kept = |runs: Vec<ListSyncRun>| runs.into_iter().map(|run| run.id).collect::<Vec<_>>();
+    assert_eq!(
+        kept(store.list_sync_runs("sub-1", 10).await.expect("runs")),
+        vec![recent.id.clone(), at_cutoff.id.clone()]
+    );
+    assert_eq!(
+        kept(store.list_sync_runs("sub-2", 10).await.expect("runs")),
+        vec![other_recent.id.clone()]
+    );
+}
+
+#[tokio::test]
 async fn deleting_a_subscription_cascades_to_memberships_routes_and_runs() {
     let store = test_store(None).await;
     ListSubscriptionRepository::create(&store, subscription("sub-1", ListScope::Public, OWNER))

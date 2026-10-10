@@ -60,13 +60,23 @@ import {
   listFilterInput,
   listSyncWatchSchedule,
   listSyncWatchSettled,
+  LIST_SYNC_RUNS_MAX,
+  LIST_SYNC_RUNS_SHOWN,
+  shownListSyncRuns,
   type AddListExclusionInput,
   type ListSyncWatchSnapshot,
 } from "@/lib/utils/lists";
 import { buildListsPath, listsSectionFromPath } from "@/lib/utils/routing";
 
 const MEMBERSHIP_PAGE_SIZE = 50;
-const SYNC_RUN_LIMIT = 20;
+
+/**
+ * The runs a sync watch compares. Expanding the history mid-watch loads older
+ * runs, which must not read as a new sync.
+ */
+function newestRunIds(runs: readonly ListSyncRun[]): string[] {
+  return runs.slice(0, LIST_SYNC_RUNS_SHOWN).map((run) => run.id);
+}
 
 type ListsContainerProps = {
   canManageLists: boolean;
@@ -309,6 +319,9 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
   // any panel load (opening, paging) started while it was in flight.
   const detailRequestRef = React.useRef(0);
   const detailLoadingRef = React.useRef(false);
+  // The list whose full sync history was asked for; every reload of that
+  // panel keeps it expanded until the panel closes.
+  const expandedRunsRef = React.useRef<string | null>(null);
 
   const loadDetail = React.useCallback(
     async (
@@ -326,9 +339,10 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         setDetail((current) =>
           current?.id === id
             ? { ...current, loading: true }
-            : { id, loading: true, subscription: null, memberships: null, runs: [], membershipOffset: 0, error: null },
+            : { id, loading: true, subscription: null, memberships: null, runs: [], moreRuns: false, membershipOffset: 0, error: null },
         );
       }
+      const expanded = expandedRunsRef.current === id;
       try {
         const result = await client
           .query(
@@ -337,13 +351,16 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
               id,
               membershipLimit: MEMBERSHIP_PAGE_SIZE,
               membershipOffset,
-              runLimit: SYNC_RUN_LIMIT,
+              runLimit: expanded ? LIST_SYNC_RUNS_MAX : LIST_SYNC_RUNS_SHOWN + 1,
             },
             { requestPolicy: "network-only" },
           )
           .toPromise();
         if (result.error) throw result.error;
-        const runs = (result.data?.listSyncRuns ?? []) as ListSyncRun[];
+        const { runs, more: moreRuns } = shownListSyncRuns(
+          (result.data?.listSyncRuns ?? []) as ListSyncRun[],
+          expanded,
+        );
         if (!isCurrent()) return runs;
         if (!background) detailLoadingRef.current = false;
         setDetail((current) =>
@@ -355,6 +372,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
                 subscription: (result.data?.listSubscription ?? null) as ListSubscription | null,
                 memberships: (result.data?.listSubscriptionMemberships ?? null) as ListMembershipPage | null,
                 runs,
+                moreRuns,
                 membershipOffset,
                 error: null,
               },
@@ -373,11 +391,22 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
 
   const openDetail = React.useCallback(
     (id: string | null) => {
+      expandedRunsRef.current = null;
       if (!id) {
         setDetail(null);
         return;
       }
       void loadDetail(id);
+    },
+    [loadDetail],
+  );
+
+  const showAllRuns = React.useCallback(
+    (id: string) => {
+      const shown = detailRef.current;
+      if (shown?.id !== id) return;
+      expandedRunsRef.current = id;
+      void loadDetail(id, shown.membershipOffset);
     },
     [loadDetail],
   );
@@ -536,7 +565,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
             state: subscription.sync.state,
             runIds:
               shownDetail?.id === subscription.id && shownDetail.subscription
-                ? shownDetail.runs.map((run) => run.id)
+                ? newestRunIds(shownDetail.runs)
                 : null,
           },
           startedAt: now,
@@ -588,7 +617,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
             listSyncWatchSettled(watch.baseline, {
               lastAt: current.sync.lastAt,
               state: current.sync.state,
-              runIds: runs && shown?.id === id ? runs.map((run) => run.id) : null,
+              runIds: runs && shown?.id === id ? newestRunIds(runs) : null,
             })
           ) {
             watches.delete(id);
@@ -726,6 +755,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       detail={detail}
       onOpenDetail={openDetail}
       onDetailPage={(id, offset) => void loadDetail(id, offset)}
+      onShowAllRuns={showAllRuns}
       membershipPageSize={MEMBERSHIP_PAGE_SIZE}
       onPreviewUrl={previewUrl}
       onPreviewSource={previewSource}

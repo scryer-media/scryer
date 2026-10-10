@@ -5765,6 +5765,7 @@ const en: LocaleDictionary = {
   "lists.detail.nextPage": "Next",
   "lists.detail.history": "Sync history",
   "lists.detail.noRuns": "No syncs yet.",
+  "lists.detail.olderRuns": "Show older syncs",
   "lists.detail.runCounts": "{{total}} on list · {{added}} added · {{held}} held",
   "lists.unfollow.title": "Unfollow {{name}}?",
   "lists.unfollow.description": "Scryer stops syncing this list. Titles stay in your library, and pending requests stay in Requests.",

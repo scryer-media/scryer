@@ -24815,7 +24815,7 @@ type QueryRoot {
 		"""
 		subscriptionId: ID!,
 		"""
-		Most syncs to return, from 1 through 100; defaults to 20.
+		Most syncs to return, from 1 through 1000; defaults to 20.
 		"""
 		limit: Int
 	): [ListSyncRunPayload!]!
