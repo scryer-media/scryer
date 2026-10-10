@@ -5681,6 +5681,17 @@ export const listMemberPoliciesQuery = `query ListMemberPolicies {
   }
 }`;
 
+export const listLibraryEpisodePoliciesQuery = `query ListLibraryEpisodePolicies {
+  libraries(facet: ANIME, permission: MANAGE_LIBRARY) {
+    id
+    settings {
+      monitorSpecials
+      fillerPolicy
+      recapPolicy
+    }
+  }
+}`;
+
 export const listRouteOptionsQuery = `query ListRouteOptions {
   qualityProfileSettings {
     profiles {

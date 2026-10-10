@@ -30,6 +30,7 @@ import {
   draftToUpdateInput,
   EMPTY_LIST_FILTER,
   findListFilter,
+  inheritedListEpisodePolicyLabelKey,
   splitListValues,
   withListFilter,
   exclusionInputFromTitle,
@@ -745,5 +746,27 @@ test("list providers with a shipped logo resolve to it; the rest keep their abbr
 
   for (const providerType of ["custom", "some-future-plugin", "", "  "]) {
     assert.equal(providerLogoSrc(providerType), null, JSON.stringify(providerType));
+  }
+});
+
+test("an inherited episode policy names what the route's library resolves it to", () => {
+  const anime = { settings: { monitorSpecials: true, fillerPolicy: "SKIP_FILLER", recapPolicy: "DOWNLOAD_ALL" } };
+  assert.equal(inheritedListEpisodePolicyLabelKey("MONITOR_SPECIALS", "ANIME", anime), "search.seasonFolder.enabled");
+  assert.equal(inheritedListEpisodePolicyLabelKey("FILLER_POLICY", "ANIME", anime), "settings.fillerPolicySkipFiller");
+  assert.equal(inheritedListEpisodePolicyLabelKey("RECAP_POLICY", "ANIME", anime), "settings.recapPolicyDownloadAll");
+
+  const other = { settings: { monitorSpecials: false, fillerPolicy: "DOWNLOAD_ALL", recapPolicy: "SKIP_RECAP" } };
+  assert.equal(inheritedListEpisodePolicyLabelKey("MONITOR_SPECIALS", "ANIME", other), "search.seasonFolder.disabled");
+  assert.equal(inheritedListEpisodePolicyLabelKey("FILLER_POLICY", "ANIME", other), "settings.fillerPolicyDownloadAll");
+  assert.equal(inheritedListEpisodePolicyLabelKey("RECAP_POLICY", "ANIME", other), "settings.recapPolicySkipRecap");
+
+  // Series libraries carry no specials setting: inheriting never monitors them.
+  assert.equal(inheritedListEpisodePolicyLabelKey("MONITOR_SPECIALS", "SERIES", null), "search.seasonFolder.disabled");
+
+  // Settings the viewer may not read leave the choice unlabelled, not guessed.
+  for (const library of [null, undefined, {}, { settings: null }]) {
+    assert.equal(inheritedListEpisodePolicyLabelKey("MONITOR_SPECIALS", "ANIME", library), null);
+    assert.equal(inheritedListEpisodePolicyLabelKey("FILLER_POLICY", "ANIME", library), null);
+    assert.equal(inheritedListEpisodePolicyLabelKey("RECAP_POLICY", "ANIME", library), null);
   }
 });

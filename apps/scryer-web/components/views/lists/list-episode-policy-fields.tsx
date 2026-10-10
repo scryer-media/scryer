@@ -1,15 +1,21 @@
 import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { ListFilter } from "@/lib/types/lists";
-import type { Facet } from "@/lib/types/titles";
-import { EMPTY_LIST_FILTER } from "@/lib/utils/lists";
+import type { Facet, LibraryRecord } from "@/lib/types/titles";
+import {
+  EMPTY_LIST_FILTER,
+  inheritedListEpisodePolicyLabelKey,
+  type ListEpisodePolicyKind,
+} from "@/lib/utils/lists";
 
 const INHERIT = "__inherit__";
 
 export function ListEpisodePolicyFields({
-  facet, filters, onChange, disabled, idPrefix,
+  facet, library, filters, onChange, disabled, idPrefix,
 }: {
   facet: Facet;
+  /** The library the route adds to, whose settings an inherited policy takes. */
+  library: LibraryRecord | null;
   filters: ListFilter[];
   onChange: (filters: ListFilter[]) => void;
   disabled?: boolean;
@@ -18,7 +24,7 @@ export function ListEpisodePolicyFields({
   const t = useTranslate();
   if (facet === "MOVIE") return null;
   const policies: Array<{
-    kind: ListFilter["kind"];
+    kind: ListEpisodePolicyKind;
     label: string;
     options: Array<{ value: string; label: string }>;
   }> = [{
@@ -44,6 +50,11 @@ export function ListEpisodePolicyFields({
       { value: "SKIP_RECAP", label: "settings.recapPolicySkipRecap" },
     ],
   });
+  const inheritLabel = (kind: ListEpisodePolicyKind) => {
+    const effective = inheritedListEpisodePolicyLabelKey(kind, facet, library);
+    const inherit = t("search.addConfigInheritLibrary");
+    return effective ? `${inherit} — ${t(effective)}` : inherit;
+  };
   return <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
     {policies.map(({ kind, label, options }) => <SingleSelectField
       key={kind}
@@ -51,7 +62,7 @@ export function ListEpisodePolicyFields({
       label={t(label)}
       value={filters.find((filter) => filter.kind === kind && filter.facet === facet)?.values[0] ?? INHERIT}
       options={[
-        { value: INHERIT, label: t("search.addConfigInheritLibrary") },
+        { value: INHERIT, label: inheritLabel(kind) },
         ...options.map((option) => ({ ...option, label: t(option.label) })),
       ]}
       onValueChange={(value) => onChange([

@@ -404,6 +404,42 @@ export function defaultListRoute(
   };
 }
 
+export type ListEpisodePolicyKind = "MONITOR_SPECIALS" | "FILLER_POLICY" | "RECAP_POLICY";
+
+/**
+ * The label key for what a route's "inherit" choice resolves to in its library,
+ * or null when that cannot be told. Only Anime libraries carry these settings;
+ * a Series title that inherits never monitors specials.
+ */
+export function inheritedListEpisodePolicyLabelKey(
+  kind: ListEpisodePolicyKind,
+  facet: Facet,
+  library:
+    | {
+        settings?: {
+          monitorSpecials?: boolean | null;
+          fillerPolicy?: string | null;
+          recapPolicy?: string | null;
+        } | null;
+      }
+    | null
+    | undefined,
+): string | null {
+  if (kind === "MONITOR_SPECIALS") {
+    const enabled = facet === "SERIES" ? false : library?.settings?.monitorSpecials;
+    if (enabled == null) return null;
+    return enabled ? "search.seasonFolder.enabled" : "search.seasonFolder.disabled";
+  }
+  if (kind === "FILLER_POLICY") {
+    const policy = library?.settings?.fillerPolicy;
+    if (!policy) return null;
+    return policy === "SKIP_FILLER" ? "settings.fillerPolicySkipFiller" : "settings.fillerPolicyDownloadAll";
+  }
+  const policy = library?.settings?.recapPolicy;
+  if (!policy) return null;
+  return policy === "SKIP_RECAP" ? "settings.recapPolicySkipRecap" : "settings.recapPolicyDownloadAll";
+}
+
 /**
  * The per-sync cap a new follow starts with, so a large list fills the library
  * over several syncs instead of all at once. The form lets it be cleared.

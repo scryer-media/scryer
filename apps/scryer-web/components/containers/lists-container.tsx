@@ -31,6 +31,7 @@ import {
   listExclusionsQuery,
   listProviderSettingsQuery,
   listProvidersQuery,
+  listLibraryEpisodePoliciesQuery,
   listRouteOptionsQuery,
   listSourcePreviewQuery,
   listSubscriptionDetailQuery,
@@ -179,7 +180,22 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       if (providersResult.error) throw providersResult.error;
       setProviders((providersResult.data?.listProviders ?? []) as ListProviderManifest[]);
       if (canManageLists || personal) {
-        const optionsResult = await client.query(personal ? personalListRouteOptionsQuery : listRouteOptionsQuery, {}).toPromise();
+        const [optionsResult, policiesResult] = await Promise.all([
+          client.query(personal ? personalListRouteOptionsQuery : listRouteOptionsQuery, {}).toPromise(),
+          // Read apart from the routing choices: effective library settings need
+          // library-management permission, and lacking it only leaves the
+          // "inherit" choices unlabelled.
+          client.query(listLibraryEpisodePoliciesQuery, {}, { requestPolicy: "network-only" }).toPromise(),
+        ]);
+        const settingsByLibraryId = new Map(
+          ((policiesResult.data?.libraries ?? []) as Array<Pick<LibraryRecord, "id" | "settings">>).map(
+            (library) => [library.id, library.settings],
+          ),
+        );
+        const withSettings = (library: LibraryRecord): LibraryRecord => ({
+          ...library,
+          settings: settingsByLibraryId.get(library.id) ?? null,
+        });
         // Libraries and profiles only feed the follow form's routing choices;
         // failing to read them must not take the lists themselves down.
         if (optionsResult.error) {
@@ -191,8 +207,8 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         }
         setRouteOptions({
           libraries: personal
-            ? [...new Map([...(optionsResult.data?.requestableLibraries ?? []), ...(optionsResult.data?.manageableLibraries ?? [])].map((library: LibraryRecord) => [library.id, library])).values()]
-            : (optionsResult.data?.libraries ?? []) as LibraryRecord[],
+            ? [...new Map([...(optionsResult.data?.requestableLibraries ?? []), ...(optionsResult.data?.manageableLibraries ?? [])].map((library: LibraryRecord) => [library.id, withSettings(library)])).values()]
+            : ((optionsResult.data?.libraries ?? []) as LibraryRecord[]).map(withSettings),
           qualityProfiles: (optionsResult.data?.qualityProfileSettings?.profiles ?? []) as Array<{
             id: string;
             name: string;

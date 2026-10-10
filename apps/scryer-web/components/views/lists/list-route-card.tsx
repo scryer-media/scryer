@@ -192,7 +192,7 @@ export function ListRouteCard({
           </div> : null}
           </div>
           <ListFacetFilters facet={kind} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
-          <ListEpisodePolicyFields facet={kind} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
+          <ListEpisodePolicyFields facet={kind} library={library} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
         </fieldset>
       </CollapsibleContent>
     </Collapsible>

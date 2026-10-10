@@ -298,6 +298,8 @@ export type LibraryRecord = {
   qualityProfileId?: string | null;
   requestQualityProfileIds?: string[];
   requestQualityProfileDefaultId?: string | null;
+  /** Effective settings, read only where the viewer may configure the library. */
+  settings?: Pick<LibrarySettingsRecord, "monitorSpecials" | "fillerPolicy" | "recapPolicy"> | null;
 };
 
 export type MediaRequestRequesterRecord = {
