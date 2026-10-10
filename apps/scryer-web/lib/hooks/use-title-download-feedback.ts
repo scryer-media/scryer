@@ -152,7 +152,7 @@ export function useTitleDownloadFeedback({
       if (!stillCurrent()) {
         return;
       }
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       setState((previous) =>
         previous?.titleId === requestedTitleId
           ? { ...previous, settled: true }
@@ -188,7 +188,7 @@ export function useTitleDownloadFeedback({
       return;
     }
     lastShownWarningRef.current = warning;
-    setGlobalStatus(warning);
+    setGlobalStatus(warning, { level: "WARNING" });
   }, [setGlobalStatus, warning]);
 
   useActivityEventStream({

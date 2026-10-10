@@ -67,6 +67,7 @@ export function SettingsProxiesContainer() {
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     }
   }, [client, setGlobalStatus, t]);
@@ -308,7 +309,7 @@ export function SettingsProxiesContainer() {
           }),
         );
       }
-      setGlobalStatus(notes.join(" "));
+      setGlobalStatus(notes.join(" "), parsed.peerCount > 1 ? { level: "WARNING" } : undefined);
       return true;
     },
     [setGlobalStatus, t],
@@ -343,7 +344,7 @@ export function SettingsProxiesContainer() {
             })
             .toPromise();
           if (error) throw error;
-          setGlobalStatus(t("status.proxyUpdated"));
+          setGlobalStatus(t("status.proxyUpdated"), { level: "SUCCESS" });
         } else {
           const { error } = await client
             .mutation(createProxyConfigMutation, {
@@ -351,13 +352,14 @@ export function SettingsProxiesContainer() {
             })
             .toPromise();
           if (error) throw error;
-          setGlobalStatus(t("status.proxyCreated"));
+          setGlobalStatus(t("status.proxyCreated"), { level: "SUCCESS" });
         }
         resetProxyDraft();
         await refreshProxyConfigs();
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingProxyId(null);
@@ -413,7 +415,7 @@ export function SettingsProxiesContainer() {
         await navigator.clipboard.writeText(publicKey);
         setGlobalStatus(t("status.proxyTunnelPublicKeyCopied"));
       } catch {
-        setGlobalStatus(t("status.proxyTunnelPublicKeyCopyFailed"));
+        setGlobalStatus(t("status.proxyTunnelPublicKeyCopyFailed"), { level: "ERROR" });
       }
     },
     [setGlobalStatus, t],
@@ -430,7 +432,7 @@ export function SettingsProxiesContainer() {
         .mutation(deleteProxyConfigMutation, { id: proxy.id })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.proxyDeleted", { name: proxy.name }));
+      setGlobalStatus(t("status.proxyDeleted", { name: proxy.name }), { level: "SUCCESS" });
       if (editingProxyId === proxy.id) {
         resetProxyDraft();
       }
@@ -438,6 +440,7 @@ export function SettingsProxiesContainer() {
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToDelete"),
+        { level: "ERROR" },
       );
     } finally {
       setMutatingProxyId(null);
@@ -469,6 +472,7 @@ export function SettingsProxiesContainer() {
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToUpdate"),
+        { level: "ERROR" },
       );
     } finally {
       setResettingHostKeyProxyId(null);

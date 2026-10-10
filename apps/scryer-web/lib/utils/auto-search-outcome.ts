@@ -1,4 +1,6 @@
 import type { Translate } from "@/components/root/types";
+import type { SetGlobalStatus } from "@/lib/context/global-status-context";
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 
 /**
  * One rejection bucket from the backend's `NoAutoEligibleRelease` error,
@@ -103,5 +105,25 @@ export function autoSearchOutcomeMessage(
     name,
     count: rejection.candidateCount,
     reasons,
+  });
+}
+
+/**
+ * Report a title search that could not start. A search that ran but found
+ * nothing to grab explains why, as a warning; anything else is a failure.
+ */
+export function reportAutomaticSearchFailure(
+  setGlobalStatus: SetGlobalStatus,
+  t: Translate,
+  error: unknown,
+  titleName: string,
+) {
+  const outcome = autoSearchOutcomeMessage(error, t, titleName);
+  if (outcome) {
+    setGlobalStatus(outcome, { level: "WARNING" });
+    return;
+  }
+  setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), {
+    level: "ERROR",
   });
 }

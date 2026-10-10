@@ -323,7 +323,7 @@ export function SettingsNotificationsContainer({
       if (error) throw error;
       setChannels(data.notificationChannels || []);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -335,7 +335,7 @@ export function SettingsNotificationsContainer({
       if (error) throw error;
       setSubscriptions(data.notificationSubscriptions || []);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -373,7 +373,7 @@ export function SettingsNotificationsContainer({
           localPathStyleFromRuntimeValue(data?.runtimeInfo?.runtimePathStyle),
         );
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
       }
     };
     void load();
@@ -389,7 +389,7 @@ export function SettingsNotificationsContainer({
 
     providerCatalogVersionRef.current = providerCatalogVersion;
     void Promise.all([refreshProviderTypes(), refreshNotificationTargets()]).catch((error: unknown) => {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     });
   }, [providerCatalogVersion, refreshNotificationTargets, refreshProviderTypes, setGlobalStatus, t]);
 
@@ -467,7 +467,7 @@ export function SettingsNotificationsContainer({
     };
 
     if (!payload.name || !payload.channelType) {
-      setGlobalStatus(t("status.failedToCreate"));
+      setGlobalStatus(t("status.failedToCreate"), { level: "ERROR" });
       return;
     }
 
@@ -484,7 +484,7 @@ export function SettingsNotificationsContainer({
           },
         }).toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.notificationChannelUpdated"));
+        setGlobalStatus(t("status.notificationChannelUpdated"), { level: "SUCCESS" });
       } else {
         const { error } = await client.mutation(createNotificationChannelMutation, {
           input: {
@@ -496,7 +496,7 @@ export function SettingsNotificationsContainer({
           },
         }).toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.notificationChannelCreated"));
+        setGlobalStatus(t("status.notificationChannelCreated"), { level: "SUCCESS" });
       }
       resetChannelDraft();
       setIsChannelEditorOpen(false);
@@ -505,7 +505,7 @@ export function SettingsNotificationsContainer({
       await refreshChannels();
       await refreshNotificationTargets();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingChannelId(null);
     }
@@ -609,7 +609,7 @@ export function SettingsNotificationsContainer({
         id: channel.id,
       }).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.notificationChannelDeleted", { name: channel.name }));
+      setGlobalStatus(t("status.notificationChannelDeleted", { name: channel.name }), { level: "SUCCESS" });
       await refreshChannels();
       await refreshNotificationTargets();
       await refreshSubscriptions();
@@ -620,7 +620,7 @@ export function SettingsNotificationsContainer({
         setAwaitingChannelBaselineSync(true);
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingChannelId(null);
       setPendingDeleteChannel(null);
@@ -647,7 +647,7 @@ export function SettingsNotificationsContainer({
         },
       }).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.notificationChannelUpdated"));
+      setGlobalStatus(t("status.notificationChannelUpdated"), { level: "SUCCESS" });
       await refreshChannels();
       await refreshNotificationTargets();
     } catch (error) {
@@ -660,7 +660,7 @@ export function SettingsNotificationsContainer({
           isEnabled: channel.isEnabled,
         }));
       }
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingChannelId(null);
     }
@@ -703,7 +703,7 @@ export function SettingsNotificationsContainer({
     const desiredSpecs = buildNotificationSubscriptionSpecs(subscriptionDraft);
 
     if (!subscriptionDraft.targetId || desiredSpecs.length === 0) {
-      setGlobalStatus(t("status.failedToCreate"));
+      setGlobalStatus(t("status.failedToCreate"), { level: "ERROR" });
       return;
     }
 
@@ -782,7 +782,7 @@ export function SettingsNotificationsContainer({
           if (error) throw error;
         }
 
-        setGlobalStatus(t("status.notificationSubscriptionUpdated"));
+        setGlobalStatus(t("status.notificationSubscriptionUpdated"), { level: "SUCCESS" });
       } else {
         for (const spec of desiredSpecs) {
           const { error } = await client.mutation(createNotificationSubscriptionMutation, {
@@ -798,7 +798,7 @@ export function SettingsNotificationsContainer({
           }).toPromise();
           if (error) throw error;
         }
-        setGlobalStatus(t("status.notificationSubscriptionCreated"));
+        setGlobalStatus(t("status.notificationSubscriptionCreated"), { level: "SUCCESS" });
       }
       resetSubscriptionDraft();
       setIsSubscriptionEditorOpen(false);
@@ -807,7 +807,7 @@ export function SettingsNotificationsContainer({
       await refreshSubscriptions();
     } catch (error) {
       await refreshSubscriptions().catch(() => undefined);
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingSubscriptionId(null);
     }
@@ -930,7 +930,7 @@ export function SettingsNotificationsContainer({
         }).toPromise();
         if (error) throw error;
       }
-      setGlobalStatus(t("status.notificationSubscriptionDeleted"));
+      setGlobalStatus(t("status.notificationSubscriptionDeleted"), { level: "SUCCESS" });
       await refreshSubscriptions();
       if (editingSubscriptionId === sub.id) {
         resetSubscriptionDraft();
@@ -939,7 +939,7 @@ export function SettingsNotificationsContainer({
         setAwaitingSubscriptionBaselineSync(true);
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingSubscriptionId(null);
       setPendingDeleteSubscription(null);
@@ -958,10 +958,10 @@ export function SettingsNotificationsContainer({
         }).toPromise();
         if (error) throw error;
       }
-      setGlobalStatus(t("status.notificationSubscriptionUpdated"));
+      setGlobalStatus(t("status.notificationSubscriptionUpdated"), { level: "SUCCESS" });
       await refreshSubscriptions();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingSubscriptionId(null);
     }

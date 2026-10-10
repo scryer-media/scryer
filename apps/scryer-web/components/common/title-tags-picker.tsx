@@ -292,6 +292,7 @@ export function TitleTagsEditor({
       } catch (error: unknown) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setSaving(false);
@@ -386,6 +387,7 @@ export function SeriesMovieTagsEditor({
       } catch (error: unknown) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setSaving(false);

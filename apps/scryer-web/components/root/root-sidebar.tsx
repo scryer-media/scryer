@@ -733,7 +733,7 @@ function RootSidebarContent({
         if (result.error || !result.data?.setMyUiSettings) {
           setUiSettings(previous);
           setTheme(fromUiThemeValue(previous.theme));
-          setGlobalStatus(result.error?.message ?? t("status.failedToUpdate"));
+          setGlobalStatus(result.error?.message ?? t("status.failedToUpdate"), { level: "ERROR" });
           return;
         }
         setUiSettings(result.data.setMyUiSettings);
@@ -744,6 +744,7 @@ function RootSidebarContent({
         setTheme(fromUiThemeValue(previous.theme));
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       });
   }, [

@@ -120,6 +120,7 @@ export function TitleHistoryContainer({
         if (!cancelled) {
           setGlobalStatus(
             fetchError instanceof Error ? fetchError.message : t("status.failedToLoad"),
+            { level: "ERROR" },
           );
         }
       })
@@ -220,6 +221,7 @@ export function TitleHistoryContainer({
       } catch (retryError) {
         setGlobalStatus(
           retryError instanceof Error ? retryError.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       }
     },

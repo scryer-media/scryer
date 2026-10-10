@@ -658,7 +658,7 @@ export function ManualImportDialog({
         },
       }).toPromise();
       if (mutationError) throw mutationError;
-      setGlobalStatus(t("queue.manualImportQueued"));
+      setGlobalStatus(t("queue.manualImportQueued"), { level: "SUCCESS" });
       onImportQueued?.();
       onOpenChange(false);
     } catch (err: unknown) {

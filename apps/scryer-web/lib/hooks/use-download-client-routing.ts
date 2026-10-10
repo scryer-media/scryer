@@ -147,6 +147,7 @@ export function useDownloadClientRouting({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     } finally {
       setDownloadClientRoutingLoading(false);
@@ -218,10 +219,12 @@ export function useDownloadClientRouting({
         });
         setGlobalStatus(
           successMessage ?? t("settings.downloadClientRoutingSaved"),
+          { level: "SUCCESS" },
         );
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setDownloadClientRoutingSaving((previous) => ({

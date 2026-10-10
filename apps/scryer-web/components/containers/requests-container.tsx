@@ -307,6 +307,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
             adminLibrariesResult.error?.message ||
               requesterLibrariesResult.error?.message ||
               t("status.apiError"),
+            { level: "ERROR" },
           );
           return;
         }
@@ -367,7 +368,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         return;
       }
       if (requestsResult.error) {
-        setGlobalStatus(requestsResult.error.message || t("status.apiError"));
+        setGlobalStatus(requestsResult.error.message || t("status.apiError"), { level: "ERROR" });
         return;
       }
       const loadedRequests =
@@ -384,7 +385,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         setRequests((loadedRequests ?? []) as MediaRequestRecord[]);
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
     } finally {
       if (
         refreshSeq === refreshSeqRef.current &&
@@ -410,7 +411,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         })),
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -522,11 +523,12 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
                   error: searchError,
                 })
               : t("status.requestApproved", { name: request.title }),
+          claimError || searchError ? { level: "WARNING" } : undefined,
         );
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setActionRequestId(null);
       }
@@ -551,7 +553,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setActionRequestId(null);
       }
@@ -576,7 +578,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setActionRequestId(null);
       }
@@ -604,11 +606,11 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.requestUpdated", { name: request.title }));
+        setGlobalStatus(t("status.requestUpdated", { name: request.title }), { level: "SUCCESS" });
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setActionRequestId(null);
       }
@@ -633,7 +635,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setActionRequestId(null);
       }
@@ -666,6 +668,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         setClaimsByRequestId((prev) => ({ ...prev, [request.id]: [] }));
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       } finally {
         setClaimsLoadingRequestId(null);
@@ -703,6 +706,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       } finally {
         setClaimActionId(null);

@@ -1,81 +1,48 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { classifyStatusToastLevel, resolveStatusToastLevel } from "./status-toast.ts";
+import { resolveStatusToastLevel } from "./status-toast.ts";
 
-test("raw GraphQL validation queue failure classifies as error", () => {
-  assert.equal(
-    classifyStatusToastLevel(
-      "[GraphQL] validation: no download client enabled for library movie_default_library",
-    ),
-    "ERROR",
-  );
-});
-
-test("normalized validation queue failure classifies as error", () => {
-  assert.equal(
-    classifyStatusToastLevel("no download client enabled for library movie_default_library"),
-    "ERROR",
-  );
-});
-
-test("suppressed validation prompts still do not toast", () => {
-  assert.equal(classifyStatusToastLevel("validation: title is required"), null);
-  assert.equal(classifyStatusToastLevel("title is required"), null);
-});
-
-test("rename apply completion with only applied items classifies as success", () => {
-  assert.equal(
-    classifyStatusToastLevel("Rename apply complete: 12 applied, 0 skipped, 0 failed."),
-    "SUCCESS",
-  );
-});
-
-test("rename apply completion with skipped items classifies as warning", () => {
-  assert.equal(
-    classifyStatusToastLevel("Rename apply complete: 12 applied, 1 skipped, 0 failed."),
-    "WARNING",
-  );
-});
-
-test("rename apply completion with failed items classifies as error", () => {
-  assert.equal(
-    classifyStatusToastLevel("Rename apply complete: 12 applied, 1 skipped, 2 failed."),
-    "ERROR",
-  );
-});
-
-// Normalized artifact grab failures, as the queue catch blocks hand them over.
-// None carries a keyword the text classifier recognises, which is why those
-// catch blocks pass an explicit level instead of relying on the wording.
-const ARTIFACT_GRAB_FAILURES = [
+// Failures as the server words them. None says "failed" or "error", which is
+// why the level has to come from the code path that caught them.
+const UNKEYWORDED_FAILURES = [
   "nzb download payload was not valid xml: unexpected end of file",
   "category_mismatch: indexer category 'TV > HD' contradicts the movie subject",
-  "The indexer no longer serves this download (HTTP 410 Gone): the search result has expired, search again for a fresh link.",
+  "this list is already followed",
 ];
 
-test("artifact grab failures carry no keyword the classifier recognises", () => {
-  for (const message of ARTIFACT_GRAB_FAILURES) {
-    assert.equal(classifyStatusToastLevel(message), null, message);
-  }
-});
-
-test("an explicit level wins over the wording", () => {
-  for (const message of ARTIFACT_GRAB_FAILURES) {
+test("a status toasts at the level its caller stated", () => {
+  for (const message of UNKEYWORDED_FAILURES) {
     assert.equal(resolveStatusToastLevel(message, { level: "ERROR" }), "ERROR", message);
   }
-  // Even over wording that would classify differently or suppress the toast.
-  assert.equal(resolveStatusToastLevel("title is required", { level: "ERROR" }), "ERROR");
-  assert.equal(resolveStatusToastLevel("Queued Paperman", { level: "ERROR" }), "ERROR");
+  assert.equal(resolveStatusToastLevel("Queued Lantern Harbor", { level: "SUCCESS" }), "SUCCESS");
+  assert.equal(resolveStatusToastLevel("3 imported, 1 skipped", { level: "WARNING" }), "WARNING");
 });
 
-test("without an explicit level the wording still decides", () => {
-  assert.equal(resolveStatusToastLevel("Queued Paperman"), "SUCCESS");
-  assert.equal(resolveStatusToastLevel("title is required"), null);
-  assert.equal(resolveStatusToastLevel("request failed", {}), "ERROR");
+test("the wording never changes the stated level", () => {
+  // Each sentence reads like a different level than the one its caller gave.
+  assert.equal(resolveStatusToastLevel("Download marked failed.", { level: "SUCCESS" }), "SUCCESS");
+  assert.equal(resolveStatusToastLevel("The tag could not be saved.", { level: "ERROR" }), "ERROR");
+  assert.equal(resolveStatusToastLevel("Queued Lantern Harbor", { level: "ERROR" }), "ERROR");
+  assert.equal(resolveStatusToastLevel("Title is required.", { level: "WARNING" }), "WARNING");
+});
+
+test("a status raised without a level does not toast, whatever it says", () => {
+  for (const message of [
+    ...UNKEYWORDED_FAILURES,
+    "Request failed",
+    "[GraphQL] validation: no download client enabled for library movie_default_library",
+    "Queued Lantern Harbor",
+    "Settings saved.",
+    "Rename apply complete: 12 applied, 1 skipped, 2 failed.",
+    "Searching…",
+  ]) {
+    assert.equal(resolveStatusToastLevel(message), null, message);
+    assert.equal(resolveStatusToastLevel(message, {}), null, message);
+  }
 });
 
 test("an empty status never toasts, whatever level was asked for", () => {
+  assert.equal(resolveStatusToastLevel("", { level: "SUCCESS" }), null);
   assert.equal(resolveStatusToastLevel("   ", { level: "ERROR" }), null);
 });
-

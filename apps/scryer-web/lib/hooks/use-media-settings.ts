@@ -388,7 +388,7 @@ export function useMediaSettings({
         .toPromise()
         .then(({ error }) => {
           if (error) {
-            setGlobalStatus(error.message);
+            setGlobalStatus(error.message, { level: "ERROR" });
           }
         });
     },
@@ -526,7 +526,7 @@ export function useMediaSettings({
         })
         .catch((error: unknown) => {
           restore(previousValue);
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
         })
         .finally(() => {
           generalSaveGuard.end();
@@ -833,6 +833,7 @@ export function useMediaSettings({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
     } finally {
       setMediaSettingsLoading(false);
@@ -872,7 +873,7 @@ export function useMediaSettings({
           [activeQualityScopeId]: previousProfile,
         }));
         setQualityProfileParseError(message);
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "WARNING" });
         return;
       }
 
@@ -916,7 +917,7 @@ export function useMediaSettings({
           qualityProfileData?.saveQualityProfileSettings,
           undefined,
         );
-        setGlobalStatus(t("settings.qualitySettingsSaved"));
+        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
       } catch (error) {
         setCategoryQualityProfileOverrides((previous) => ({
           ...previous,
@@ -924,6 +925,7 @@ export function useMediaSettings({
         }));
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setMediaSettingsSaving(false);
@@ -982,7 +984,7 @@ export function useMediaSettings({
           data?.saveQualityProfileSettings,
           undefined,
         );
-        setGlobalStatus(t("settings.qualitySettingsSaved"));
+        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
       } catch (error) {
         setCategoryPersonaSelections((previous) => ({
           ...previous,
@@ -990,6 +992,7 @@ export function useMediaSettings({
         }));
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
         throw error;
       } finally {
@@ -1038,7 +1041,7 @@ export function useMediaSettings({
         }
 
         applyMediaSettingsFromPayload(undefined, data?.updateMediaSettings);
-        setGlobalStatus(t("settings.qualitySettingsSaved"));
+        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
       } catch (error) {
         setCategoryRequiredAudioLanguages((previous) => ({
           ...previous,
@@ -1046,6 +1049,7 @@ export function useMediaSettings({
         }));
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
         throw error;
       } finally {
@@ -1160,10 +1164,11 @@ export function useMediaSettings({
             : view === "series"
               ? t("settings.seriesSettingsSaved")
               : t("settings.mediaSettingsSaved");
-        setGlobalStatus(successMessage);
+        setGlobalStatus(successMessage, { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setMediaSettingsSaving(false);

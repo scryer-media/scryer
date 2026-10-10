@@ -753,7 +753,7 @@ function SeriesOverviewViewImpl({
         .then(async (payload) => {
           assertNoReplaceConflict(payload, "A download is already in progress for this episode.");
           const queuedMessage = t("status.queuedLatest", { name: title.name });
-          setGlobalStatus(queuedMessage);
+          setGlobalStatus(queuedMessage, { level: "SUCCESS" });
           await onTitleChanged?.();
         })
         .catch((error: unknown) => {
@@ -795,7 +795,7 @@ function SeriesOverviewViewImpl({
           data?.queueExistingTitleDownload,
           "A download is already in progress for this episode.",
         );
-        setGlobalStatus(t("status.queuedLatest", { name: title.name }));
+        setGlobalStatus(t("status.queuedLatest", { name: title.name }), { level: "SUCCESS" });
         await onTitleChanged?.();
       } catch (error: unknown) {
         setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
@@ -945,6 +945,7 @@ function SeriesOverviewViewImpl({
           );
           setGlobalStatus(
             t("status.queuedLatest", { name: link.movie.title }),
+            { level: "SUCCESS" },
           );
           await onTitleChanged?.();
         })
@@ -989,7 +990,7 @@ function SeriesOverviewViewImpl({
           data?.queueExistingTitleDownload,
           "A download is already in progress for this series movie.",
         );
-        setGlobalStatus(t("status.queueSuccess", { name: release.title }));
+        setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
         await onTitleChanged?.();
       } catch (error: unknown) {
         setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });

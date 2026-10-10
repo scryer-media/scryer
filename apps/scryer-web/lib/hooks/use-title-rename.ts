@@ -95,12 +95,13 @@ export function useTitleRename<
           total: nextPlan.total,
           renamable: nextPlan.renamable,
         }),
+        { level: "SUCCESS" },
       );
     } catch (error: unknown) {
       setPlanState((current) =>
         current?.titleKey === requestedKey ? null : current,
       );
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
     } finally {
       setPreviewingKey((current) => (current === requestedKey ? null : current));
     }
@@ -150,7 +151,7 @@ export function useTitleRename<
         current?.titleKey === requestedKey ? null : current,
       );
     } catch (error: unknown) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
     } finally {
       setApplyingKey((current) => (current === requestedKey ? null : current));
     }

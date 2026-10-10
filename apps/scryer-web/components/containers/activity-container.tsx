@@ -249,7 +249,7 @@ export const ActivityContainer = memo(function ActivityContainer({
           })),
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -376,7 +376,7 @@ export const ActivityContainer = memo(function ActivityContainer({
       });
       if (result.error) {
         const message = result.error.message ?? t("queue.assignTitleFailed");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus(t("queue.assignTitleQueued"));
@@ -396,7 +396,7 @@ export const ActivityContainer = memo(function ActivityContainer({
       });
       if (result.error) {
         const message = result.error.message ?? t("queue.ignoreFailed");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus(t("queue.ignoreSuccess"));
@@ -417,11 +417,12 @@ export const ActivityContainer = memo(function ActivityContainer({
       });
       if (result.error) {
         const message = result.error.message ?? t("queue.markFailedFailed");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus(
         skipReacquire ? t("queue.markFailedOnlySuccess") : t("queue.markFailedSearchSuccess"),
+        { level: "SUCCESS" },
       );
       await refreshVisibleTab();
     },
@@ -456,9 +457,9 @@ export const ActivityContainer = memo(function ActivityContainer({
       const failed = targets.length - succeeded;
 
       if (succeeded === 0) {
-        setGlobalStatus(t("queue.bulkIgnoreFailed"));
+        setGlobalStatus(t("queue.bulkIgnoreFailed"), { level: "ERROR" });
       } else if (failed > 0) {
-        setGlobalStatus(t("queue.bulkIgnorePartial", { count: succeeded, failed }));
+        setGlobalStatus(t("queue.bulkIgnorePartial", { count: succeeded, failed }), { level: "ERROR" });
       } else {
         setGlobalStatus(t("queue.bulkIgnoreSuccess", { count: succeeded }));
       }
@@ -486,7 +487,7 @@ export const ActivityContainer = memo(function ActivityContainer({
           return next;
         });
         const message = result.error.message ?? t("queue.pauseFailed");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus(t("queue.pauseSuccess"));
@@ -519,7 +520,7 @@ export const ActivityContainer = memo(function ActivityContainer({
           return next;
         });
         const message = result.error.message ?? t("queue.resumeFailed");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus(t("queue.resumeSuccess"));
@@ -540,7 +541,7 @@ export const ActivityContainer = memo(function ActivityContainer({
       });
       if (result.error) {
         const message = result.error.message ?? t("queue.deleteFailed");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setOptimisticallyRemovedKeys((current) => ({
@@ -550,7 +551,7 @@ export const ActivityContainer = memo(function ActivityContainer({
       if (matchesImportStatuses(item, IMPORT_ATTENTION_STATUSES)) {
         decrementImportBadges();
       }
-      setGlobalStatus(t("queue.deleteQueued"));
+      setGlobalStatus(t("queue.deleteQueued"), { level: "SUCCESS" });
       void refreshQueue();
       void refreshImport();
     },
@@ -611,11 +612,11 @@ export const ActivityContainer = memo(function ActivityContainer({
       }
 
       if (succeeded === 0) {
-        setGlobalStatus(t("queue.bulkDeleteFailed"));
+        setGlobalStatus(t("queue.bulkDeleteFailed"), { level: "ERROR" });
       } else if (failed > 0) {
-        setGlobalStatus(t("queue.bulkDeletePartial", { count: succeeded, failed }));
+        setGlobalStatus(t("queue.bulkDeletePartial", { count: succeeded, failed }), { level: "ERROR" });
       } else {
-        setGlobalStatus(t("queue.bulkDeleteQueued", { count: succeeded }));
+        setGlobalStatus(t("queue.bulkDeleteQueued", { count: succeeded }), { level: "SUCCESS" });
       }
 
       void refreshQueue();
@@ -636,7 +637,7 @@ export const ActivityContainer = memo(function ActivityContainer({
       const result = await executeCancelActiveImport({ streamId: stream.id });
       if (result.error) {
         const message = result.error.message ?? "Unable to cancel import.";
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus("Import cancellation requested.");

@@ -350,7 +350,7 @@ function ListsContainerBody({ canManageLists, tabCounts, onTabCountsChanged }: L
             saved,
           ]);
         }
-        setGlobalStatus(t("lists.providerSettings.saved"));
+        setGlobalStatus(t("lists.providerSettings.saved"), { level: "SUCCESS" });
         return true;
       } catch (error) {
         setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
@@ -548,7 +548,7 @@ function ListsContainerBody({ canManageLists, tabCounts, onTabCountsChanged }: L
           .mutation(updateListSubscriptionMutation, { id, input: draftToUpdateInput(draft) })
           .toPromise();
         if (result.error) throw result.error;
-        setGlobalStatus(t("lists.status.updated", { name: draft.name.trim() }));
+        setGlobalStatus(t("lists.status.updated", { name: draft.name.trim() }), { level: "SUCCESS" });
         await refreshAfterChange();
         if (detail?.id === id) void loadDetail(id, detail.membershipOffset);
         return true;

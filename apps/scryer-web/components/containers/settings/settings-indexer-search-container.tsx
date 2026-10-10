@@ -220,6 +220,7 @@ export function SettingsIndexerSearchContainer() {
         }
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToLoad"),
+          { level: "ERROR" },
         );
       }
     })();
@@ -316,6 +317,7 @@ export function SettingsIndexerSearchContainer() {
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       } finally {
         if (searchAbortRef.current === controller) {
@@ -462,6 +464,7 @@ export function SettingsIndexerSearchContainer() {
         } catch (error) {
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.failedToLoad"),
+            { level: "ERROR" },
           );
         } finally {
           setDownloading(false);

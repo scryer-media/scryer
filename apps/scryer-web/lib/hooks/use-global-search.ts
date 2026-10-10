@@ -1059,7 +1059,7 @@ export function useGlobalSearch({
         setGlobalStatus(matches.length ? t("status.foundTvdb", { count: matches.length }) : t("status.nothingFound"));
         return matches;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
         setTvdbCandidates([]);
         return [];
       }
@@ -1246,12 +1246,12 @@ export function useGlobalSearch({
         !isAbortError(catalogResult.reason)
       ) {
         const msg = catalogResult.reason instanceof Error ? catalogResult.reason.message : t("status.apiError");
-        setGlobalStatus(msg);
+        setGlobalStatus(msg, { level: "ERROR" });
       }
       if (metadataResult.status === "rejected" && !isAbortError(metadataResult.reason)) {
         if (options?.surfaceErrors !== false) {
           const msg = metadataResult.reason instanceof Error ? metadataResult.reason.message : t("status.apiError");
-          setGlobalStatus(msg);
+          setGlobalStatus(msg, { level: "ERROR" });
         }
         setMetadataSearchResults((prev) => (isMetadataEmpty(prev) ? prev : emptyMetadataSearchResults));
         setCatalogTitlesByTvdbId((previous) =>
@@ -1326,7 +1326,7 @@ export function useGlobalSearch({
     } catch (error) {
       if (requestId !== autocompleteRequestId.current || isAbortError(error)) return;
       const msg = error instanceof Error ? error.message : t("status.apiError");
-      setGlobalStatus(msg);
+      setGlobalStatus(msg, { level: "ERROR" });
       setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
     } finally {
       if (requestId === autocompleteRequestId.current) {
@@ -1587,7 +1587,7 @@ export function useGlobalSearch({
         void runMetadataAutocomplete(globalSearch.trim(), { surfaceErrors: false });
         return titleId;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"), { level: "ERROR" });
         return null;
       } finally {
         pendingCatalogAddKeysRef.current.delete(requestKey);
@@ -1631,7 +1631,7 @@ export function useGlobalSearch({
         void runMetadataAutocomplete(globalSearch.trim(), { surfaceErrors: false });
         return true;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"), { level: "ERROR" });
         return false;
       } finally {
         pendingRequestKeysRef.current.delete(requestKey);

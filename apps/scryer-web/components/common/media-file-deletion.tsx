@@ -136,14 +136,15 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
                 : (terminalRun.errorText ??
                     terminalRun.summaryText ??
                     t("status.apiError")),
+              { level: terminalRun.status === "COMPLETED" ? "SUCCESS" : "ERROR" },
             );
           });
       });
-      setGlobalStatus(t("status.mediaFileDeleteQueued"));
+      setGlobalStatus(t("status.mediaFileDeleteQueued"), { level: "SUCCESS" });
       setTarget(null);
       setTypedConfirmation("");
     } catch (error: unknown) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")), { level: "ERROR" });
     } finally {
       setLoading(false);
     }

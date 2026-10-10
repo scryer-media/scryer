@@ -1,10 +1,11 @@
 import type { Translate } from "@/components/root/types";
+import type { SetGlobalStatus } from "@/lib/context/global-status-context";
 import { metadataFacetGraphqlValue } from "./facets/registry.ts";
 
 type FixMatchCompletionArgs = {
   warnings: string[];
   refreshTitleDetail: () => Promise<void>;
-  setGlobalStatus: (message: string) => void;
+  setGlobalStatus: SetGlobalStatus;
   t: Translate;
   titleName?: string | null;
 };
@@ -62,12 +63,12 @@ export async function handleFixTitleMatchComplete({
   try {
     await refreshTitleDetail();
   } catch (error) {
-    setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+    setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
     return;
   }
 
   if (warnings.length > 0) {
-    setGlobalStatus(warnings.join(" "));
+    setGlobalStatus(warnings.join(" "), { level: "WARNING" });
     return;
   }
 
@@ -75,5 +76,6 @@ export async function handleFixTitleMatchComplete({
     t("status.titleMatchUpdated", {
       name: titleName?.trim() || t("title.fixMatchUnnamed"),
     }),
+    { level: "SUCCESS" },
   );
 }

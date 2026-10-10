@@ -166,7 +166,7 @@ export function useManualImportLauncher({
         if (error) {
           throw error;
         }
-        setGlobalStatus(t("queue.manualImportQueued"));
+        setGlobalStatus(t("queue.manualImportQueued"), { level: "SUCCESS" });
         notifyImportQueued(item);
       } catch (error: unknown) {
         setGlobalStatus(

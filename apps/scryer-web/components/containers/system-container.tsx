@@ -76,7 +76,7 @@ export const SystemContainer = memo(function SystemContainer({
       setSystemHealth(data?.systemHealth ?? null);
       setGlobalStatus(data?.systemHealth?.serviceReady ? t("system.loaded") : t("system.notReady"));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     } finally {
       setSystemLoading(false);
     }

@@ -113,11 +113,9 @@ import { useTitleDownloadFeedback } from "@/lib/hooks/use-title-download-feedbac
 import { useTitleRefreshAndScan } from "@/lib/hooks/use-title-refresh-and-scan";
 import { useTitleReleaseBlocklistClear } from "@/lib/hooks/use-title-release-blocklist-clear";
 import { useTitleRename } from "@/lib/hooks/use-title-rename";
-import {
-  reportAutomaticSearchFailure,
-  useTitleSearchAction,
-} from "@/lib/hooks/use-title-search-action";
+import { useTitleSearchAction } from "@/lib/hooks/use-title-search-action";
 import { useTrackedJobRuns } from "@/lib/hooks/use-tracked-job-runs";
+import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
 
 export type TitleDetail = {
   id: string;
@@ -631,6 +629,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           );
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.apiError"),
+            { level: "ERROR" },
           );
         }
       } finally {
@@ -735,11 +734,12 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         if (failed?.status === "rejected") {
           setGlobalStatus(
             failed.reason instanceof Error ? failed.reason.message : t("status.apiError"),
+            { level: "ERROR" },
           );
         }
       } catch (error: unknown) {
         if (currentTitleIdRef.current === requestedTitleId) {
-          setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+          setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
         }
       } finally {
         for (const collectionId of collectionIdsToRefresh) {
@@ -1050,6 +1050,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         if (currentTitleIdRef.current === requestedTitleId) {
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.apiError"),
+            { level: "ERROR" },
           );
         }
       } finally {
@@ -1153,6 +1154,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         if (currentTitleIdRef.current === requestedTitleId) {
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.apiError"),
+            { level: "ERROR" },
           );
         }
       } finally {
@@ -1283,6 +1285,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           setTitleLookupFailed(true);
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.apiError"),
+            { level: "ERROR" },
           );
         }
       })
@@ -1417,7 +1420,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         );
         await refreshTitleDetail();
       } catch (error: unknown) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setMonitoredUpdating(false);
       }
@@ -1511,7 +1514,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
               externalIds: title.externalIds,
             });
             if (!exclusion) {
-              setGlobalStatus(t("lists.exclusions.deleteNoIds", { name: title.name }));
+              setGlobalStatus(t("lists.exclusions.deleteNoIds", { name: title.name }), { level: "WARNING" });
             } else {
               const exclusionFailed = await client
                 .mutation(addListExclusionMutation, { input: exclusion })
@@ -1521,6 +1524,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
               if (exclusionFailed) {
                 setGlobalStatus(
                   t("lists.exclusions.deleteFailed", { name: title.name }),
+                  { level: "ERROR" },
                 );
               }
             }
@@ -1535,7 +1539,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       }
       onTitleNotFound?.();
     } catch (error: unknown) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setDeleteLoading(false);
     }
@@ -1676,6 +1680,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
                 : (terminalRun.errorText ??
                     terminalRun.summaryText ??
                     t("status.apiError")),
+              { level: terminalRun.status === "COMPLETED" ? "SUCCESS" : "ERROR" },
             );
           },
         );
@@ -1683,12 +1688,13 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
       setGlobalStatus(
         t("status.episodeFilesDeleteQueued", { count: acceptedFileIds.length }),
+        { level: "SUCCESS" },
       );
       setEpisodeSelectionResetToken((current) => current + 1);
       setEpisodeFilesToDelete(null);
       setEpisodeFilesDeleteTypedConfirmation("");
     } catch (error: unknown) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")), { level: "ERROR" });
     } finally {
       setEpisodeFilesDeleteLoading(false);
     }
@@ -1718,10 +1724,10 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           },
         }).toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.primaryMovieFileUpdated"));
+        setGlobalStatus(t("status.primaryMovieFileUpdated"), { level: "SUCCESS" });
         await refreshTitleDetail();
       } catch (error: unknown) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")), { level: "ERROR" });
       } finally {
         setPrimaryMovieFileUpdatingId(null);
       }
@@ -1774,7 +1780,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           confirmReplaceConflict,
         );
         assertNoReplaceConflict(payload, "A download is already in progress for this episode.");
-        setGlobalStatus(t("status.queuedLatest", { name: title.name }));
+        setGlobalStatus(t("status.queuedLatest", { name: title.name }), { level: "SUCCESS" });
         await refreshTitleDetail();
       } catch (error: unknown) {
         reportAutomaticSearchFailure(setGlobalStatus, t, error, title.name);
@@ -1804,7 +1810,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           confirmReplaceConflict,
         );
         assertNoReplaceConflict(payload, "A download is already in progress for this series movie.");
-        setGlobalStatus(t("status.queuedLatest", { name: link.movie.title }));
+        setGlobalStatus(t("status.queuedLatest", { name: link.movie.title }), { level: "SUCCESS" });
         await refreshTitleDetail();
       } catch (error: unknown) {
         reportAutomaticSearchFailure(setGlobalStatus, t, error, link.movie.title);
@@ -1848,7 +1854,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       try {
         await startAutomaticSearch(title.id, seasonNum);
       } catch (error: unknown) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
       } finally {
         setSeasonSearchLoadingByCollection((prev) => ({ ...prev, [collection.id]: false }));
       }
@@ -1969,7 +1975,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           confirmReplaceConflict,
         );
         assertNoReplaceConflict(payload, "A download is already in progress for this collection.");
-        setGlobalStatus(t("status.queuedLatest", { name: title.name }));
+        setGlobalStatus(t("status.queuedLatest", { name: title.name }), { level: "SUCCESS" });
         await refreshTitleDetail();
       } catch (error: unknown) {
         setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });

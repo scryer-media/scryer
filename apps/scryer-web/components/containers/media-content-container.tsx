@@ -150,7 +150,7 @@ import { BulkRenamePreviewSummary } from "@/components/common/bulk-rename-previe
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { metadataResultExternalIds } from "@/lib/utils/metadata-result-external-ids";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
-import { reportAutomaticSearchFailure } from "@/lib/hooks/use-title-search-action";
+import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
@@ -1966,6 +1966,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setRulesSaving(false);
@@ -1977,7 +1978,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const reportSummaryFailure = React.useRef((_error: unknown) => {});
   React.useEffect(() => {
     reportSummaryFailure.current = (error: unknown) =>
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
   }, [setGlobalStatus, t]);
   const summaryLoaders = React.useMemo(
     () => ({
@@ -2259,7 +2260,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
       const facet = discoveryItemFacet(item);
       if (!facet) {
-        setGlobalStatus(t("status.apiError"));
+        setGlobalStatus(t("status.apiError"), { level: "ERROR" });
         return;
       }
       const canManageFacet = (librariesByFacet[facet] ?? []).length > 0;
@@ -2322,6 +2323,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       } catch (caught) {
         setGlobalStatus(
           caught instanceof Error ? caught.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       }
     },
@@ -3118,11 +3120,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         if (error) {
           throw error;
         }
-        setGlobalStatus(t("status.primaryMovieFileUpdated"));
+        setGlobalStatus(t("status.primaryMovieFileUpdated"), { level: "SUCCESS" });
         await refreshMovieSidePanelOverview(title.id);
       } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.apiError")),
+          { level: "ERROR" },
         );
       } finally {
         setSelectedOverviewPrimaryMovieFileUpdatingId(null);
@@ -3530,6 +3533,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               : "status.catalogAddSuccess",
             { name: data.addTitle.title.name },
           ),
+          { level: "SUCCESS" },
         );
         if (shouldLoadCatalogTitles && data?.addTitle?.title) {
           mergeTitleContextTitles([data.addTitle.title as TitleRecord]);
@@ -3549,6 +3553,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.queueFailed"),
+          { level: "ERROR" },
         );
       }
     },
@@ -3604,6 +3609,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         }
         setGlobalStatus(
           error instanceof Error ? error.message : t("nzb.searchFailed"),
+          { level: "ERROR" },
         );
         return [];
       } finally {
@@ -3653,7 +3659,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           "A download is already in progress for this title.",
         );
         const queuedMessage = t("status.queuedLatest", { name: title.name });
-        setGlobalStatus(queuedMessage);
+        setGlobalStatus(queuedMessage, { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.queueFailed")),
@@ -3690,7 +3696,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           data?.queueExistingTitleDownload,
           "A download is already in progress for this title.",
         );
-        setGlobalStatus(t("status.queuedLatest", { name: title.name }));
+        setGlobalStatus(t("status.queuedLatest", { name: title.name }), { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(
           userFacingGraphQlErrorMessage(error, t("status.queueFailed")),
@@ -3734,6 +3740,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
         );
       } finally {
         setTitleMonitoringLoadingById((previous) => {
@@ -3893,6 +3900,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
                 : t("status.bulkUnmonitorFailed"),
               detail,
             ),
+            { level: "ERROR" },
           );
           return;
         }
@@ -3911,6 +3919,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
                   }),
               detail,
             ),
+            { level: "ERROR" },
           );
           return;
         }
@@ -3928,6 +3937,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               : t("status.bulkUnmonitorFailed"),
             batchFailureDetail(error),
           ),
+          { level: "ERROR" },
         );
       } finally {
         setBulkActionBusy(false);
@@ -3972,6 +3982,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
                 t("status.bulkTitleUpdateFailed"),
                 batchFailureDetail(tagResult.error),
               ),
+              { level: "ERROR" },
             );
             return;
           }
@@ -3983,6 +3994,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           setBulkEditDialogOpen(false);
           setGlobalStatus(
             t("status.bulkTitleUpdateSuccess", { count: targets.length }),
+            { level: "SUCCESS" },
           );
           return;
         }
@@ -4026,6 +4038,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         if (succeededIds.length === 0) {
           setGlobalStatus(
             withFailureDetail(t("status.bulkTitleUpdateFailed"), detail),
+            { level: "ERROR" },
           );
           return;
         }
@@ -4040,12 +4053,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               }),
               detail,
             ),
+            { level: "ERROR" },
           );
           return;
         }
 
         setGlobalStatus(
           t("status.bulkTitleUpdateSuccess", { count: succeededIds.length }),
+          { level: "SUCCESS" },
         );
       } catch (error) {
         setGlobalStatus(
@@ -4053,6 +4068,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
             t("status.bulkTitleUpdateFailed"),
             batchFailureDetail(error),
           ),
+          { level: "ERROR" },
         );
       } finally {
         setBulkActionBusy(false);
@@ -4266,13 +4282,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       ) {
         handleCloseOverview();
       }
-      setGlobalStatus(`Queued deletion for ${titleToDelete.name}.`);
+      setGlobalStatus(`Queued deletion for ${titleToDelete.name}.`, { level: "SUCCESS" });
 
       // A separate request made only after the delete was accepted, so it can
       // never change what the delete removes.
       if (excludeFromLists && acceptedIds.includes(titleId)) {
         if (!exclusion) {
-          setGlobalStatus(t("lists.exclusions.deleteNoIds", { name: titleToDelete.name }));
+          setGlobalStatus(t("lists.exclusions.deleteNoIds", { name: titleToDelete.name }), { level: "WARNING" });
         } else {
           const exclusionFailed = await client
             .mutation(addListExclusionMutation, { input: exclusion })
@@ -4280,13 +4296,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
             .then((exclusionResult) => Boolean(exclusionResult.error))
             .catch(() => true);
           if (exclusionFailed) {
-            setGlobalStatus(t("lists.exclusions.deleteFailed", { name: titleToDelete.name }));
+            setGlobalStatus(t("lists.exclusions.deleteFailed", { name: titleToDelete.name }), { level: "ERROR" });
           }
         }
       }
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToDelete"),
+        { level: "ERROR" },
       );
     } finally {
       setDeleteTitleLoadingById((previous) => {
@@ -4355,6 +4372,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
       return null;
     } finally {
@@ -4398,6 +4416,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
+        { level: "ERROR" },
       );
       return null;
     } finally {
@@ -4490,6 +4509,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         }
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToLoad"),
+          { level: "ERROR" },
         );
       })
       .finally(() => {
@@ -4535,7 +4555,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         await refreshRootValidationLibraries();
         if (library) {
           setSelectedLibraryIds([library.id]);
-          setGlobalStatus(t("settings.libraryCreated"));
+          setGlobalStatus(t("settings.libraryCreated"), { level: "SUCCESS" });
         }
         return library;
       } catch (error) {
@@ -4543,6 +4563,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           error instanceof Error
             ? error.message
             : t("settings.librarySaveFailed"),
+          { level: "ERROR" },
         );
         return null;
       } finally {
@@ -4586,7 +4607,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         await refreshLibraries();
         await refreshRootValidationLibraries();
         if (library) {
-          setGlobalStatus(t("settings.librarySaved"));
+          setGlobalStatus(t("settings.librarySaved"), { level: "SUCCESS" });
         }
         return library;
       } catch (error) {
@@ -4594,6 +4615,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           error instanceof Error
             ? error.message
             : t("settings.librarySaveFailed"),
+          { level: "ERROR" },
         );
         return null;
       } finally {
@@ -4632,13 +4654,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         );
         await refreshLibraries();
         await refreshRootValidationLibraries();
-        setGlobalStatus(t("settings.libraryDeleted"));
+        setGlobalStatus(t("settings.libraryDeleted"), { level: "SUCCESS" });
         return true;
       } catch (error) {
         setGlobalStatus(
           error instanceof Error
             ? error.message
             : t("settings.libraryDeleteFailed"),
+          { level: "ERROR" },
         );
         return false;
       } finally {
@@ -4744,6 +4767,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
             error instanceof Error
               ? error.message
               : t("settings.libraryScanFailed"),
+            { level: "ERROR" },
           );
           return;
         }
@@ -4751,6 +4775,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           error instanceof Error
             ? error.message
             : t("settings.libraryScanFailed"),
+          { level: "ERROR" },
         );
       } finally {
         setLibraryScanUiStateByLibraryId((current) => ({
@@ -5039,6 +5064,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           }
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.failedToLoad"),
+            { level: "ERROR" },
           );
         })
         .finally(() => {

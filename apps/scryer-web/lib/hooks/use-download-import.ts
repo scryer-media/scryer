@@ -123,7 +123,7 @@ export function useDownloadImport({
         const message = error instanceof QueryTimeoutError ? t("activity.refreshTimedOut") :
           error instanceof Error ? error.message : "Failed to load import activity.";
         setImportError(message);
-        setGlobalStatus(message);
+        setGlobalStatus(message, error instanceof QueryTimeoutError ? undefined : { level: "ERROR" });
       } finally {
         if (current()) {
           activeRequestRef.current = null;

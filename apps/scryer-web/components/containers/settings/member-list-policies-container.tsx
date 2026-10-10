@@ -55,7 +55,7 @@ export function MemberListPoliciesContainer() {
         if (previous) {
           setPolicies((current) => rollBackMemberListPolicy(current, previous, policy));
         }
-        setGlobalStatus(userFacingGraphQlErrorMessage(saveError, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(saveError, t("status.failedToUpdate")), { level: "ERROR" });
       } finally {
         setSavingUserId(null);
       }

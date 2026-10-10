@@ -457,7 +457,7 @@ export function SettingsSubtitlesContainer({
     void refreshProviderTypes().catch((error: unknown) => {
       const message =
         error instanceof Error ? error.message : t("status.failedToLoad");
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
     });
   }, [providerCatalogVersion, refreshProviderTypes, setGlobalStatus, t]);
 
@@ -531,7 +531,7 @@ export function SettingsSubtitlesContainer({
                       error: detail,
                     });
                     setSyncPluginInstallError(message);
-                    setGlobalStatus(message);
+                    setGlobalStatus(message, { level: "ERROR" });
                   }
                 } catch (error: unknown) {
                   const detail = error instanceof Error ? error.message : String(error);
@@ -540,7 +540,7 @@ export function SettingsSubtitlesContainer({
                     error: detail,
                   });
                   setSyncPluginInstallError(message);
-                  setGlobalStatus(message);
+                  setGlobalStatus(message, { level: "ERROR" });
                 } finally {
                   setInstallingSyncPlugin(false);
                   setSyncPluginProgress(null);
@@ -566,7 +566,7 @@ export function SettingsSubtitlesContainer({
               error: detail,
             });
             setSyncPluginInstallError(message);
-            setGlobalStatus(message);
+            setGlobalStatus(message, { level: "ERROR" });
           },
           complete: () => {
             syncPluginProgressSubscriptionRef.current = null;
@@ -636,7 +636,7 @@ export function SettingsSubtitlesContainer({
         error: detail,
       });
       setSyncPluginInstallError(message);
-      setGlobalStatus(message);
+      setGlobalStatus(message, { level: "ERROR" });
       setInstallingSyncPlugin(false);
     }
   }, [
@@ -683,13 +683,13 @@ export function SettingsSubtitlesContainer({
       .then(({ error }) => {
         if (error) {
           const message = error.message || t("status.failedToUpdate");
-          setGlobalStatus(message);
+          setGlobalStatus(message, { level: "ERROR" });
         }
       })
       .catch((error: unknown) => {
         const message =
           error instanceof Error ? error.message : t("status.failedToUpdate");
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
       })
       .finally(() => setSaving(false));
   }, [client, setGlobalStatus, settings, t]);
@@ -795,7 +795,7 @@ export function SettingsSubtitlesContainer({
           if (error) {
             throw error;
           }
-          setGlobalStatus(t("settings.subtitleProviderUpdated"));
+          setGlobalStatus(t("settings.subtitleProviderUpdated"), { level: "SUCCESS" });
         } else {
           const { error } = await client
             .mutation(createSubtitleProviderConfigMutation, {
@@ -811,7 +811,7 @@ export function SettingsSubtitlesContainer({
           if (error) {
             throw error;
           }
-          setGlobalStatus(t("settings.subtitleProviderCreated"));
+          setGlobalStatus(t("settings.subtitleProviderCreated"), { level: "SUCCESS" });
         }
         resetProviderDraft();
         setIsProviderEditorOpen(false);
@@ -822,6 +822,7 @@ export function SettingsSubtitlesContainer({
         if (!isReportedConnectionFeedbackError(error)) {
           setGlobalStatus(
             error instanceof Error ? error.message : t("status.failedToUpdate"),
+            { level: "ERROR" },
           );
         }
       } finally {
@@ -970,11 +971,12 @@ export function SettingsSubtitlesContainer({
         if (error) {
           throw error;
         }
-        setGlobalStatus(t("settings.subtitleProviderUpdated"));
+        setGlobalStatus(t("settings.subtitleProviderUpdated"), { level: "SUCCESS" });
         await refreshProviderConfigs();
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingProviderId(null);
@@ -1009,6 +1011,7 @@ export function SettingsSubtitlesContainer({
         t("settings.subtitleProviderDeleted", {
           name: pendingDeleteProvider.name,
         }),
+        { level: "SUCCESS" },
       );
       await refreshProviderConfigs();
       if (editingProviderId === pendingDeleteProvider.id) {
@@ -1020,6 +1023,7 @@ export function SettingsSubtitlesContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToDelete"),
+        { level: "ERROR" },
       );
     } finally {
       setMutatingProviderId(null);

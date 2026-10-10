@@ -1,6 +1,5 @@
+import type { SetGlobalStatus } from "@/lib/context/global-status-context";
 import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
-
-type SetGlobalStatus = (status: string) => void;
 
 export class ReportedConnectionFeedbackError extends Error {
   constructor(message: string) {
@@ -33,7 +32,7 @@ export async function runConnectionFeedback({
   try {
     const nextSuccessMessage = (await run()) ?? successMessage;
     if (announceSuccess) {
-      setGlobalStatus(nextSuccessMessage);
+      setGlobalStatus(nextSuccessMessage, { level: "SUCCESS" });
     }
   } catch (error) {
     // urql prefixes `CombinedError.message` with "[GraphQL] " and the server
@@ -41,7 +40,7 @@ export async function runConnectionFeedback({
     // as machinery. The shared helper strips both and keeps the reference id on
     // errors the server really did mask.
     const message = userFacingGraphQlErrorMessage(error, failureFallbackMessage);
-    setGlobalStatus(message);
+    setGlobalStatus(message, { level: "ERROR" });
     throw new ReportedConnectionFeedbackError(message);
   }
 }

@@ -60,7 +60,10 @@ export function useDownloadPasswordRetry() {
             const result = await retryImport({ input: { importId: item.passwordRetryImportId, password } });
             const imported = result.data?.retryImport;
             outcome = !result.error && importRetrySucceeded(imported) ? "accepted" : "failed";
-            setStatus(t(outcome === "accepted" ? "importHistory.retrySuccess" : "queue.passwordRetryFailed"));
+            setStatus(
+              t(outcome === "accepted" ? "importHistory.retrySuccess" : "queue.passwordRetryFailed"),
+              outcome === "accepted" ? undefined : { level: "ERROR" },
+            );
             return;
           }
           const result = await execute({ input: {
@@ -72,9 +75,10 @@ export function useDownloadPasswordRetry() {
             status === "REFUSED" ? "refused" : "uncertain";
           setStatus(result.error ? t("queue.passwordRetryFailed") :
             status === "ACCEPTED" ? t("queue.passwordRetryAccepted") :
-            status === "REFUSED" ? t("queue.passwordRetryRefused") : t("queue.passwordRetryUncertain"));
+            status === "REFUSED" ? t("queue.passwordRetryRefused") : t("queue.passwordRetryUncertain"),
+            { level: outcome === "accepted" ? "SUCCESS" : outcome === "uncertain" ? "WARNING" : "ERROR" });
         } catch {
-          setStatus(t("queue.passwordRetryUncertain"));
+          setStatus(t("queue.passwordRetryUncertain"), { level: "WARNING" });
         } finally { finish(outcome); }
       }} />,
   };

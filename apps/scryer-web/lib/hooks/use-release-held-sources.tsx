@@ -122,9 +122,9 @@ export function useReleaseHeldSources(onReleased: (item: DownloadQueueItem) => P
           if (released) {
             const preservedSomething = !released.workspaceRemoved && (released.preservedWorkspaceReasons.length > 0 || released.workspaceLookupIncomplete);
             const warn = WARNING_SETTLEMENTS.has(released.settlement) || preservedSomething;
-            setStatus(heldSourcesReleaseMessage(t, released), warn ? { level: "WARNING" } : undefined);
+            setStatus(heldSourcesReleaseMessage(t, released), { level: warn ? "WARNING" : "SUCCESS" });
           } else {
-            setStatus(t("queue.releaseHeldSourcesSuccess"));
+            setStatus(t("queue.releaseHeldSourcesSuccess"), { level: "SUCCESS" });
           }
           setTarget(null);
           await onReleased(target);

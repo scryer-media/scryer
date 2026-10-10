@@ -288,6 +288,7 @@ export function useBulkDelete({
       closeBulkDeleteDialog();
       setGlobalStatus(
         `Queued deletion for ${acceptedIds.length} title${acceptedIds.length === 1 ? "" : "s"}.`,
+        { level: "SUCCESS" },
       );
 
       // Separate requests made only after the delete was accepted, so they can
@@ -309,10 +310,10 @@ export function useBulkDelete({
           if (exclusionFailed) failed += 1;
         }
         if (withoutIds > 0) {
-          setGlobalStatus(t("lists.exclusions.bulkDeleteNoIds", { count: withoutIds }));
+          setGlobalStatus(t("lists.exclusions.bulkDeleteNoIds", { count: withoutIds }), { level: "WARNING" });
         }
         if (failed > 0) {
-          setGlobalStatus(t("lists.exclusions.bulkDeleteFailed", { count: failed }));
+          setGlobalStatus(t("lists.exclusions.bulkDeleteFailed", { count: failed }), { level: "ERROR" });
         }
       }
     } catch (error) {
@@ -321,6 +322,7 @@ export function useBulkDelete({
           t("status.bulkTitleDeleteFailed"),
           batchFailureDetail(error),
         ),
+        { level: "ERROR" },
       );
     } finally {
       setBulkActionBusy(false);

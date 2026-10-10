@@ -191,7 +191,7 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
       }
       const firstError = jobsError ?? recentError ?? latestError;
       if (firstError) {
-        setGlobalStatus(firstError.message);
+        setGlobalStatus(firstError.message, { level: "ERROR" });
         return;
       }
 
@@ -309,7 +309,7 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
           return;
         }
         if (error) {
-          setGlobalStatus(error.message);
+          setGlobalStatus(error.message, { level: "ERROR" });
           return;
         }
         setJobHistoryByKey((current) => ({
@@ -411,7 +411,7 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
           }));
         }
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("jobs.failedToTrigger"));
+        setGlobalStatus(error instanceof Error ? error.message : t("jobs.failedToTrigger"), { level: "ERROR" });
       } finally {
         setTriggeringKeys((current) => ({ ...current, [instanceKey]: false }));
       }

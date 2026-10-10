@@ -65,7 +65,7 @@ function useScriptInterpreterSettings() {
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) {
-          setGlobalStatus(error.message);
+          setGlobalStatus(error.message, { level: "ERROR" });
           return;
         }
         const loaded = interpreterDraftFrom(data?.scriptInterpreterSettings);
@@ -93,9 +93,9 @@ function useScriptInterpreterSettings() {
           : interpreterDraftFrom(interpreterInput(draft));
       setDraft(saved);
       setBaseline(saved);
-      setGlobalStatus(t("settings.scriptInterpreters.saved"));
+      setGlobalStatus(t("settings.scriptInterpreters.saved"), { level: "SUCCESS" });
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setIsSaving(false);
     }

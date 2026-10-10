@@ -155,11 +155,12 @@ export function SettingsOverviewContainer({
           .toPromise();
         if (error) throw error;
         setVerificationDepth(data?.updateVerificationSettings.depth ?? depth);
-        setGlobalStatus(t("settings.verificationDepthSaved"));
+        setGlobalStatus(t("settings.verificationDepthSaved"), { level: "SUCCESS" });
       } catch (error) {
         setVerificationDepth(previous);
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setVerificationSaving(false);
@@ -187,13 +188,14 @@ export function SettingsOverviewContainer({
       ).toPromise();
 
       if (error) {
-        setGlobalStatus(error.message);
+        setGlobalStatus(error.message, { level: "ERROR" });
       } else {
         setGlobalStatus(t("settings.metadataRehydrationStarted"));
       }
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToUpdate"),
+        { level: "ERROR" },
       );
     } finally {
       setRehydrating(false);
@@ -229,10 +231,11 @@ export function SettingsOverviewContainer({
           .toPromise();
         if (error) throw error;
         setUiSettings(data?.setMyUiSettings ?? nextSettings);
-        setGlobalStatus(t("settings.uiSaved"));
+        setGlobalStatus(t("settings.uiSaved"), { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setUiSettingsSaving(false);
@@ -272,7 +275,7 @@ export function SettingsOverviewContainer({
         ...DEFAULT_GENERAL_SETTINGS,
         ...data?.updateGeneralSettings,
       });
-      setGlobalStatus(t("settings.generalSaved"));
+      setGlobalStatus(t("settings.generalSaved"), { level: "SUCCESS" });
       // The instance-wide switches are read app-wide through their own
       // actor-only query, so a save has to push the new value into the
       // provider for the gated surfaces to react without a reload.
@@ -286,6 +289,7 @@ export function SettingsOverviewContainer({
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToUpdate"),
+        { level: "ERROR" },
       );
     } finally {
       setGeneralSaving(false);
@@ -322,10 +326,11 @@ export function SettingsOverviewContainer({
     try {
       const { error } = await client.mutation(clearTitleImageCacheMutation, {}).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("settings.imageCacheClearQueued"));
+      setGlobalStatus(t("settings.imageCacheClearQueued"), { level: "SUCCESS" });
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToUpdate"),
+        { level: "ERROR" },
       );
     } finally {
       setImageCacheClearing(false);

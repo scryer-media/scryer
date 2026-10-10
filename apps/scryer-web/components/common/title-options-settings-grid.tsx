@@ -207,7 +207,7 @@ export function TitleOptionsSettingsGrid({
     try {
       await onUpdateTitleOptions(options);
     } catch {
-      setGlobalStatus(t("status.failedToUpdate"));
+      setGlobalStatus(t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setSaving(false);
     }
@@ -226,7 +226,7 @@ export function TitleOptionsSettingsGrid({
       }
       await onTitleChanged?.();
     } catch {
-      setGlobalStatus(t("status.failedToUpdate"));
+      setGlobalStatus(t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setAudioSaving(false);
     }

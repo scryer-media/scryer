@@ -223,7 +223,7 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
           .filter((script): script is PostProcessingScript => script !== null),
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t, trigger]);
 
@@ -256,7 +256,7 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         }));
       } catch (error) {
         if (!isCurrent()) return;
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
       }
     },
     [client, setGlobalStatus, t],
@@ -311,7 +311,7 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
             })
             .toPromise();
           if (error) throw error;
-          setGlobalStatus(t("settings.pp.updated"));
+          setGlobalStatus(t("settings.pp.updated"), { level: "SUCCESS" });
         } else {
           // The trigger is fixed at creation; updates never send it.
           const { error } = await client
@@ -324,12 +324,12 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
             })
             .toPromise();
           if (error) throw error;
-          setGlobalStatus(t("settings.pp.created"));
+          setGlobalStatus(t("settings.pp.created"), { level: "SUCCESS" });
         }
         closeEditor();
         await afterChange();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       } finally {
         setMutatingScriptId(null);
       }
@@ -375,7 +375,7 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         );
         await afterChange();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       } finally {
         setMutatingScriptId(null);
       }
@@ -403,13 +403,13 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         .mutation(deletePostProcessingScriptMutation, { id: record.id })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("settings.pp.deleted"));
+      setGlobalStatus(t("settings.pp.deleted"), { level: "SUCCESS" });
       await afterChange();
       if (editingScriptId === record.id) {
         closeEditor();
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingScriptId(null);
       setPendingDeleteScript(null);

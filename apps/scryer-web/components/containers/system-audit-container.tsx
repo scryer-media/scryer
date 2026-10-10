@@ -126,7 +126,7 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
       setEvents(nextEvents);
       setGlobalStatus(t("system.auditLoaded"));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     } finally {
       setLoading(false);
     }
@@ -148,7 +148,7 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
       });
       setGlobalStatus(t("system.auditLoaded"));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     } finally {
       setLoadingOlder(false);
     }

@@ -64,8 +64,8 @@ function ProviderAppForm({ app, onSaved }: { app: ListProviderApp; onSaved: (app
       if (result.error) throw result.error;
       onSaved(result.data.updateListProviderApp);
       setClientSecret("");
-      setGlobalStatus(t("lists.providerSettings.saved"));
-    } catch (reason) { setGlobalStatus(userFacingGraphQlErrorMessage(reason, t("status.failedToUpdate"))); }
+      setGlobalStatus(t("lists.providerSettings.saved"), { level: "SUCCESS" });
+    } catch (reason) { setGlobalStatus(userFacingGraphQlErrorMessage(reason, t("status.failedToUpdate")), { level: "ERROR" }); }
     finally { setSaving(false); }
   };
   return (

@@ -346,6 +346,7 @@ export function useBulkRename({
       if (accepted === 0) {
         setGlobalStatus(
           withFailureDetail(t("status.bulkRenameFailed"), firstFailureDetail),
+          { level: "ERROR" },
         );
         return;
       }
@@ -354,6 +355,7 @@ export function useBulkRename({
           t("status.bulkRenameQueued", { count: accepted }),
           firstFailureDetail,
         ),
+        firstFailureDetail ? { level: "ERROR" } : undefined,
       );
     } catch (error) {
       setGlobalStatus(
@@ -361,6 +363,7 @@ export function useBulkRename({
           t("status.bulkRenameFailed"),
           batchFailureDetail(error),
         ),
+        { level: "ERROR" },
       );
     } finally {
       setBulkActionBusy(false);

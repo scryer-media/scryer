@@ -67,12 +67,12 @@ test("Fix Match completion refreshes before reporting success", async () => {
     refreshTitleDetail: async () => {
       events.push("refresh");
     },
-    setGlobalStatus: (message) => events.push(message),
+    setGlobalStatus: (message, options) => events.push(`${options?.level}:${message}`),
     t: translate,
     titleName: "Correct Movie",
   });
 
-  assert.deepEqual(events, ["refresh", "updated:Correct Movie"]);
+  assert.deepEqual(events, ["refresh", "SUCCESS:updated:Correct Movie"]);
 });
 
 test("Fix Match completion reports warnings after refreshing", async () => {
@@ -83,14 +83,14 @@ test("Fix Match completion reports warnings after refreshing", async () => {
     refreshTitleDetail: async () => {
       events.push("refresh");
     },
-    setGlobalStatus: (message) => events.push(message),
+    setGlobalStatus: (message, options) => events.push(`${options?.level}:${message}`),
     t: translate,
     titleName: "Correct Movie",
   });
 
   assert.deepEqual(events, [
     "refresh",
-    "Artwork refresh delayed. Rename skipped.",
+    "WARNING:Artwork refresh delayed. Rename skipped.",
   ]);
 });
 
@@ -102,10 +102,10 @@ test("Fix Match completion surfaces refresh failures without false success", asy
     refreshTitleDetail: async () => {
       throw new Error("movie refresh failed");
     },
-    setGlobalStatus: (message) => messages.push(message),
+    setGlobalStatus: (message, options) => messages.push(`${options?.level}:${message}`),
     t: translate,
     titleName: "Correct Movie",
   });
 
-  assert.deepEqual(messages, ["movie refresh failed"]);
+  assert.deepEqual(messages, ["ERROR:movie refresh failed"]);
 });

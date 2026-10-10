@@ -190,7 +190,7 @@ export function SettingsDownloadClientsContainer({
       setSettingsDownloadClients(clients);
       setDownloadClientOrder(clients.map((c) => c.id));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -252,6 +252,7 @@ export function SettingsDownloadClientsContainer({
       } catch (error) {
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToLoad"),
+          { level: "ERROR" },
         );
       } finally {
         setDownloadClientRoutingLoading(false);
@@ -333,6 +334,7 @@ export function SettingsDownloadClientsContainer({
           t("label.unknown");
         setGlobalStatus(
           t("settings.downloadClientRoutingSavedFor", { name: clientName }),
+          { level: "SUCCESS" },
         );
       } catch (error) {
         setDownloadClientRoutingByScope((previous) => ({
@@ -345,6 +347,7 @@ export function SettingsDownloadClientsContainer({
         }));
         setGlobalStatus(
           error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
         );
       } finally {
         setMutatingDownloadClientRoutingScopes((previous) => {
@@ -387,7 +390,7 @@ export function SettingsDownloadClientsContainer({
         setProxyConfigs(data?.proxyConfigs || []);
       } catch (error) {
         setDownloadClientTypeOptions(buildDownloadClientTypeOptions([]));
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
       }
     };
     void load();
@@ -403,7 +406,7 @@ export function SettingsDownloadClientsContainer({
 
     providerCatalogVersionRef.current = providerCatalogVersion;
     void refreshProviderTypes().catch((error: unknown) => {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     });
   }, [providerCatalogVersion, refreshProviderTypes, setGlobalStatus, t]);
 
@@ -558,7 +561,7 @@ export function SettingsDownloadClientsContainer({
           },
         }).toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.downloadClientUpdated"));
+        setGlobalStatus(t("status.downloadClientUpdated"), { level: "SUCCESS" });
       } else {
         const { error } = await client.mutation(
           createDownloadClientMutation,
@@ -573,7 +576,7 @@ export function SettingsDownloadClientsContainer({
           },
         ).toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.downloadClientCreated"));
+        setGlobalStatus(t("status.downloadClientCreated"), { level: "SUCCESS" });
       }
       resetDownloadClientDraft();
       setIsEditorOpen(false);
@@ -587,7 +590,7 @@ export function SettingsDownloadClientsContainer({
           error,
           t("status.failedToUpdate"),
         );
-        setGlobalStatus(message);
+        setGlobalStatus(message, { level: "ERROR" });
       }
     } finally {
       setMutatingDownloadClientId(null);
@@ -699,7 +702,7 @@ export function SettingsDownloadClientsContainer({
       await refreshDownloadClients();
     } catch (error) {
       setDownloadClientOrder(currentOrder);
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setIsSavingOrder(false);
     }
@@ -782,11 +785,11 @@ export function SettingsDownloadClientsContainer({
         },
       }).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.downloadClientUpdated"));
+      setGlobalStatus(t("status.downloadClientUpdated"), { level: "SUCCESS" });
       void onDownloadClientsChanged?.();
       await refreshDownloadClients();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingDownloadClientId(null);
     }
@@ -816,6 +819,7 @@ export function SettingsDownloadClientsContainer({
           name: downloadClient.name,
           count: clearedIndexerMappingCount,
         }),
+        { level: "SUCCESS" },
       );
       if (editingDownloadClientId === downloadClient.id) {
         resetDownloadClientDraft();
@@ -824,7 +828,7 @@ export function SettingsDownloadClientsContainer({
         setAwaitingBaselineSync(true);
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingDownloadClientId(null);
       setPendingDeleteDownloadClient(null);

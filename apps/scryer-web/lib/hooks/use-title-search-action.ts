@@ -1,32 +1,9 @@
 import * as React from "react";
 
-import type { Translate } from "@/components/root/types";
-import type { SetGlobalStatus } from "@/lib/context/global-status-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
-import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
-
-/**
- * Report a title search that could not start. A search that ran but found
- * nothing to grab explains why; anything else is a failure.
- */
-export function reportAutomaticSearchFailure(
-  setGlobalStatus: SetGlobalStatus,
-  t: Translate,
-  error: unknown,
-  titleName: string,
-) {
-  const outcome = autoSearchOutcomeMessage(error, t, titleName);
-  if (outcome) {
-    setGlobalStatus(outcome);
-    return;
-  }
-  setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), {
-    level: "ERROR",
-  });
-}
+import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
 
 /**
  * A title overview's Search action. Both title overviews use it, so each shows

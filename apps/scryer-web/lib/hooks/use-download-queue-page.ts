@@ -5,7 +5,7 @@ import { useQueryAuthScope } from "@/lib/hooks/use-query-auth-scope";
 import { getAuthToken } from "@/lib/hooks/use-auth";
 import { useTranslate } from "@/lib/context/translate-context";
 
-import { GlobalStatusContext } from "@/lib/context/global-status-context";
+import { GlobalStatusContext, type SetGlobalStatus } from "@/lib/context/global-status-context";
 import {
   downloadQueuePageQuery,
   downloadQueueSyncSubscription,
@@ -58,7 +58,7 @@ type UseDownloadQueuePageArgs = {
   scryerSubmittedOnly: boolean;
   sort: SortConfig;
   titleId?: string | null;
-  onErrorStatus?: (message: string) => void;
+  onErrorStatus?: SetGlobalStatus;
 };
 
 export type UseDownloadQueuePageResult = {
@@ -255,7 +255,12 @@ export function useDownloadQueuePage({
       setQueueSnapshotStale(true);
       if (lastReportedErrorRef.current !== message) {
         lastReportedErrorRef.current = message;
-        (onErrorStatus ?? contextGlobalStatus)?.(message);
+        // A timed-out poll is already shown in the panel and retried on the
+        // next tick, so it stays out of the toasts.
+        (onErrorStatus ?? contextGlobalStatus)?.(
+          message,
+          error instanceof QueryTimeoutError ? undefined : { level: "ERROR" },
+        );
       }
     },
     [contextGlobalStatus, onErrorStatus, t],

@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { classifyStatusToastLevel } from "../utils/status-toast.ts";
-
 const container = readFileSync(
   new URL("../../components/containers/media-content-container.tsx", import.meta.url),
   "utf8",
@@ -13,9 +11,9 @@ const panel = readFileSync(
   "utf8",
 );
 
-for (const [handler, nextHandler, statusKey, message] of [
-  ["createLibrary", "updateLibrary", "libraryCreated", "Library created."],
-  ["updateLibrary", "deleteLibrary", "librarySaved", "Library saved."],
+for (const [handler, nextHandler, statusKey] of [
+  ["createLibrary", "updateLibrary", "libraryCreated"],
+  ["updateLibrary", "deleteLibrary", "librarySaved"],
 ]) {
   test(`${handler} emits success only through the global status toast`, () => {
     const start = container.indexOf(`  const ${handler} = React.useCallback(`);
@@ -24,12 +22,11 @@ for (const [handler, nextHandler, statusKey, message] of [
     const body = container.slice(start, end);
 
     assert.equal(
-      body.split(`setGlobalStatus(t("settings.${statusKey}"))`).length - 1,
+      body.split(`setGlobalStatus(t("settings.${statusKey}"), { level: "SUCCESS" })`).length - 1,
       1,
-      "preserve one shared status notification",
+      "preserve one shared status notification, raised as a success",
     );
     assert.doesNotMatch(body, /toast\.success\(/, "do not emit a second Sonner toast");
-    assert.equal(classifyStatusToastLevel(message), "SUCCESS");
   });
 }
 

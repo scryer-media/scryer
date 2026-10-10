@@ -131,7 +131,7 @@ export function SettingsUsersContainer() {
         Object.fromEntries(users.map((user: UserRecord) => [user.id, grantsToDrafts(user.libraryPermissions)])),
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -143,7 +143,7 @@ export function SettingsUsersContainer() {
       if (error) throw error;
       setLibraries((data?.libraries ?? []) as LibraryRecord[]);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
     }
   }, [client, setGlobalStatus, t]);
 
@@ -159,7 +159,7 @@ export function SettingsUsersContainer() {
       const minLength = result.data?.securitySettings?.passwordMinLength;
       return typeof minLength === "number" && minLength > 0 ? minLength : null;
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
       return null;
     }
   }, [client, setGlobalStatus, t]);
@@ -192,11 +192,11 @@ export function SettingsUsersContainer() {
       setNewPassword("");
       setNewAppPermissions([]);
       setNewLibraryPermissionDrafts({});
-      setGlobalStatus(t("user.created", { name: createdUsername }));
+      setGlobalStatus(t("user.created", { name: createdUsername }), { level: "SUCCESS" });
       await refreshUsers();
       notifyExternalAccountInviteSourcesChanged();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToCreate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToCreate"), { level: "ERROR" });
     }
   };
 
@@ -228,11 +228,11 @@ export function SettingsUsersContainer() {
         ...previous,
         [userId]: "",
       }));
-      setGlobalStatus(t("user.passwordUpdated", { name: updatedUserName }));
+      setGlobalStatus(t("user.passwordUpdated", { name: updatedUserName }), { level: "SUCCESS" });
       await refreshUsers();
       return true;
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
       return false;
     } finally {
       setMutatingUserId(null);
@@ -256,14 +256,14 @@ export function SettingsUsersContainer() {
         },
       }).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("user.permissionsUpdated", { name: updatedUserName }));
+      setGlobalStatus(t("user.permissionsUpdated", { name: updatedUserName }), { level: "SUCCESS" });
       await refreshUsers();
     } catch (error) {
       setUserAppPermissionDrafts((previous) => {
         const { [userId]: _rejected, ...rest } = previous;
         return rest;
       });
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingUserId(null);
     }
@@ -300,14 +300,14 @@ export function SettingsUsersContainer() {
         input: { userId, grants },
       }).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("user.permissionsUpdated", { name: user?.username ?? userId }));
+      setGlobalStatus(t("user.permissionsUpdated", { name: user?.username ?? userId }), { level: "SUCCESS" });
       await refreshUsers();
     } catch (error) {
       setUserLibraryPermissionDrafts((previous) => {
         const { [userId]: _rejected, ...rest } = previous;
         return rest;
       });
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingUserId(null);
     }
@@ -327,7 +327,7 @@ export function SettingsUsersContainer() {
       );
       await refreshUsers();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingUserId(null);
     }
@@ -366,7 +366,7 @@ export function SettingsUsersContainer() {
         id: user.id,
       }).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.userDeleted", { name: user.username }));
+      setGlobalStatus(t("status.userDeleted", { name: user.username }), { level: "SUCCESS" });
       await refreshUsers();
       setUserPasswordDrafts((previous) => {
         const next = { ...previous };
@@ -384,7 +384,7 @@ export function SettingsUsersContainer() {
         return next;
       });
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
     } finally {
       setMutatingUserId(null);
       setPendingDeleteUser(null);
@@ -405,7 +405,7 @@ export function SettingsUsersContainer() {
       setGlobalStatus(t("user.mfaReset", { name: user.username }));
       await refreshUsers();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
+      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
     } finally {
       setMutatingUserId(null);
       setPendingResetMfaUser(null);
