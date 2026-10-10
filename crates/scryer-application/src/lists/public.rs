@@ -368,7 +368,11 @@ pub fn summarize_preview(
                         display_title: trimmed(item.item.item.title.as_deref()),
                         year: item.item.item.year,
                         kind: item.item.kind.clone(),
-                        poster_url: posters.get(key).cloned(),
+                        poster_url: posters
+                            .get(key)
+                            .filter(|url| !url.trim().is_empty())
+                            .cloned()
+                            .or_else(|| item.item.facts.as_ref()?.poster_url.clone()),
                     });
                 }
             }

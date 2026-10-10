@@ -254,6 +254,7 @@ async fn preview_flyout_enrichment_is_bounded_reuses_facts_and_preserves_decisio
             for item in items {
                 item.facts = Some(ListMetadataFacts {
                     original_language: Some("ja".into()),
+                    poster_url: Some("https://images.example.test/enriched.jpg".into()),
                     canonical_names: vec!["Adventure".into()],
                     ..Default::default()
                 });
@@ -298,6 +299,10 @@ async fn preview_flyout_enrichment_is_bounded_reuses_facts_and_preserves_decisio
     let preview = summarize_preview(&items, &HashMap::new());
     assert_eq!(preview.would_add.len(), LIST_PREVIEW_WOULD_ADD_MAX);
     assert_eq!(
+        preview.would_add[1].poster_url.as_deref(),
+        Some("https://images.example.test/enriched.jpg")
+    );
+    assert_eq!(
         preview.would_add[0]
             .facts
             .as_ref()
@@ -317,6 +322,37 @@ async fn preview_flyout_enrichment_is_bounded_reuses_facts_and_preserves_decisio
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].len(), LIST_PREVIEW_WOULD_ADD_MAX - 1);
     assert_eq!(calls[0][0], "item-1");
+}
+
+#[test]
+fn preview_artwork_falls_back_to_metadata_for_every_facet() {
+    use crate::lists::resolve::ListMetadataFacts;
+    for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+        for (source, metadata, expected) in [
+            (None, Some("metadata.jpg"), Some("metadata.jpg")),
+            (Some("chart.jpg"), Some("metadata.jpg"), Some("chart.jpg")),
+            (Some("  "), Some("metadata.jpg"), Some("metadata.jpg")),
+            (Some("chart.jpg"), None, Some("chart.jpg")),
+            (None, None, None),
+        ] {
+            let mut item = resolved_item("artwork");
+            item.kind = Some(facet.clone());
+            item.facts = Some(ListMetadataFacts {
+                poster_url: metadata.map(str::to_string),
+                ..Default::default()
+            });
+            let evaluated = vec![EvaluatedItem {
+                item,
+                decision: ItemDecision::Candidate,
+            }];
+            let posters = source
+                .map(|url| ("artwork".into(), url.into()))
+                .into_iter()
+                .collect();
+            let preview = summarize_preview(&evaluated, &posters);
+            assert_eq!(preview.would_add[0].poster_url.as_deref(), expected);
+        }
+    }
 }
 
 #[tokio::test]

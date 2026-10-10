@@ -111,6 +111,7 @@ impl MetadataGateway for RecordingResolveGateway {
                         MovieMetadata {
                             smg_id: reference.smg_id,
                             original_language: Some("en".into()),
+                            poster_url: "https://images.example.test/movie.jpg".into(),
                             year: Some(2020),
                             ..Default::default()
                         },
@@ -142,6 +143,7 @@ impl MetadataGateway for RecordingResolveGateway {
                         crate::SeriesMetadata {
                             smg_id: reference.smg_id,
                             original_language: Some("ja".into()),
+                            poster_url: "https://images.example.test/series.jpg".into(),
                             year: Some(2021),
                             ..Default::default()
                         },
@@ -260,6 +262,17 @@ async fn enrichment_deduplicates_across_facets_and_scales_with_batches() {
         ]
     );
     assert!(items.iter().all(|item| item.facts.is_some()));
+    for item in &items {
+        let expected = if item.kind == Some(MediaFacet::Movie) {
+            "https://images.example.test/movie.jpg"
+        } else {
+            "https://images.example.test/series.jpg"
+        };
+        assert_eq!(
+            item.facts.as_ref().unwrap().poster_url.as_deref(),
+            Some(expected)
+        );
+    }
     assert_eq!(
         items[101].facts, items[202].facts,
         "series/anime share fetched facts"

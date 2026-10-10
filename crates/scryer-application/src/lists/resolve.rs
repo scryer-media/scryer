@@ -48,6 +48,7 @@ pub trait ListItemResolver: Send + Sync {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ListMetadataFacts {
+    pub poster_url: Option<String>,
     pub ratings: Vec<scryer_domain::TitleExternalRating>,
     pub canonical_names: Vec<String>,
     pub canonical_keys: Vec<String>,

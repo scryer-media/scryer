@@ -40,7 +40,7 @@ function PreviewItem({ item }: { item: ListPreviewItem }) {
       </PopoverTrigger>
       <PopoverContent side="right" align="center" sideOffset={12} collisionPadding={12}
         aria-label={item.displayTitle}
-        className="w-[360px] max-w-[calc(100vw-24px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto rounded-xl border-[var(--scry-border3)] text-[var(--scry-ink)] shadow-xl"
+        className="z-[90] w-[360px] max-w-[calc(100vw-24px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto rounded-xl border-[var(--scry-border3)] text-[var(--scry-ink)] shadow-xl"
         onOpenAutoFocus={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onMouseEnter={clearTimer} onMouseLeave={hide} onFocus={clearTimer} onBlur={hide}>

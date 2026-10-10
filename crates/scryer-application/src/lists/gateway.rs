@@ -296,6 +296,8 @@ impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
                     facts.insert(
                         (true, *id),
                         ListMetadataFacts {
+                            poster_url: Some(metadata.poster_url)
+                                .filter(|url| !url.trim().is_empty()),
                             ratings: metadata.ratings.external_ratings,
                             canonical_names: metadata
                                 .canonical_tags
@@ -339,6 +341,8 @@ impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
                     facts.insert(
                         (false, *id),
                         ListMetadataFacts {
+                            poster_url: Some(metadata.poster_url)
+                                .filter(|url| !url.trim().is_empty()),
                             ratings: metadata.ratings.external_ratings,
                             canonical_names: metadata
                                 .canonical_tags
