@@ -365,28 +365,19 @@ export function ScriptScheduleEditor({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end gap-4">
-        <ScriptChoiceGroup
-          id="script-schedule-kind"
-          label={t("script.schedule.kind")}
-          value={value.kind}
-          disabled={disabled}
-          onValueChange={(kind) => onChange(scheduleForKind(kind as ScriptScheduleKindValue, value))}
-          options={SCHEDULE_KINDS.map((kind) => ({
-            value: kind,
-            label: t(`script.schedule.kind.${kind.toLowerCase()}`),
-          }))}
-        />
-        <label className="flex h-10 items-center gap-2">
-          <Checkbox
-            id="script-run-on-startup"
-            checked={runOnStartup}
-            disabled={disabled}
-            onCheckedChange={(checked) => onRunOnStartupChange(checked === true)}
-          />
-          <span className="text-sm">{t("script.schedule.runOnStartup")}</span>
-        </label>
-      </div>
+      <ScriptChoiceGroup
+        id="script-schedule-kind"
+        label={t("script.schedule.kind")}
+        // The schedule heading above already names this choice.
+        labelHidden
+        value={value.kind}
+        disabled={disabled}
+        onValueChange={(kind) => onChange(scheduleForKind(kind as ScriptScheduleKindValue, value))}
+        options={SCHEDULE_KINDS.map((kind) => ({
+          value: kind,
+          label: t(`script.schedule.kind.${kind.toLowerCase()}`),
+        }))}
+      />
 
       {value.kind === "MANUAL" ? (
         <p className="text-xs text-muted-foreground">{t("script.schedule.manualHelp")}</p>
@@ -426,6 +417,16 @@ export function ScriptScheduleEditor({
           onChange={(expression) => onChange({ ...value, expression })}
         />
       ) : null}
+
+      <label className="flex items-center gap-2">
+        <Checkbox
+          id="script-run-on-startup"
+          checked={runOnStartup}
+          disabled={disabled}
+          onCheckedChange={(checked) => onRunOnStartupChange(checked === true)}
+        />
+        <span className="text-sm">{t("script.schedule.runOnStartup")}</span>
+      </label>
     </div>
   );
 }

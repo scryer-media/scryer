@@ -25,6 +25,7 @@ export type ScriptChoiceOption = {
 export function ScriptChoiceGroup({
   id,
   label,
+  labelHidden,
   help,
   value,
   options,
@@ -34,6 +35,8 @@ export function ScriptChoiceGroup({
 }: {
   id: string;
   label: string;
+  /** Keeps the label for assistive technology only, when a heading already names the group. */
+  labelHidden?: boolean;
   /** Explains the choice from an info icon beside the label. */
   help?: string;
   value: string;
@@ -45,13 +48,19 @@ export function ScriptChoiceGroup({
   const labelId = `${id}-label`;
   return (
     <div className={cn("min-w-0 space-y-1.5", className)}>
-      {/* A fixed height keeps neighbouring groups level whether or not one has help. */}
-      <div className="flex h-5 items-center gap-1.5">
-        <Label id={labelId} className="block">
+      {labelHidden ? (
+        <Label id={labelId} className="sr-only">
           {label}
         </Label>
-        {help ? <InfoHelp text={help} ariaLabel={label} /> : null}
-      </div>
+      ) : (
+        // A fixed height keeps neighbouring groups level whether or not one has help.
+        <div className="flex h-5 items-center gap-1.5">
+          <Label id={labelId} className="block">
+            {label}
+          </Label>
+          {help ? <InfoHelp text={help} ariaLabel={label} /> : null}
+        </div>
+      )}
       <ToggleGroupPrimitive.Root
         id={id}
         type="single"

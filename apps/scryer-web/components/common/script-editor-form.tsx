@@ -22,6 +22,9 @@ import {
 } from "@/lib/types/scripts";
 import { defaultScriptSchedule } from "@/lib/utils/script-schedule";
 
+// A bordered group that keeps a set of related fields under their label.
+const SCRIPT_EDITOR_BOX_CLASS = "space-y-3 rounded-lg border border-border p-3";
+
 function editorLanguageFor(language: ScriptLanguageValue): CodeEditorLanguage {
   return language === "SHELL" ? "shell" : "plain";
 }
@@ -217,8 +220,8 @@ export function ScriptEditorForm({
       </div>
 
       {isScheduled ? (
-        <div>
-          <Label className="mb-2 block">{t("script.editor.schedule")}</Label>
+        <div id="script-editor-schedule" className={SCRIPT_EDITOR_BOX_CLASS}>
+          <Label className="block">{t("script.editor.schedule")}</Label>
           <ScriptScheduleEditor
             value={draft.schedule ?? defaultScriptSchedule()}
             onChange={(schedule) => setDraft((prev) => ({ ...prev, schedule }))}
@@ -244,8 +247,8 @@ export function ScriptEditorForm({
       )}
 
       {/* Execution Mode */}
-      <div>
-        <Label className="mb-2 block">{t("settings.pp.executionMode")}</Label>
+      <div className={SCRIPT_EDITOR_BOX_CLASS}>
+        <Label className="block">{t("settings.pp.executionMode")}</Label>
         <RadioGroup
           id="script-editor-execution-mode"
           value={draft.executionMode}
@@ -254,83 +257,78 @@ export function ScriptEditorForm({
           <label htmlFor={blockingId} className="flex items-center gap-2">
             <RadioGroupItem id={blockingId} value="BLOCKING" />
             <span className="text-sm">{t("settings.pp.blocking")}</span>
-            <span className="text-xs text-muted-foreground">
-              {isScheduled ? t("script.editor.blockingHelp") : t("settings.pp.blockingHelp")}
-            </span>
           </label>
           <label htmlFor={fireAndForgetId} className="flex items-center gap-2">
             <RadioGroupItem id={fireAndForgetId} value="FIRE_AND_FORGET" />
             <span className="text-sm">{t("settings.pp.fireAndForget")}</span>
-            <span className="text-xs text-muted-foreground">
-              {isScheduled ? t("script.editor.fireAndForgetHelp") : t("settings.pp.fireAndForgetHelp")}
-            </span>
           </label>
         </RadioGroup>
-      </div>
 
-      {/* Timeout + Priority (only for blocking; priority only after imports) */}
-      {draft.executionMode === "BLOCKING" ? (
-        <div className="grid gap-3 md:grid-cols-2">
-          <label id={timeoutIds.wrapper}>
-            <Label className="mb-2 block">{t("settings.pp.timeout")}</Label>
-            <Input
-              id={timeoutIds.control}
-              {...integerInputProps}
-              value={draft.timeoutSecs}
-              onChange={(e) =>
-                setDraft((prev) => ({
-                  ...prev,
-                  timeoutSecs: Number(sanitizeDigits(e.target.value)) || 0,
-                }))
-              }
-            />
-          </label>
-          {isScheduled ? null : (
-            <label>
-              <Label className="mb-2 block">{t("settings.pp.priority")}</Label>
+        {/* Timeout + Priority (only for blocking; priority only after imports) */}
+        {draft.executionMode === "BLOCKING" ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <label id={timeoutIds.wrapper}>
+              <Label className="mb-2 block">{t("settings.pp.timeout")}</Label>
               <Input
-                id={`${legacyIdPrefix ?? "script-editor"}-priority`}
+                id={timeoutIds.control}
                 {...integerInputProps}
-                value={draft.priority}
+                value={draft.timeoutSecs}
                 onChange={(e) =>
                   setDraft((prev) => ({
                     ...prev,
-                    priority: Number(sanitizeDigits(e.target.value)) || 0,
+                    timeoutSecs: Number(sanitizeDigits(e.target.value)) || 0,
                   }))
                 }
               />
-              <p className="mt-1 text-xs text-muted-foreground">{t("settings.pp.priorityHelp")}</p>
             </label>
-          )}
-        </div>
-      ) : null}
+            {isScheduled ? null : (
+              <label>
+                <Label className="mb-2 block">{t("settings.pp.priority")}</Label>
+                <Input
+                  id={`${legacyIdPrefix ?? "script-editor"}-priority`}
+                  {...integerInputProps}
+                  value={draft.priority}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      priority: Number(sanitizeDigits(e.target.value)) || 0,
+                    }))
+                  }
+                />
+                <p className="mt-1 text-xs text-muted-foreground">{t("settings.pp.priorityHelp")}</p>
+              </label>
+            )}
+          </div>
+        ) : null}
+      </div>
 
-      {/* Enabled (scheduled jobs; post-processing scripts toggle from their table) */}
-      {isScheduled ? (
-        <label className="flex items-center gap-2">
+      <div className="flex flex-wrap gap-x-6 gap-y-2">
+        {/* Enabled (scheduled jobs; post-processing scripts toggle from their table) */}
+        {isScheduled ? (
+          <label className="flex items-center gap-2">
+            <Checkbox
+              id="script-editor-enabled"
+              checked={draft.enabled}
+              onCheckedChange={(checked) =>
+                setDraft((prev) => ({ ...prev, enabled: checked === true }))
+              }
+            />
+            <span className="text-sm">{t("label.enabled")}</span>
+          </label>
+        ) : null}
+
+        {/* Debug */}
+        <label id={debugIds.wrapper} className="flex items-center gap-2">
           <Checkbox
-            id="script-editor-enabled"
-            checked={draft.enabled}
+            id={debugIds.control}
+            checked={draft.debug}
             onCheckedChange={(checked) =>
-              setDraft((prev) => ({ ...prev, enabled: checked === true }))
+              setDraft((prev) => ({ ...prev, debug: checked === true }))
             }
           />
-          <span className="text-sm">{t("label.enabled")}</span>
+          <span className="text-sm">{t("settings.pp.debug")}</span>
         </label>
-      ) : null}
-
-      {/* Debug */}
-      <label id={debugIds.wrapper} className="flex items-center gap-2">
-        <Checkbox
-          id={debugIds.control}
-          checked={draft.debug}
-          onCheckedChange={(checked) =>
-            setDraft((prev) => ({ ...prev, debug: checked === true }))
-          }
-        />
-        <span className="text-sm">{t("settings.pp.debug")}</span>
-      </label>
-      <p className="-mt-2 pl-6 text-xs text-muted-foreground">{t("settings.pp.debugHelp")}</p>
+      </div>
 
       {/* Actions */}
       <div className="flex gap-2">
