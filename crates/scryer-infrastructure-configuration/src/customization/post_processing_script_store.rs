@@ -215,6 +215,40 @@ impl PostProcessingScriptRepository for PostProcessingScriptStore {
         .await
     }
 
+    async fn reconcile_interrupted_runs(&self) -> AppResult<u64> {
+        let sql = format!(
+            "SELECT {POST_PROCESSING_RUN_COLUMNS}
+               FROM post_processing_script_runs
+              WHERE status = {{}}"
+        );
+        let running = fetch_runs(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(
+                scryer_domain::ScriptRunStatus::Running.as_str().to_string(),
+            )],
+        )
+        .await?;
+        let count = running.len() as u64;
+        let completed_at = Utc::now().to_rfc3339();
+        for run in running {
+            let stderr_tail = Some(match run.stderr_tail.as_deref() {
+                Some(tail) if !tail.is_empty() => {
+                    format!("{tail}\n{INTERRUPTED_SCRIPT_RUN_SUMMARY}")
+                }
+                _ => INTERRUPTED_SCRIPT_RUN_SUMMARY.to_string(),
+            });
+            self.update_run(PostProcessingScriptRun {
+                status: scryer_domain::ScriptRunStatus::Failed,
+                stderr_tail,
+                completed_at: Some(completed_at.clone()),
+                ..run
+            })
+            .await?;
+        }
+        Ok(count)
+    }
+
     async fn list_runs_for_script(
         &self,
         script_id: &str,
@@ -396,6 +430,10 @@ fn decode_output_tail(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
         .map(|bytes| decode_script_output_tail(bytes).map_err(repo_err))
         .transpose()
 }
+
+/// What a script run left `running` by a previous process records as its
+/// outcome when the host starts again.
+const INTERRUPTED_SCRIPT_RUN_SUMMARY: &str = "interrupted by restart";
 
 fn postgres_run_args(run: &PostProcessingScriptRun) -> AppResult<Vec<SqlArg>> {
     Ok(vec![
@@ -819,5 +857,70 @@ mod tests {
         assert_eq!(runs[0].stdout_tail.as_deref(), Some("fixture output"));
         assert_eq!(runs[0].duration_ms, Some(12));
         assert!(runs[0].completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn runs_left_running_are_failed_as_interrupted() {
+        let (store, _pool) = store().await;
+        let mut scheduled = script("scheduled", ScriptTrigger::Schedule);
+        scheduled.schedule = Some(ScriptSchedule::Manual);
+        store.create_script(scheduled).await.expect("create");
+        let run = |id: &str, status: scryer_domain::ScriptRunStatus| PostProcessingScriptRun {
+            id: id.to_string(),
+            script_id: "scheduled".to_string(),
+            script_name: "fixture scheduled".to_string(),
+            title_id: None,
+            title_name: None,
+            facet: None,
+            file_path: None,
+            status,
+            exit_code: None,
+            stdout_tail: Some("partial output".to_string()),
+            stderr_tail: None,
+            duration_ms: None,
+            env_payload_json: Some("{}".to_string()),
+            started_at: Utc::now().to_rfc3339(),
+            completed_at: None,
+        };
+        store
+            .record_run(run("left-running", scryer_domain::ScriptRunStatus::Running))
+            .await
+            .expect("record running");
+        let finished = PostProcessingScriptRun {
+            exit_code: Some(0),
+            completed_at: Some(Utc::now().to_rfc3339()),
+            ..run("finished", scryer_domain::ScriptRunStatus::Success)
+        };
+        store.record_run(finished).await.expect("record finished");
+
+        assert_eq!(
+            store.reconcile_interrupted_runs().await.expect("reconcile"),
+            1
+        );
+        assert_eq!(
+            store
+                .reconcile_interrupted_runs()
+                .await
+                .expect("reconcile again"),
+            0,
+            "nothing is left running"
+        );
+
+        let runs = store
+            .list_runs_for_script("scheduled", 10)
+            .await
+            .expect("list");
+        let by_id = |id: &str| runs.iter().find(|run| run.id == id).expect("run");
+        let interrupted = by_id("left-running");
+        assert_eq!(interrupted.status, scryer_domain::ScriptRunStatus::Failed);
+        assert_eq!(
+            interrupted.stderr_tail.as_deref(),
+            Some(INTERRUPTED_SCRIPT_RUN_SUMMARY)
+        );
+        assert_eq!(interrupted.stdout_tail.as_deref(), Some("partial output"));
+        assert!(interrupted.completed_at.is_some());
+        let untouched = by_id("finished");
+        assert_eq!(untouched.status, scryer_domain::ScriptRunStatus::Success);
+        assert_eq!(untouched.stderr_tail, None);
     }
 }

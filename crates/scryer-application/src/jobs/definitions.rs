@@ -78,6 +78,10 @@ pub enum JobScheduleKind {
     Interval,
     StartupAndInterval,
     DailyAtTime,
+    /// On a crontab expression; used by user-defined jobs.
+    Cron,
+    /// On chosen weekdays at a local time; used by user-defined jobs.
+    WeeklyAtTime,
 }
 
 impl JobScheduleKind {
@@ -87,6 +91,8 @@ impl JobScheduleKind {
             Self::Interval => "interval",
             Self::StartupAndInterval => "startup_interval",
             Self::DailyAtTime => "daily_at_time",
+            Self::Cron => "cron",
+            Self::WeeklyAtTime => "weekly_at_time",
         }
     }
 }

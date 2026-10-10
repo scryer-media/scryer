@@ -9384,6 +9384,14 @@ enum JobScheduleKindValue {
 	Runs once per day at a configured local time.
 	"""
 	DAILY_AT_TIME
+	"""
+	Runs on a five-field crontab expression in host-local time.
+	"""
+	CRON
+	"""
+	Runs on chosen weekdays at a configured local time.
+	"""
+	WEEKLY_AT_TIME
 }
 
 """

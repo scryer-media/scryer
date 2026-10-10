@@ -59,10 +59,9 @@ fn custom_job_schedule_info(entry: &crate::scripts::scheduler::CustomJobEntry) -
             },
             Some(*every_seconds),
         ),
-        ScriptSchedule::Daily { .. } | ScriptSchedule::Weekly { .. } => {
-            (JobScheduleKind::DailyAtTime, None)
-        }
-        ScriptSchedule::Cron { .. } => (JobScheduleKind::Interval, None),
+        ScriptSchedule::Daily { .. } => (JobScheduleKind::DailyAtTime, None),
+        ScriptSchedule::Weekly { .. } => (JobScheduleKind::WeeklyAtTime, None),
+        ScriptSchedule::Cron { .. } => (JobScheduleKind::Cron, None),
     };
     JobScheduleInfo {
         kind,
@@ -89,6 +88,9 @@ impl AppUseCase {
     /// Reload the in-memory schedule from the script store. Called when a
     /// scheduled script is created, updated, toggled or deleted.
     pub(crate) async fn reload_custom_job_schedule(&self) {
+        // Held across the read and the apply: two overlapping reloads apply
+        // in the order they read.
+        let _reload = self.runtime.jobs.custom_job_reload_lock.lock().await;
         match self
             .services
             .customization
@@ -99,6 +101,25 @@ impl AppUseCase {
             Ok(scripts) => self.runtime.jobs.custom_job_scheduler.apply(scripts),
             Err(error) => warn!(error = %error, "failed to reload scheduled scripts"),
         }
+    }
+
+    /// Fail script runs a previous process left running, such as a
+    /// fire-and-forget scheduled script cut off by a restart. Call once at
+    /// startup, before the scheduler starts.
+    pub async fn reconcile_interrupted_script_runs(&self) -> AppResult<u64> {
+        let reconciled = self
+            .services
+            .customization
+            .pp_scripts
+            .reconcile_interrupted_runs()
+            .await?;
+        if reconciled > 0 {
+            warn!(
+                reconciled,
+                "failed script runs left running by a previous process"
+            );
+        }
+        Ok(reconciled)
     }
 
     /// One job definition per enabled scheduled script, read from the
@@ -172,7 +193,7 @@ impl AppUseCase {
                 limit.max(1),
             )
             .await?;
-        Ok(records
+        let mut runs = records
             .into_iter()
             .map(|record| {
                 active_by_id
@@ -180,40 +201,51 @@ impl AppUseCase {
                     .cloned()
                     .unwrap_or_else(|| JobRun::from_record(&record, None))
             })
-            .collect())
+            .collect::<Vec<_>>();
+        self.name_custom_job_runs(&mut runs);
+        Ok(runs)
     }
 
-    /// The latest run of each scheduled script, enabled or not.
+    /// The latest run of each scheduled script, in one read.
     pub(super) async fn latest_custom_job_runs(
         &self,
         active_by_id: &HashMap<String, JobRun>,
     ) -> AppResult<Vec<JobRun>> {
-        let scripts = self
+        let records = self
             .services
-            .customization
-            .pp_scripts
-            .list_scripts_by_trigger(ScriptTrigger::Schedule)
+            .events
+            .job_runs
+            .list_latest_job_run_per_operation_type(JobKey::CustomJob)
             .await?;
-        let mut runs = Vec::new();
-        for script in scripts {
-            let records = self
-                .services
-                .events
-                .job_runs
-                .list_job_runs_by_operation_type(
-                    JobKey::CustomJob,
-                    &custom_job_operation_type(&script.id),
-                    1,
-                )
-                .await?;
-            runs.extend(records.into_iter().map(|record| {
+        let mut runs = records
+            .into_iter()
+            .map(|record| {
                 active_by_id
                     .get(&record.id)
                     .cloned()
                     .unwrap_or_else(|| JobRun::from_record(&record, None))
-            }));
-        }
+            })
+            .collect::<Vec<_>>();
+        self.name_custom_job_runs(&mut runs);
         Ok(runs)
+    }
+
+    /// Show each run under its script's name where the script is scheduled,
+    /// read from the in-memory schedule.
+    fn name_custom_job_runs(&self, runs: &mut [JobRun]) {
+        let names = self
+            .runtime
+            .jobs
+            .custom_job_scheduler
+            .entries()
+            .into_iter()
+            .map(|entry| (entry.script_id, entry.name))
+            .collect::<HashMap<_, _>>();
+        for run in runs {
+            if let Some(name) = run.custom_job_id().and_then(|id| names.get(id)) {
+                run.display_name = name.clone();
+            }
+        }
     }
 
     /// Start a run. A blocking script never overlaps itself: a manual start

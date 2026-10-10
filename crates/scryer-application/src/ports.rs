@@ -6117,6 +6117,15 @@ pub trait JobRunRepository: Send + Sync {
             .collect())
     }
 
+    /// The newest run of each operation type recorded under `job_key`, in
+    /// one read; used to show the last run of every user-defined job.
+    async fn list_latest_job_run_per_operation_type(
+        &self,
+        _job_key: JobKey,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        Ok(Vec::new())
+    }
+
     async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>>;
 
     /// Fail every persisted run still in a non-terminal state and return the
@@ -9002,6 +9011,10 @@ pub trait PostProcessingScriptRepository: Send + Sync {
     /// Replace a recorded run's outcome, keyed by its id. A fire-and-forget
     /// scheduled script records its run at spawn and finishes it here.
     async fn update_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
+    /// Fail every script run still marked running and return how many. Only
+    /// a previous process can have left one running, so this runs once at
+    /// startup, before any script can start.
+    async fn reconcile_interrupted_runs(&self) -> AppResult<u64>;
     async fn list_runs_for_script(
         &self,
         script_id: &str,

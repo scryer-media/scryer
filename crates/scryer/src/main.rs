@@ -1879,6 +1879,12 @@ async fn bootstrap_application(
         }
     }
 
+    // A script run still marked running was cut off by the previous
+    // process; nothing in this one can finish it.
+    if let Err(error) = app_use_case.reconcile_interrupted_script_runs().await {
+        tracing::warn!(error = %error, "failed to reconcile interrupted script runs on startup");
+    }
+
     // Durable maintenance search intents resume with their original job ids.
     // Keep those reservations out of generic interrupted-job reconciliation.
     match app_use_case.resume_interrupted_maintenance_searches().await {

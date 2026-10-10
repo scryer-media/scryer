@@ -2285,6 +2285,9 @@ pub struct AppRuntimeJobState {
     pub custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler,
     /// Serializes the overlap check and run start for scheduled scripts.
     pub(crate) custom_job_start_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes schedule reloads so a slower, older read is never applied
+    /// over a newer one.
+    pub(crate) custom_job_reload_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -2634,6 +2637,7 @@ impl AppRuntimeState {
                 acquisition_search_lock: Arc::new(tokio::sync::Mutex::new(())),
                 custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler::default(),
                 custom_job_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                custom_job_reload_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             health: AppRuntimeHealthState {
                 results: Arc::new(tokio::sync::RwLock::new(Vec::new())),

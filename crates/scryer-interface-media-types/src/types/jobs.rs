@@ -111,6 +111,10 @@ pub enum JobScheduleKindValue {
     StartupAndInterval,
     /// Runs once per day at a configured local time.
     DailyAtTime,
+    /// Runs on a five-field crontab expression in host-local time.
+    Cron,
+    /// Runs on chosen weekdays at a configured local time.
+    WeeklyAtTime,
 }
 
 /// Source that started a job run.

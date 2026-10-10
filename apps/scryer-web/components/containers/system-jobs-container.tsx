@@ -69,6 +69,8 @@ function normalizeScheduleKind(value: unknown): JobScheduleKind {
     case "INTERVAL":
     case "STARTUP_AND_INTERVAL":
     case "DAILY_AT_TIME":
+    case "CRON":
+    case "WEEKLY_AT_TIME":
       return value;
     default:
       return "MANUAL";

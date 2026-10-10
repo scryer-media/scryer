@@ -1401,6 +1401,16 @@ async fn custom_jobs_require_system_settings_permission() {
     .await;
     assert_unauthorized(ctx.app.trigger_custom_job(&admin(), &script.id).await);
     assert_unauthorized(ctx.app.list_custom_job_runs(&admin(), &script.id, 5).await);
+    // A scheduled script's output is held to the same permission.
+    assert_unauthorized(
+        ctx.app
+            .list_post_processing_script_runs(&admin(), &script.id, 5)
+            .await,
+    );
+    ctx.app
+        .list_post_processing_script_runs(&system_admin(), &script.id, 5)
+        .await
+        .expect("system admin reads scheduled script runs");
 }
 
 #[tokio::test]
@@ -1417,6 +1427,26 @@ async fn scheduled_scripts_are_listed_as_jobs_with_their_next_run() {
         )
         .await
         .expect("create interval script");
+    for (id, schedule) in [
+        (
+            "cj-cron",
+            scryer_domain::ScriptSchedule::Cron {
+                expression: "30 3 * * *".to_string(),
+            },
+        ),
+        (
+            "cj-weekly",
+            scryer_domain::ScriptSchedule::Weekly {
+                days: vec![scryer_domain::ScheduleWeekday::Monday],
+                time_local: "03:30".to_string(),
+            },
+        ),
+    ] {
+        ctx.app
+            .create_post_processing_script(&system_admin(), scheduled_script(id, schedule))
+            .await
+            .expect("create scheduled script");
+    }
     let manual = create_custom_job(
         &ctx,
         "cj-manual",
@@ -1438,6 +1468,20 @@ async fn scheduled_scripts_are_listed_as_jobs_with_their_next_run() {
     assert!(interval_job.schedule.next_run_at.is_some());
     assert_eq!(interval_job.schedule.interval_seconds, Some(600));
     assert!(!interval_job.schedule.description.is_empty());
+    assert_eq!(
+        interval_job.schedule.kind,
+        scryer_application::JobScheduleKind::Interval
+    );
+    let cron_job = job("cj-cron");
+    assert_eq!(
+        cron_job.schedule.kind,
+        scryer_application::JobScheduleKind::Cron
+    );
+    assert!(cron_job.schedule.next_run_at.is_some());
+    assert_eq!(
+        job("cj-weekly").schedule.kind,
+        scryer_application::JobScheduleKind::WeeklyAtTime
+    );
     let manual_job = job(&manual.id);
     assert_eq!(manual_job.schedule.next_run_at, None);
     assert!(manual_job.manual_trigger_allowed);
@@ -1484,5 +1528,10 @@ async fn latest_job_runs_has_a_row_per_custom_job() {
             "one latest run for {}",
             script.id
         );
+        let run = latest
+            .iter()
+            .find(|run| run.custom_job_id() == Some(script.id.as_str()))
+            .expect("latest run");
+        assert_eq!(run.display_name, script.name, "runs carry the script name");
     }
 }

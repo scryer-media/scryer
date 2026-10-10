@@ -441,6 +441,8 @@ impl FromApplication<AppJobScheduleKind> for JobScheduleKindValue {
             AppJobScheduleKind::Interval => Self::Interval,
             AppJobScheduleKind::StartupAndInterval => Self::StartupAndInterval,
             AppJobScheduleKind::DailyAtTime => Self::DailyAtTime,
+            AppJobScheduleKind::Cron => Self::Cron,
+            AppJobScheduleKind::WeeklyAtTime => Self::WeeklyAtTime,
         }
     }
 }

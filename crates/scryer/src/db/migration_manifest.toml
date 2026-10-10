@@ -3016,6 +3016,23 @@ file = "postgres/migrations/0282_script_triggers.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 283
+description = "workflow operation type index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0283_workflow_operation_type_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0283_workflow_operation_type_index.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

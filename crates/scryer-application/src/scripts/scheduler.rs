@@ -17,6 +17,7 @@
 //! same anchor. A manual schedule never contributes a deadline.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -34,6 +35,12 @@ use super::schedule::{describe_schedule, next_fire_after};
 /// delay of the startup health checks, so a restart does not stack script
 /// runs on top of service initialization.
 pub const CUSTOM_JOB_STARTUP_DELAY: chrono::Duration = chrono::Duration::seconds(30);
+
+/// First wait before retrying a failed initial load of the scheduled scripts.
+pub const CUSTOM_JOB_LOAD_RETRY_INITIAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Longest wait between retries of a failed initial load.
+pub const CUSTOM_JOB_LOAD_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Wall-clock source the schedule evaluates against.
 #[derive(Clone, Copy, Debug)]
@@ -130,6 +137,9 @@ pub struct CustomJobScheduler {
     state: Arc<Mutex<SchedulerState>>,
     reload: Arc<Notify>,
     clock: SchedulerClock,
+    /// Worker loop iterations; each one is a wake for a deadline, a reload
+    /// or shutdown.
+    wakes: Arc<AtomicUsize>,
 }
 
 impl Default for CustomJobScheduler {
@@ -176,7 +186,13 @@ impl CustomJobScheduler {
             state: Arc::new(Mutex::new(SchedulerState::default())),
             reload: Arc::new(Notify::new()),
             clock,
+            wakes: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    /// How many times the worker loop has run.
+    pub fn wake_count(&self) -> usize {
+        self.wakes.load(Ordering::SeqCst)
     }
 
     pub fn clock(&self) -> SchedulerClock {
@@ -340,13 +356,36 @@ pub async fn run_custom_job_scheduler(
     token: tokio_util::sync::CancellationToken,
 ) {
     info!("custom job scheduler started");
-    match source.load_scheduled_scripts().await {
-        Ok(scripts) => scheduler.apply(scripts),
-        Err(error) => warn!(error = %error, "failed to load scheduled scripts"),
+    // Startup only: retry a failed load with backoff until it succeeds. Once
+    // loaded, nothing below reads the store.
+    let mut retry_in = CUSTOM_JOB_LOAD_RETRY_INITIAL;
+    loop {
+        match source.load_scheduled_scripts().await {
+            Ok(scripts) => {
+                scheduler.apply(scripts);
+                break;
+            }
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    retry_in_seconds = retry_in.as_secs(),
+                    "failed to load scheduled scripts; retrying"
+                );
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        info!("custom job scheduler shutting down");
+                        return;
+                    }
+                    _ = tokio::time::sleep(retry_in) => {}
+                }
+                retry_in = (retry_in * 2).min(CUSTOM_JOB_LOAD_RETRY_MAX);
+            }
+        }
     }
     scheduler.arm_startup_fires(scheduler.clock.now() + CUSTOM_JOB_STARTUP_DELAY);
 
     loop {
+        scheduler.wakes.fetch_add(1, Ordering::SeqCst);
         let deadline = scheduler.arm();
         let reload = scheduler.reload.notified();
         tokio::select! {
@@ -377,7 +416,6 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use scryer_domain::ScriptType;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn base() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 3, 2, 12, 0, 0).unwrap()
@@ -513,12 +551,29 @@ mod tests {
     struct CountingSource {
         scripts: Mutex<Vec<PostProcessingScript>>,
         loads: AtomicUsize,
+        /// Fail this many loads before succeeding.
+        failures: AtomicUsize,
+        /// Tokio instants of every load.
+        load_times: Mutex<Vec<tokio::time::Instant>>,
     }
 
     #[async_trait]
     impl CustomJobSource for CountingSource {
         async fn load_scheduled_scripts(&self) -> AppResult<Vec<PostProcessingScript>> {
             self.loads.fetch_add(1, Ordering::SeqCst);
+            self.load_times
+                .lock()
+                .unwrap()
+                .push(tokio::time::Instant::now());
+            if self
+                .failures
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(crate::AppError::Repository("fixture outage".to_string()));
+            }
             Ok(self.scripts.lock().unwrap().clone())
         }
     }
@@ -614,10 +669,14 @@ mod tests {
         *source.scripts.lock().unwrap() = vec![script("a", every(3600))];
         let (mut fires, token, handle) = spawn_worker(&scheduler, source.clone());
 
-        // Let the worker load and park on its timer.
-        tokio::task::yield_now().await;
+        settle().await;
+        let wakes = scheduler.wake_count();
+        let tasks = alive_tasks();
         tokio::time::advance(std::time::Duration::from_secs(3599)).await;
+        settle().await;
         assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.wake_count(), wakes, "no wake before the deadline");
+        assert_eq!(alive_tasks(), tasks, "still the one worker task");
         assert!(
             fires.try_recv().is_err(),
             "nothing fires before the deadline"
@@ -629,6 +688,75 @@ mod tests {
 
         token.cancel();
         handle.await.expect("worker exits");
+    }
+
+    /// Let every ready task run until it blocks on a timer or a channel.
+    async fn settle() {
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    fn alive_tasks() -> usize {
+        tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_initial_load_is_retried_with_backoff_then_schedules() {
+        let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
+        let source = Arc::new(CountingSource::default());
+        *source.scripts.lock().unwrap() = vec![script("a", every(600))];
+        source.failures.store(5, Ordering::SeqCst);
+        let started = tokio::time::Instant::now();
+        let (mut fires, token, handle) = spawn_worker(&scheduler, source.clone());
+
+        let (at, due) = next_fire_event(&mut fires).await;
+        assert_eq!(due.script_id, "a");
+        assert_eq!(
+            source.loads.load(Ordering::SeqCst),
+            6,
+            "five failures, then one load"
+        );
+        let offsets = source
+            .load_times
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|at| at.duration_since(started).as_secs())
+            .collect::<Vec<_>>();
+        // 5 s doubling, capped at 60 s.
+        assert_eq!(offsets, vec![0, 5, 15, 35, 75, 135]);
+        // The interval anchors on the successful load.
+        assert_eq!(at, base() + chrono::Duration::seconds(135 + 600));
+
+        // Loaded: the idle loop reads the store no more.
+        settle().await;
+        let wakes = scheduler.wake_count();
+        tokio::time::advance(std::time::Duration::from_secs(599)).await;
+        settle().await;
+        assert_eq!(scheduler.wake_count(), wakes);
+        assert_eq!(source.loads.load(Ordering::SeqCst), 6);
+
+        token.cancel();
+        handle.await.expect("worker exits");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failing_initial_load_stops_retrying_on_shutdown() {
+        let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
+        let source = Arc::new(CountingSource::default());
+        source.failures.store(usize::MAX, Ordering::SeqCst);
+        let (_fires, token, handle) = spawn_worker(&scheduler, source.clone());
+        settle().await;
+        assert_eq!(source.loads.load(Ordering::SeqCst), 1);
+        token.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("worker exits while waiting to retry")
+            .expect("worker task");
+        assert_eq!(source.loads.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test(start_paused = true)]
@@ -681,12 +809,17 @@ mod tests {
         let scheduler = CustomJobScheduler::new(SchedulerClock::tokio_at(base()));
         let source = Arc::new(CountingSource::default());
         *source.scripts.lock().unwrap() = vec![script("m", ScriptSchedule::Manual)];
+        let tasks_before = alive_tasks();
         let (mut fires, token, handle) = spawn_worker(&scheduler, source.clone());
 
-        tokio::task::yield_now().await;
+        settle().await;
+        let wakes = scheduler.wake_count();
         // A paused clock auto-advances only to a pending timer; a parked
         // worker has none, so a year passes with no wake and no store call.
         tokio::time::advance(std::time::Duration::from_secs(365 * 24 * 3600)).await;
+        settle().await;
+        assert_eq!(scheduler.wake_count(), wakes, "a parked worker never wakes");
+        assert_eq!(alive_tasks(), tasks_before + 1, "one worker task");
         assert_eq!(source.loads.load(Ordering::SeqCst), 1);
         assert!(fires.try_recv().is_err());
         assert_eq!(scheduler.earliest_deadline(), None);

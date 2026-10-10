@@ -115,6 +115,18 @@ impl AppUseCase {
     ) -> crate::AppResult<Vec<PostProcessingScriptRun>> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
+        // A scheduled script's output needs the same permission as the
+        // script itself. Runs of a script that no longer exists are held to
+        // the stricter rule, since its trigger can no longer be read.
+        let trigger = self
+            .services
+            .customization
+            .pp_scripts
+            .get_script(script_id)
+            .await?
+            .map_or(ScriptTrigger::Schedule, |script| script.trigger);
+        self.require_script_trigger_permission(actor, trigger)
+            .await?;
         self.services
             .customization
             .pp_scripts

@@ -310,12 +310,37 @@ impl JobRunRepository for WorkflowOperationStore {
             self.datastore.read_exec(),
             "SELECT * FROM workflow_operations
              WHERE job_key = {} AND operation_type = {}
-             ORDER BY started_at DESC LIMIT {}",
+             ORDER BY started_at DESC, id DESC LIMIT {}",
             &[
                 SqlArg::Text(job_key.as_str().to_string()),
                 SqlArg::Text(operation_type.to_string()),
                 SqlArg::I64(limit as i64),
             ],
+        )
+        .await?
+        .into_iter()
+        .map(|row| workflow_operation_from_row(&row).and_then(job_run_record_from_workflow))
+        .collect()
+    }
+
+    async fn list_latest_job_run_per_operation_type(
+        &self,
+        job_key: JobKey,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT * FROM (
+                 SELECT workflow_operations.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY operation_type
+                            ORDER BY started_at DESC, id DESC
+                        ) AS operation_rank
+                 FROM workflow_operations
+                 WHERE job_key = {}
+             ) ranked
+             WHERE operation_rank = 1
+             ORDER BY started_at DESC, id DESC",
+            &[SqlArg::Text(job_key.as_str().to_string())],
         )
         .await?
         .into_iter()

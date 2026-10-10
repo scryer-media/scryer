@@ -13,7 +13,9 @@ export type JobScheduleKind =
   | "MANUAL"
   | "INTERVAL"
   | "STARTUP_AND_INTERVAL"
-  | "DAILY_AT_TIME";
+  | "DAILY_AT_TIME"
+  | "CRON"
+  | "WEEKLY_AT_TIME";
 
 export type JobTriggerSource =
   | "MANUAL"

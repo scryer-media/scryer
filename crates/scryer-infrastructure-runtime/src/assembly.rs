@@ -562,6 +562,11 @@ impl PostProcessingScriptRepository for DatastoreCustomizationStore {
     async fn update_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
         self.post_processing_scripts.update_run(run).await
     }
+    async fn reconcile_interrupted_runs(&self) -> AppResult<u64> {
+        self.post_processing_scripts
+            .reconcile_interrupted_runs()
+            .await
+    }
 
     async fn list_runs_for_script(
         &self,
