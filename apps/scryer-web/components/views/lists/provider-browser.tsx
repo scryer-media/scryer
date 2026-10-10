@@ -10,6 +10,7 @@ import type {
   ListProviderManifest,
   ListProviderSettingChange,
   ListProviderSettings,
+  ListSourceDraft,
   ListSubscription,
 } from "@/lib/types/lists";
 import { isListSourceFollowed, publicProviders } from "@/lib/utils/lists";
@@ -43,6 +44,8 @@ type ProviderBrowserProps = {
   onFollow: (manifest: ListProviderManifest, item: ListProviderItem) => void;
   onPreviewUrl: (url: string) => Promise<ListPreview | null>;
   onFollowUrl: (url: string, preview: ListPreview) => void;
+  /** Reads a list as it stands, for the preview in its row. */
+  onPreviewSource: (source: ListSourceDraft) => Promise<ListPreview | null>;
   /** Stored server-wide settings, with non-secret values; null until loaded. */
   providerSettings?: ListProviderSettings[] | null;
   onSaveProviderSettings?: (provider: string, changes: ListProviderSettingChange[]) => Promise<boolean>;
@@ -59,6 +62,7 @@ export function ProviderBrowser({
   onFollow,
   onPreviewUrl,
   onFollowUrl,
+  onPreviewSource,
   providerSettings,
   onSaveProviderSettings,
 }: ProviderBrowserProps) {
@@ -143,6 +147,7 @@ export function ProviderBrowser({
                 ) : null}
               </div>
               <CatalogListTable
+                id={`lists-catalog-${shown.providerType}-${group.items[0]?.id ?? "group"}`}
                 rows={group.items.map((item) => ({
                   key: item.id,
                   name: item.name,
@@ -156,6 +161,16 @@ export function ProviderBrowser({
                     isListSourceFollowed(subscriptions, { provider: shown.providerType, sourceType: item.sourceType, params: [] }),
                   followId: `lists-catalog-follow-${shown.providerType}-${item.id}`,
                   onFollow: () => onFollow(shown, item),
+                  // A list that needs a value has nothing to read until it is given one.
+                  onPreview: item.params.some((param) => param.required)
+                    ? undefined
+                    : () =>
+                        onPreviewSource({
+                          provider: shown.providerType,
+                          sourceType: item.sourceType,
+                          params: [],
+                          url: null,
+                        }),
                 }))}
               />
             </section>

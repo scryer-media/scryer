@@ -14,7 +14,8 @@ type ListPreviewSummaryProps = {
   idPrefix: string;
 };
 
-function PreviewItem({ item }: { item: ListPreviewItem }) {
+/** One previewed title: its poster, and on hover or focus what is known about it. */
+export function ListPreviewPoster({ item }: { item: ListPreviewItem }) {
   const t = useTranslate();
   const [open, setOpen] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -101,7 +102,7 @@ export function ListPreviewSummary({ preview, idPrefix }: ListPreviewSummaryProp
           <ul className="grid grid-cols-3 gap-2 sm:grid-cols-6">
             {preview.wouldAdd.map((item) => (
               <li key={item.itemKey} className="min-w-0">
-                <PreviewItem item={item} />
+                <ListPreviewPoster item={item} />
               </li>
             ))}
           </ul>

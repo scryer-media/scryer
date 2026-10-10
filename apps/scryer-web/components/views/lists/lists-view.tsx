@@ -331,6 +331,7 @@ export function ListsView(props: ListsViewProps) {
                   onFollow={followFromCatalog}
                   onPreviewUrl={props.onPreviewUrl}
                   onFollowUrl={followFromUrl}
+                  onPreviewSource={props.onPreviewSource}
                   providerSettings={props.providerSettings}
                   onSaveProviderSettings={props.onSaveProviderSettings}
                 />

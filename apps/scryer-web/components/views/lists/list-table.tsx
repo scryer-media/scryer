@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,6 +29,7 @@ import {
 
 import { ListCoverageBar } from "./list-coverage-bar";
 import { ProviderTile } from "./provider-tile";
+import { SortableHead } from "./sortable-head";
 
 type ListTableProps = {
   subscriptions: ListSubscription[];
@@ -57,19 +58,14 @@ export function ListTable({
   const sorted = React.useMemo(() => sortListSubscriptions(subscriptions, sort), [subscriptions, sort]);
   const sortableHead = (key: ListSortKey, label: string) => {
     const active = sort?.key === key;
-    const Icon = !active ? ArrowUpDown : sort.descending ? ArrowDown : ArrowUp;
     return (
-      <TableHead aria-sort={active ? (sort.descending ? "descending" : "ascending") : "none"}>
-        <button
-          id={`lists-table-sort-${key}`}
-          type="button"
-          className="inline-flex items-center gap-1.5 rounded-sm text-left font-medium transition-colors hover:text-[var(--scry-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
-          onClick={() => setSort({ key, descending: active ? !sort.descending : false })}
-        >
-          <span>{label}</span>
-          <Icon aria-hidden="true" className={active ? "h-3.5 w-3.5" : "h-3.5 w-3.5 text-[var(--scry-faint2)]"} />
-        </button>
-      </TableHead>
+      <SortableHead
+        id={`lists-table-sort-${key}`}
+        label={label}
+        active={active}
+        descending={active && sort.descending}
+        onSort={() => setSort({ key, descending: active ? !sort.descending : false })}
+      />
     );
   };
 
