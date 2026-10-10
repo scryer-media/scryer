@@ -2020,6 +2020,7 @@ const zh_HK: LocaleDictionary = {
   "settings.pp.inlineShellConfirmDescription": "內嵌後處理指令碼會在導入完成後透過伺服器 shell 執行。請僅儲存您已審查並信任的指令碼。",
   "settings.pp.inlineShellConfirm": "允許內嵌 Shell",
   "settings.plugins": "插件",
+  "settings.scripts": "腳本",
   "settings.pluginRuntimeMemoryEstimate": "預估的插件運行時記憶體用量",
   "settings.pluginsRefresh": "重新整理註冊表",
   "settings.pluginAutoUpdateEnabled": "自動更新插件補丁",

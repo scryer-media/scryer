@@ -1325,6 +1325,7 @@ const es: LocaleDictionary = {
   "settings.pp.deleted": "Guión eliminado.",
   "settings.pp.toggled": "Guión {{state}}.",
   "settings.plugins": "Plugins",
+  "settings.scripts": "Scripts",
   "settings.pluginsRefresh": "Actualizar registro",
   "settings.pluginAutoUpdateEnabled": "Actualizar automáticamente los parches de plugins",
   "settings.pluginAutoUpdateEnabledHelp":

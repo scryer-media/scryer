@@ -1314,6 +1314,7 @@ const it: LocaleDictionary = {
   "settings.pp.deleted": "Copione eliminato.",
   "settings.pp.toggled": "Script {{state}}.",
   "settings.plugins": "Plugin",
+  "settings.scripts": "Script",
   "settings.pluginsRefresh": "Aggiorna registro",
   "settings.pluginAutoUpdateEnabled": "Aggiorna automaticamente le patch dei plugin",
   "settings.pluginAutoUpdateEnabledHelp":

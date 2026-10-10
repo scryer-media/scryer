@@ -38,6 +38,7 @@ export type SettingsSection =
   | "maintenanceRules"
   | "requestRules"
   | "plugins"
+  | "scripts"
   | "listProviderApps"
   | "notifications"
   | "post-processing"

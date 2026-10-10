@@ -117,6 +117,21 @@ test("post-processing is grouped with Automation", () => {
   assert.equal(command?.groupLabel, "nav.group.automation");
 });
 
+test("scripts is grouped with Settings for system-settings managers only", () => {
+  const find = (appPermissions: AuthUser["appPermissions"]) =>
+    buildRouteCommands({
+      t,
+      user: user({ appPermissions }),
+      onNavigate: () => {},
+    }).find((candidate) => candidate.id === "settings-scripts");
+
+  assert.equal(
+    find([APP_PERMISSIONS.manageSystemSettings])?.groupLabel,
+    "nav.settings",
+  );
+  assert.equal(find([APP_PERMISSIONS.manageCatalogSettings]), undefined);
+});
+
 test("acquisition is grouped with Automation for system-settings managers only", () => {
   const find = (appPermissions: AuthUser["appPermissions"]) =>
     buildRouteCommands({

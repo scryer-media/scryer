@@ -1233,6 +1233,7 @@ const zh_CN: LocaleDictionary = {
   "settings.pp.deleted": "脚本已删除。",
   "settings.pp.toggled": "脚本{{state}}。",
   "settings.plugins": "插件",
+  "settings.scripts": "脚本",
   "settings.pluginsRefresh": "刷新注册表",
   "settings.pluginAutoUpdateEnabled": "自动更新插件补丁",
   "settings.pluginAutoUpdateEnabledHelp":

@@ -1298,6 +1298,7 @@ const ja: LocaleDictionary = {
   "settings.pp.deleted": "スクリプトが削除されました。",
   "settings.pp.toggled": "スクリプト {{state}}。",
   "settings.plugins": "プラグイン",
+  "settings.scripts": "スクリプト",
   "settings.pluginsRefresh": "レジストリを更新",
   "settings.pluginAutoUpdateEnabled": "プラグインのパッチを自動更新",
   "settings.pluginAutoUpdateEnabledHelp":

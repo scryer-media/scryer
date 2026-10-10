@@ -1326,6 +1326,7 @@ const de: LocaleDictionary = {
     "Inline-Nachbearbeitungsskripte laufen nach Importen über die Server-Shell. Speichere nur Skripte, die du geprüft hast und denen du vertraust.",
   "settings.pp.inlineShellConfirm": "Inline-Shell erlauben",
   "settings.plugins": "Plugins",
+  "settings.scripts": "Skripte",
   "settings.pluginsRefresh": "Registry aktualisieren",
   "settings.pluginAutoUpdateEnabled": "Plugin-Patches automatisch aktualisieren",
   "settings.pluginAutoUpdateEnabledHelp":

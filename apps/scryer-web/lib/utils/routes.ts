@@ -75,6 +75,7 @@ export function canAccessSettingsSection(
     case "proxies":
     case "acquisition":
     case "plugins":
+    case "scripts":
     case "notifications":
       return canManageSystemSettings;
     case "qualityProfiles":

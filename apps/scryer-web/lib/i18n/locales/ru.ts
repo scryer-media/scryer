@@ -2614,6 +2614,7 @@ const ru: LocaleDictionary = {
     "settings.pp.inlineShellConfirm": "Разрешить встроенный shell-скрипт",
 
     "settings.plugins": "Плагины",
+    "settings.scripts": "Скрипты",
     "settings.pluginsSection": "Управление плагинами",
     "settings.pluginRuntimeMemoryEstimate":
         "Оценочное использование памяти плагинами во время выполнения",

@@ -57,6 +57,7 @@ import {
   Wrench,
   ShieldCheck,
   SlidersHorizontal,
+  SquareTerminal,
   Sun,
   Tag,
   TextSearch,
@@ -291,6 +292,7 @@ const DEFAULT_SETTINGS_SECTION_ORDER: SettingsSection[] = [
   "delayProfiles",
   "titleTags",
   "plugins",
+  "scripts",
   "listProviderApps",
 ];
 const MEDIA_NAV_VIEW_IDS: ViewId[] = ["movies", "series", "anime"];
@@ -442,6 +444,12 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {
+    id: "scripts",
+    label: (t) => t("settings.scripts"),
+    icon: SquareTerminal,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
+  },
+  {
     id: "notifications",
     label: (t) => t("settings.notifications"),
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
@@ -474,6 +482,7 @@ const SETTINGS_NAV_GROUPS: Array<{
       "delayProfiles",
       "titleTags",
       "plugins",
+      "scripts",
       "listProviderApps",
     ],
   },

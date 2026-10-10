@@ -1315,6 +1315,7 @@ const pt_BR: LocaleDictionary = {
   "settings.pp.deleted": "Roteiro excluído.",
   "settings.pp.toggled": "Roteiro {{state}}.",
   "settings.plugins": "Plugins",
+  "settings.scripts": "Scripts",
   "settings.pluginsRefresh": "Atualizar registro",
   "settings.pluginAutoUpdateEnabled": "Atualizar automaticamente os patches de plugins",
   "settings.pluginAutoUpdateEnabledHelp":

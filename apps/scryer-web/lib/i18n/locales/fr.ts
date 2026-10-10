@@ -1329,6 +1329,7 @@ const fr: LocaleDictionary = {
   "settings.pp.deleted": "Script supprimé.",
   "settings.pp.toggled": "Script {{state}}.",
   "settings.plugins": "Plugins",
+  "settings.scripts": "Scripts",
   "settings.pluginsRefresh": "Actualiser le registre",
   "settings.pluginAutoUpdateEnabled": "Mettre à jour automatiquement les correctifs des plugins",
   "settings.pluginAutoUpdateEnabledHelp":

@@ -2509,6 +2509,7 @@ const en: LocaleDictionary = {
   "settings.pp.inlineShellConfirm": "Allow inline shell",
 
   "settings.plugins": "Plugins",
+  "settings.scripts": "Scripts",
   "settings.pluginRuntimeMemoryEstimate":
     "Estimated plugin runtime memory usage",
   "settings.pluginsRefresh": "Refresh Catalog",
@@ -5862,7 +5863,7 @@ const en: LocaleDictionary = {
   "script.editor.jobNamePlaceholder": "e.g. Nightly cleanup",
   "script.editor.inline": "Inline",
   "script.editor.language": "Language",
-  "script.editor.languageHelp": "The interpreter that runs the script. Set interpreter paths in Settings > Post-processing.",
+  "script.editor.languageHelp": "The interpreter that runs the script. Set interpreter paths in Settings > Scripts.",
   "script.editor.inlineHelp": "The script runs with the language selected above.",
   "script.editor.filePathHelp": "Absolute path to a script on the Scryer host.",
   "script.editor.selectFile": "Select script file",

@@ -77,6 +77,7 @@ test("canonical route families resolve to typed application state", () => {
     "/settings/quality-profiles",
     "/settings/delay-profiles",
     "/settings/plugins",
+    "/settings/scripts",
     "/system",
     "/system/jobs",
     "/system/recycle-bin",

@@ -20,6 +20,7 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  SquareTerminal,
   TextSearch,
   Trash2,
   User,
@@ -561,6 +562,14 @@ export function buildRouteCommands({
           keywords: ["settings", "plugins", "wasm", "extensions"],
           icon: Puzzle,
           onSelect: buildNavigate(onNavigate, "settings", "plugins"),
+        } satisfies RouteCommand, {
+          id: "settings-scripts",
+          label: `${settingsGroupLabel} / ${t("settings.scripts")}`,
+          description: t("settings.scriptInterpreters.title"),
+          groupLabel: settingsGroupLabel,
+          keywords: ["settings", "scripts", "interpreters", "python", "powershell", "batch", "go"],
+          icon: SquareTerminal,
+          onSelect: buildNavigate(onNavigate, "settings", "scripts"),
         } satisfies RouteCommand]
       : []),
     ...(canAccessRecycleBin

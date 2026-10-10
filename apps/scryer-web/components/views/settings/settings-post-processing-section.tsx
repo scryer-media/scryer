@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   ChevronDown,
   ChevronRight,
-  Cpu,
   Edit,
   Plus,
   Power,
@@ -11,11 +10,8 @@ import {
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { FacetTags } from "@/components/common/facet-select";
-import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { LazyCodeEditor } from "@/components/common/lazy-code-editor";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { ScriptEditorForm } from "@/components/common/script-editor-form";
@@ -33,7 +29,6 @@ import type {
   PPScript,
   PPScriptDraft,
   PPScriptRun,
-  ScriptInterpreterDraft,
 } from "@/components/containers/settings/settings-post-processing-container";
 import { selectorId } from "@/lib/utils/dom-ids";
 
@@ -55,11 +50,6 @@ type SettingsPostProcessingSectionProps = {
   setExpandedScriptId: (id: string | null) => void;
   scriptRuns: Record<string, PPScriptRun[]>;
   loadRunsForScript: (scriptId: string) => Promise<void> | void;
-  interpreterDraft: ScriptInterpreterDraft;
-  setInterpreterDraft: React.Dispatch<React.SetStateAction<ScriptInterpreterDraft>>;
-  interpretersDirty: boolean;
-  interpretersSaving: boolean;
-  saveInterpreters: () => Promise<void> | void;
 };
 
 export const SettingsPostProcessingSection = React.memo(
@@ -81,11 +71,6 @@ export const SettingsPostProcessingSection = React.memo(
     setExpandedScriptId,
     scriptRuns,
     loadRunsForScript,
-    interpreterDraft,
-    setInterpreterDraft,
-    interpretersDirty,
-    interpretersSaving,
-    saveInterpreters,
   }: SettingsPostProcessingSectionProps) {
     const t = useTranslate();
 
@@ -300,14 +285,6 @@ export const SettingsPostProcessingSection = React.memo(
           </div>
           <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">
 
-        <ScriptInterpretersCard
-          draft={interpreterDraft}
-          setDraft={setInterpreterDraft}
-          isDirty={interpretersDirty}
-          isSaving={interpretersSaving}
-          onSave={saveInterpreters}
-        />
-
         {/* Environment Variables Reference */}
         <EnvVarsReference />
           </div>
@@ -316,85 +293,6 @@ export const SettingsPostProcessingSection = React.memo(
     );
   },
 );
-
-const INTERPRETER_FIELDS: ReadonlyArray<{
-  key: keyof ScriptInterpreterDraft;
-  placeholder: string;
-}> = [
-  { key: "python", placeholder: "/usr/bin/python3" },
-  { key: "powershell", placeholder: "/usr/bin/pwsh" },
-  { key: "batch", placeholder: "C:\\Windows\\System32\\cmd.exe" },
-  { key: "go", placeholder: "/usr/local/go/bin/go" },
-];
-
-function ScriptInterpretersCard({
-  draft,
-  setDraft,
-  isDirty,
-  isSaving,
-  onSave,
-}: {
-  draft: ScriptInterpreterDraft;
-  setDraft: React.Dispatch<React.SetStateAction<ScriptInterpreterDraft>>;
-  isDirty: boolean;
-  isSaving: boolean;
-  onSave: () => Promise<void> | void;
-}) {
-  const t = useTranslate();
-  return (
-    <Card id="settings-script-interpreters">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Cpu className="h-4 w-4" />
-          {t("settings.scriptInterpreters.title")}
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.scriptInterpreters.description")}
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        <form
-          className="space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void onSave();
-          }}
-        >
-          {INTERPRETER_FIELDS.map(({ key, placeholder }) => (
-            <label key={key} className="block">
-              <Label className="mb-2 block">{t(`settings.scriptInterpreters.${key}`)}</Label>
-              <Input
-                id={`settings-script-interpreter-${key}`}
-                value={draft[key]}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, [key]: event.target.value }))
-                }
-                className="font-[var(--font-code)]"
-                placeholder={placeholder}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
-          ))}
-          <p className="text-xs text-muted-foreground">
-            {t("settings.scriptInterpreters.containerHelp")}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {t("settings.scriptInterpreters.powershellHelp")}
-          </p>
-          <Button
-            id="settings-script-interpreters-save"
-            type="submit"
-            size="sm"
-            disabled={isSaving || !isDirty}
-          >
-            {isSaving ? t("label.saving") : t("label.save")}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
 
 const ENV_METADATA_EXAMPLE = `{
   "event": "post_import",

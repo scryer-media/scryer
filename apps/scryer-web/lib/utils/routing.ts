@@ -34,6 +34,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   maintenanceRules: "maintenance-rules",
   requestRules: "request-rules",
   plugins: "plugins",
+  scripts: "scripts",
   listProviderApps: "lists/provider-apps",
   notifications: "notifications",
   "post-processing": "post-processing",
@@ -449,6 +450,7 @@ const LOCAL_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   "title-tags": "titleTags",
   titletags: "titleTags",
   plugins: "plugins",
+  scripts: "scripts",
 };
 const SYSTEM_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   users: "users",

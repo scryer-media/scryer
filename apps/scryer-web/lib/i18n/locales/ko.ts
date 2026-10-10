@@ -1277,6 +1277,7 @@ const ko: LocaleDictionary = {
   "settings.pp.deleted": "스크립트가 삭제되었습니다.",
   "settings.pp.toggled": "스크립트 {{state}}.",
   "settings.plugins": "플러그인",
+  "settings.scripts": "스크립트",
   "settings.pluginsRefresh": "레지스트리 새로고침",
   "settings.pluginAutoUpdateEnabled": "플러그인 패치 자동 업데이트",
   "settings.pluginAutoUpdateEnabledHelp":

@@ -2127,6 +2127,7 @@ const nl: LocaleDictionary = {
   "settings.pp.inlineShellConfirm": "Inline shell toestaan",
 
   "settings.plugins": "Plugins",
+  "settings.scripts": "Scripts",
   "settings.pluginRuntimeMemoryEstimate":
     "Geschat geheugengebruik tijdens plugin runtime",
   "settings.pluginsRefresh": "Catalogus vernieuwen",
