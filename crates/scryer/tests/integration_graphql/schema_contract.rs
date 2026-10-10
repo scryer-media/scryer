@@ -1100,10 +1100,24 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // INPUT_OBJECT 236->239, ENUM 182->187. `CUSTOM_JOB` is a value on the
     // existing job-key enum and `customJobId` an additive field, so scheduled
     // scripts as jobs add no type.
-    assert_eq!(public_types.len(), 954);
+    // Stringly-typed 0.21.15 fields became enums: public types 954->962,
+    // ENUM 187->195. No object, input, or root field was added.
+    for name in [
+        "UserListAccountStatusValue",
+        "ListAccountPollStatusValue",
+        "PasskeyImpactValue",
+        "ConfigValueSourceValue",
+        "PasskeyRelyingPartySourceValue",
+        "PublicUrlErrorCodeValue",
+        "DownloadPasswordFailureCodeValue",
+        "CanonicalTagCategoryValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert_eq!(public_types.len(), 962);
     assert_eq!(kind_count("OBJECT"), 516);
     assert_eq!(kind_count("INPUT_OBJECT"), 239);
-    assert_eq!(kind_count("ENUM"), 187);
+    assert_eq!(kind_count("ENUM"), 195);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
