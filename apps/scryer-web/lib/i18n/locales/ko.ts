@@ -1263,6 +1263,8 @@ const ko: LocaleDictionary = {
     "우선순위로 실행됩니다. 다음 스크립트는 이 스크립트가 완료될 때까지 기다립니다.",
   "settings.pp.executionMode": "실행 모드",
   "settings.pp.timeout": "시간 초과(초)",
+  "settings.pp.timeoutLabel": "시간 초과",
+  "settings.pp.timeoutSuffix": "초",
   "settings.pp.priority": "우선순위",
   "settings.pp.priorityHelp": "낮은 숫자가 먼저 실행됩니다.",
   "settings.pp.facets": "적용 대상",

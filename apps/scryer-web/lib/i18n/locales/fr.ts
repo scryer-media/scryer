@@ -1315,6 +1315,8 @@ const fr: LocaleDictionary = {
     "S'exécute par ordre de priorité. Le script suivant attend que celui-ci se termine.",
   "settings.pp.executionMode": "Mode d'exécution",
   "settings.pp.timeout": "Délai d'expiration (secondes)",
+  "settings.pp.timeoutLabel": "Délai d'expiration",
+  "settings.pp.timeoutSuffix": "secondes",
   "settings.pp.priority": "Priorité",
   "settings.pp.priorityHelp": "Le numéro inférieur s'exécute en premier.",
   "settings.pp.facets": "S'applique à",

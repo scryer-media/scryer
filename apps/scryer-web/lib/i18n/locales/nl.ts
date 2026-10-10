@@ -2099,6 +2099,8 @@ const nl: LocaleDictionary = {
     "Draait op de achtergrond zonder import te blokkeren. Output kan nog steeds worden vastgelegd indien ingeschakeld.",
   "settings.pp.executionMode": "Uitvoeringsmodus",
   "settings.pp.timeout": "Timeout (seconden)",
+  "settings.pp.timeoutLabel": "Timeout",
+  "settings.pp.timeoutSuffix": "seconden",
   "settings.pp.priority": "Prioriteit",
   "settings.pp.priorityHelp": "Lager nummer draait eerst.",
   "settings.pp.facets": "Geldt voor",

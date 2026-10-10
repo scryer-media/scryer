@@ -1303,6 +1303,8 @@ const de: LocaleDictionary = {
     "Wird in Prioritätsreihenfolge ausgeführt. Das nächste Skript wartet darauf, dass dieses beendet wird.",
   "settings.pp.executionMode": "Ausführungsmodus",
   "settings.pp.timeout": "Timeout (Sekunden)",
+  "settings.pp.timeoutLabel": "Timeout",
+  "settings.pp.timeoutSuffix": "Sekunden",
   "settings.pp.priority": "Priorität",
   "settings.pp.priorityHelp": "Die niedrigere Nummer wird zuerst ausgeführt.",
   "settings.pp.facets": "Gilt für",

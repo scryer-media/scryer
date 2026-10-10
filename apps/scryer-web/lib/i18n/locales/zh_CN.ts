@@ -1219,6 +1219,8 @@ const zh_CN: LocaleDictionary = {
   "settings.pp.blockingHelp": "按优先顺序运行。下一个脚本等待此脚本完成。",
   "settings.pp.executionMode": "执行模式",
   "settings.pp.timeout": "超时（秒）",
+  "settings.pp.timeoutLabel": "超时",
+  "settings.pp.timeoutSuffix": "秒",
   "settings.pp.priority": "优先级",
   "settings.pp.priorityHelp": "数字较小的先运行。",
   "settings.pp.facets": "适用于",

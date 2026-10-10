@@ -2,6 +2,7 @@ import * as React from "react";
 import { FolderOpen } from "lucide-react";
 
 import { FacetSelect } from "@/components/common/facet-select";
+import { InfoHelp } from "@/components/common/info-help";
 import { LazyCodeEditor, type CodeEditorLanguage } from "@/components/common/lazy-code-editor";
 import { ScriptScheduleEditor } from "@/components/common/script-schedule-editor";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
@@ -75,6 +76,7 @@ export function ScriptEditorForm({
   const contentIds = ids("content", "script-content");
   const pathIds = ids("path", "script-path");
   const timeoutIds = ids("timeout", "timeout");
+  const priorityId = `${legacyIdPrefix ?? "script-editor"}-priority`;
   const debugIds = ids("debug", "debug");
   const saveIds = ids("save", "save");
   const cancelIds = ids("cancel", "cancel");
@@ -267,25 +269,40 @@ export function ScriptEditorForm({
         {/* Timeout + Priority (only for blocking; priority only after imports) */}
         {draft.executionMode === "BLOCKING" ? (
           <div className="grid gap-3 md:grid-cols-2">
-            <label id={timeoutIds.wrapper}>
-              <Label className="mb-2 block">{t("settings.pp.timeout")}</Label>
-              <Input
-                id={timeoutIds.control}
-                {...integerInputProps}
-                value={draft.timeoutSecs}
-                onChange={(e) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    timeoutSecs: Number(sanitizeDigits(e.target.value)) || 0,
-                  }))
-                }
-              />
-            </label>
-            {isScheduled ? null : (
-              <label>
-                <Label className="mb-2 block">{t("settings.pp.priority")}</Label>
+            <div id={timeoutIds.wrapper}>
+              {/* The same label row on both fields keeps their inputs level. */}
+              <div className="mb-1.5 flex h-5 items-center">
+                <Label htmlFor={timeoutIds.control}>{t("settings.pp.timeoutLabel")}</Label>
+              </div>
+              <div className="relative">
                 <Input
-                  id={`${legacyIdPrefix ?? "script-editor"}-priority`}
+                  id={timeoutIds.control}
+                  {...integerInputProps}
+                  className="pr-20"
+                  value={draft.timeoutSecs}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      timeoutSecs: Number(sanitizeDigits(e.target.value)) || 0,
+                    }))
+                  }
+                />
+                <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                  {t("settings.pp.timeoutSuffix")}
+                </span>
+              </div>
+            </div>
+            {isScheduled ? null : (
+              <div>
+                <div className="mb-1.5 flex h-5 items-center gap-1.5">
+                  <Label htmlFor={priorityId}>{t("settings.pp.priority")}</Label>
+                  <InfoHelp
+                    text={t("settings.pp.priorityHelp")}
+                    ariaLabel={t("settings.pp.priority")}
+                  />
+                </div>
+                <Input
+                  id={priorityId}
                   {...integerInputProps}
                   value={draft.priority}
                   onChange={(e) =>
@@ -295,8 +312,7 @@ export function ScriptEditorForm({
                     }))
                   }
                 />
-                <p className="mt-1 text-xs text-muted-foreground">{t("settings.pp.priorityHelp")}</p>
-              </label>
+              </div>
             )}
           </div>
         ) : null}

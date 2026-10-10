@@ -2586,6 +2586,8 @@ const ru: LocaleDictionary = {
         "Запускается в фоне, не блокируя импорт. Вывод при этом всё равно может сохраняться, если эта функция включена.",
     "settings.pp.executionMode": "Режим выполнения",
     "settings.pp.timeout": "Тайм-аут (секунды)",
+    "settings.pp.timeoutLabel": "Тайм-аут",
+    "settings.pp.timeoutSuffix": "секунды",
     "settings.pp.priority": "Приоритет",
     "settings.pp.priorityHelp": "Меньшее число выполняется раньше.",
     "settings.pp.facets": "Применяется к",

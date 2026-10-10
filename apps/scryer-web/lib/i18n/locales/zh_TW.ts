@@ -1999,6 +1999,8 @@ const zh_TW: LocaleDictionary = {
   "settings.pp.fireAndForgetHelp": "在背景執行而不阻擋匯入流程。若有啟用，輸出仍會被擷取。",
   "settings.pp.executionMode": "執行模式",
   "settings.pp.timeout": "超時（秒）",
+  "settings.pp.timeoutLabel": "超時",
+  "settings.pp.timeoutSuffix": "秒",
   "settings.pp.priority": "優先順序",
   "settings.pp.priorityHelp": "數字較小的先執行。",
   "settings.pp.facets": "適用於",

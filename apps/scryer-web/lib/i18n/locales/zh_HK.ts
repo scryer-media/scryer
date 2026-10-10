@@ -1999,6 +1999,8 @@ const zh_HK: LocaleDictionary = {
   "settings.pp.fireAndForgetHelp": "在背景執行而不阻擋導入流程。若有啟用，輸出仍會被捕獲。",
   "settings.pp.executionMode": "執行模式",
   "settings.pp.timeout": "超時（秒）",
+  "settings.pp.timeoutLabel": "超時",
+  "settings.pp.timeoutSuffix": "秒",
   "settings.pp.priority": "優先級",
   "settings.pp.priorityHelp": "數字較小的先運行。",
   "settings.pp.facets": "適用於",

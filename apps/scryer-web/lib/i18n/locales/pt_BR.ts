@@ -1301,6 +1301,8 @@ const pt_BR: LocaleDictionary = {
     "Funciona em ordem de prioridade. O próximo script espera que este termine.",
   "settings.pp.executionMode": "Modo de execução",
   "settings.pp.timeout": "Tempo limite (segundos)",
+  "settings.pp.timeoutLabel": "Tempo limite",
+  "settings.pp.timeoutSuffix": "segundos",
   "settings.pp.priority": "Prioridade",
   "settings.pp.priorityHelp": "O número mais baixo é executado primeiro.",
   "settings.pp.facets": "Aplica-se a",

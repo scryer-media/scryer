@@ -1284,6 +1284,8 @@ const ja: LocaleDictionary = {
     "優先順位に従って実行されます。次のスクリプトは、このスクリプトが完了するまで待機します。",
   "settings.pp.executionMode": "実行モード",
   "settings.pp.timeout": "タイムアウト (秒)",
+  "settings.pp.timeoutLabel": "タイムアウト",
+  "settings.pp.timeoutSuffix": "秒",
   "settings.pp.priority": "優先度",
   "settings.pp.priorityHelp": "小さい番号が最初に実行されます。",
   "settings.pp.facets": "適用対象",
