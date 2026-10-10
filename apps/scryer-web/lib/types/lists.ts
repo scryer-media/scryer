@@ -20,6 +20,9 @@ export type ListMembershipState =
   | "DISCOVER"
   | "PENDING";
 export type ListFilterKind =
+  | "MONITOR_SPECIALS"
+  | "FILLER_POLICY"
+  | "RECAP_POLICY"
   | "RATINGS"
   | "EXCLUDE_CANONICAL_TAGS"
   | "RATING_AT_LEAST"

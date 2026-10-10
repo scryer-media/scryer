@@ -251,6 +251,12 @@ impl ListMembershipStateValue {
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(name = "ListFilterKind", rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ListFilterKindValue {
+    /// Existing specials monitoring policy for new Series or Anime titles.
+    MonitorSpecials,
+    /// Existing Anime filler policy: DOWNLOAD_ALL or SKIP_FILLER in values.
+    FillerPolicy,
+    /// Existing Anime recap policy: DOWNLOAD_ALL or SKIP_RECAP in values.
+    RecapPolicy,
     /// Per-facet rating minimums, matching all sources or at least one source.
     Ratings,
     /// Exclude titles matching selected canonical genre or theme keys in a facet.

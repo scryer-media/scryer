@@ -6,6 +6,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleTagDefinition } from "@/lib/types/title-tags";
 import type { ListRoute, ListFilter } from "@/lib/types/lists";
 import { ListFacetFilters } from "./list-facet-filters";
+import { ListEpisodePolicyFields } from "./list-episode-policy-fields";
 import type { Facet, LibraryRecord } from "@/lib/types/titles";
 import { listKindLabelKey } from "@/lib/utils/lists";
 import { facetById } from "@/lib/facets/registry";
@@ -191,6 +192,7 @@ export function ListRouteCard({
           </div> : null}
           </div>
           <ListFacetFilters facet={kind} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
+          <ListEpisodePolicyFields facet={kind} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
         </fieldset>
       </CollapsibleContent>
     </Collapsible>

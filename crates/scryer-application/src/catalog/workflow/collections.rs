@@ -413,20 +413,19 @@ impl AppUseCase {
             }
         }
 
-        let monitor_specials = if title.facet == MediaFacet::Anime {
-            // Per-title tag overrides global setting
-            if let Some(per_title) = extract_tag_bool(&title.tags, "scryer:monitor-specials:") {
-                per_title
-            } else {
-                self.resolve_library_bool_setting(
-                    "anime.monitor_specials",
-                    Some(&title.library_id),
-                    Some(title.facet.as_str()),
-                    false,
-                )
-                .await
-                .unwrap_or(false)
-            }
+        let monitor_specials = if title.facet != MediaFacet::Movie
+            && let Some(per_title) = extract_tag_bool(&title.tags, "scryer:monitor-specials:")
+        {
+            per_title
+        } else if title.facet == MediaFacet::Anime {
+            self.resolve_library_bool_setting(
+                "anime.monitor_specials",
+                Some(&title.library_id),
+                Some(title.facet.as_str()),
+                false,
+            )
+            .await
+            .unwrap_or(false)
         } else {
             false
         };

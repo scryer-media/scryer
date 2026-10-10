@@ -287,6 +287,21 @@ fn from_filter(filter: ListFilter) -> ListFilterPayload {
         values: Vec::new(),
     };
     match filter {
+        ListFilter::MonitorSpecials { facet, enabled } => ListFilterPayload {
+            facet: Some(MediaFacetValue::from_domain(facet)),
+            values: vec![enabled.to_string()],
+            ..empty(ListFilterKindValue::MonitorSpecials)
+        },
+        ListFilter::FillerPolicy { facet, skip } => ListFilterPayload {
+            facet: Some(MediaFacetValue::from_domain(facet)),
+            values: vec![if skip { "SKIP_FILLER" } else { "DOWNLOAD_ALL" }.into()],
+            ..empty(ListFilterKindValue::FillerPolicy)
+        },
+        ListFilter::RecapPolicy { facet, skip } => ListFilterPayload {
+            facet: Some(MediaFacetValue::from_domain(facet)),
+            values: vec![if skip { "SKIP_RECAP" } else { "DOWNLOAD_ALL" }.into()],
+            ..empty(ListFilterKindValue::RecapPolicy)
+        },
         ListFilter::Ratings {
             facet,
             match_any,
@@ -354,6 +369,49 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
             .collect::<Vec<_>>()
     };
     Ok(match input.kind {
+        ListFilterKindValue::MonitorSpecials
+        | ListFilterKindValue::FillerPolicy
+        | ListFilterKindValue::RecapPolicy => {
+            let facet = input
+                .facet
+                .ok_or_else(|| AppError::Validation("episode policies need a facet".into()))?
+                .into_domain();
+            let selected = values();
+            if selected.len() != 1 || facet == MediaFacet::Movie {
+                return Err(AppError::Validation(
+                    "episode policies need one value and a series or anime facet".into(),
+                ));
+            }
+            match (input.kind, facet.clone(), selected[0].as_str()) {
+                (ListFilterKindValue::MonitorSpecials, _, "true" | "false") => {
+                    ListFilter::MonitorSpecials {
+                        facet,
+                        enabled: selected[0] == "true",
+                    }
+                }
+                (
+                    ListFilterKindValue::FillerPolicy,
+                    MediaFacet::Anime,
+                    "DOWNLOAD_ALL" | "SKIP_FILLER",
+                ) => ListFilter::FillerPolicy {
+                    facet,
+                    skip: selected[0] == "SKIP_FILLER",
+                },
+                (
+                    ListFilterKindValue::RecapPolicy,
+                    MediaFacet::Anime,
+                    "DOWNLOAD_ALL" | "SKIP_RECAP",
+                ) => ListFilter::RecapPolicy {
+                    facet,
+                    skip: selected[0] == "SKIP_RECAP",
+                },
+                _ => {
+                    return Err(AppError::Validation(
+                        "invalid episode policy for this facet".into(),
+                    ));
+                }
+            }
+        }
         ListFilterKindValue::Ratings => {
             let facet = input
                 .facet
@@ -459,6 +517,67 @@ fn routes_from_input(routes: Vec<ListRouteInput>) -> Result<Vec<ListRoute>, AppE
 
 pub fn filters_from_input(filters: Vec<ListFilterInput>) -> Result<Vec<ListFilter>, AppError> {
     filters.into_iter().map(filter_from_input).collect()
+}
+
+#[cfg(test)]
+mod episode_policy_tests {
+    use super::*;
+
+    #[test]
+    fn list_episode_policy_transport_round_trips_and_rejects_invalid_facets() {
+        for filter in [
+            ListFilter::MonitorSpecials {
+                facet: MediaFacet::Series,
+                enabled: false,
+            },
+            ListFilter::MonitorSpecials {
+                facet: MediaFacet::Anime,
+                enabled: true,
+            },
+            ListFilter::FillerPolicy {
+                facet: MediaFacet::Anime,
+                skip: true,
+            },
+            ListFilter::RecapPolicy {
+                facet: MediaFacet::Anime,
+                skip: false,
+            },
+        ] {
+            let payload = from_filter(filter.clone());
+            let input = ListFilterInput {
+                facet: payload.facet,
+                kind: payload.kind,
+                values: payload.values,
+                match_any: false,
+                minimums: vec![],
+                unresolved_labels: vec![],
+                scale: None,
+                value: None,
+                from: None,
+                to: None,
+            };
+            assert_eq!(filter_from_input(input.clone()).unwrap(), filter);
+            assert!(
+                filter_from_input(ListFilterInput {
+                    facet: Some(MediaFacetValue::Movie),
+                    ..input.clone()
+                })
+                .is_err()
+            );
+            if matches!(
+                filter,
+                ListFilter::FillerPolicy { .. } | ListFilter::RecapPolicy { .. }
+            ) {
+                assert!(
+                    filter_from_input(ListFilterInput {
+                        facet: Some(MediaFacetValue::Series),
+                        ..input
+                    })
+                    .is_err()
+                );
+            }
+        }
+    }
 }
 
 fn from_sync_status(sync: ListSyncStatus) -> ListSyncStatusPayload {

@@ -690,6 +690,10 @@ async fn series_list_with_options(
     list.owner_user_id = owner.id.clone();
     list.mode = mode;
     list.kinds = vec![MediaFacet::Series];
+    list.filters = vec![scryer_domain::ListFilter::MonitorSpecials {
+        facet: MediaFacet::Series,
+        enabled: false,
+    }];
     list.routes = vec![route];
     *harness.lists.subscriptions.lock().unwrap() = vec![list.clone()];
     (list, library_id)
@@ -704,6 +708,7 @@ fn series_item(tvdb_id: u32) -> crate::lists::resolve::ResolvedItem {
 
 fn assert_carries_route_layout(tags: &[String]) {
     for expected in [
+        "scryer:monitor-specials:false",
         "scryer:season-folder:disabled",
         "scryer:release-numbering:alternate",
     ] {

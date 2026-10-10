@@ -10560,6 +10560,18 @@ The kind of one list filter.
 """
 enum ListFilterKind {
 	"""
+	Existing specials monitoring policy for new Series or Anime titles.
+	"""
+	MONITOR_SPECIALS
+	"""
+	Existing Anime filler policy: DOWNLOAD_ALL or SKIP_FILLER in values.
+	"""
+	FILLER_POLICY
+	"""
+	Existing Anime recap policy: DOWNLOAD_ALL or SKIP_RECAP in values.
+	"""
+	RECAP_POLICY
+	"""
 	Per-facet rating minimums, matching all sources or at least one source.
 	"""
 	RATINGS

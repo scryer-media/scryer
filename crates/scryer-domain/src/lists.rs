@@ -219,6 +219,18 @@ pub struct ListRoute {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "filter", rename_all = "snake_case")]
 pub enum ListFilter {
+    MonitorSpecials {
+        facet: MediaFacet,
+        enabled: bool,
+    },
+    FillerPolicy {
+        facet: MediaFacet,
+        skip: bool,
+    },
+    RecapPolicy {
+        facet: MediaFacet,
+        skip: bool,
+    },
     Ratings {
         facet: MediaFacet,
         #[serde(default)]

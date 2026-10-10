@@ -6,8 +6,8 @@
 //! brought in carries the same settings whichever way it arrived.
 
 use scryer_domain::{
-    ListRoute, ListSubscription, MediaFacet, MediaRequest, MediaRequestOrigin, NewTitle,
-    RELEASE_NUMBERING_TAG_PREFIX, ReleaseNumbering,
+    ListFilter, ListRoute, ListSubscription, MediaFacet, MediaRequest, MediaRequestOrigin,
+    NewTitle, RELEASE_NUMBERING_TAG_PREFIX, ReleaseNumbering,
 };
 
 use crate::AppUseCase;
@@ -17,6 +17,92 @@ use crate::media_requests::{
 };
 
 const SEASON_FOLDER_TAG_PREFIX: &str = "scryer:season-folder:";
+
+#[cfg(test)]
+mod episode_policy_tests {
+    use super::*;
+
+    #[test]
+    fn list_episode_policies_reuse_title_overrides_and_keep_facets_isolated() {
+        let filters = vec![
+            ListFilter::MonitorSpecials {
+                facet: MediaFacet::Series,
+                enabled: false,
+            },
+            ListFilter::MonitorSpecials {
+                facet: MediaFacet::Anime,
+                enabled: true,
+            },
+            ListFilter::FillerPolicy {
+                facet: MediaFacet::Anime,
+                skip: true,
+            },
+            ListFilter::RecapPolicy {
+                facet: MediaFacet::Anime,
+                skip: false,
+            },
+        ];
+        assert_eq!(
+            episode_policy_tags(&filters, &MediaFacet::Series),
+            vec!["scryer:monitor-specials:false"]
+        );
+        assert_eq!(
+            episode_policy_tags(&filters, &MediaFacet::Anime),
+            vec![
+                "scryer:filler-policy:skip_filler",
+                "scryer:monitor-specials:true",
+                "scryer:recap-policy:download_all",
+            ]
+        );
+        assert!(episode_policy_tags(&filters, &MediaFacet::Movie).is_empty());
+        assert!(episode_policy_tags(&[], &MediaFacet::Anime).is_empty());
+    }
+
+    #[test]
+    fn list_episode_policy_json_round_trip_preserves_explicit_download_all() {
+        let filters = vec![ListFilter::FillerPolicy {
+            facet: MediaFacet::Anime,
+            skip: false,
+        }];
+        let json = serde_json::to_string(&filters).unwrap();
+        let restored: Vec<ListFilter> = serde_json::from_str(&json).unwrap();
+        assert_eq!(filters, restored);
+        assert_eq!(
+            episode_policy_tags(&restored, &MediaFacet::Anime),
+            vec!["scryer:filler-policy:download_all"]
+        );
+    }
+}
+
+/// Reuse the title overrides consumed by the ordinary metadata hydration and
+/// wanted policies. Absence preserves library inheritance.
+pub(crate) fn episode_policy_tags(filters: &[ListFilter], facet: &MediaFacet) -> Vec<String> {
+    let mut tags = std::collections::BTreeMap::new();
+    for filter in filters {
+        let (scope, prefix, value) = match filter {
+            ListFilter::MonitorSpecials { facet, enabled } => {
+                (facet, "scryer:monitor-specials:", enabled.to_string())
+            }
+            ListFilter::FillerPolicy { facet, skip } if *facet == MediaFacet::Anime => (
+                facet,
+                "scryer:filler-policy:",
+                if *skip { "skip_filler" } else { "download_all" }.into(),
+            ),
+            ListFilter::RecapPolicy { facet, skip } if *facet == MediaFacet::Anime => (
+                facet,
+                "scryer:recap-policy:",
+                if *skip { "skip_recap" } else { "download_all" }.into(),
+            ),
+            _ => continue,
+        };
+        if scope == facet && *facet != MediaFacet::Movie {
+            tags.insert(prefix, value);
+        }
+    }
+    tags.into_iter()
+        .map(|(prefix, value)| format!("{prefix}{value}"))
+        .collect()
+}
 
 /// The route's monitor type in the title vocabulary, or `None` when it names
 /// none or one the title cannot carry.
@@ -93,6 +179,17 @@ impl AppUseCase {
         facet: &MediaFacet,
         library_id: &str,
     ) -> Option<ListRoute> {
+        self.list_route_and_filters_for_request(origin, facet, library_id)
+            .await
+            .map(|(route, _)| route)
+    }
+
+    async fn list_route_and_filters_for_request(
+        &self,
+        origin: &MediaRequestOrigin,
+        facet: &MediaFacet,
+        library_id: &str,
+    ) -> Option<(ListRoute, Vec<ListFilter>)> {
         let subscription_id = origin.subscription_id()?;
         match self
             .services
@@ -101,8 +198,10 @@ impl AppUseCase {
             .get_by_id(subscription_id)
             .await
         {
-            Ok(subscription) => subscription
-                .and_then(|subscription| route_for_request(&subscription, facet, library_id)),
+            Ok(subscription) => subscription.and_then(|subscription| {
+                route_for_request(&subscription, facet, library_id)
+                    .map(|route| (route, subscription.filters))
+            }),
             Err(error) => {
                 tracing::warn!(
                     subscription_id,
@@ -160,13 +259,20 @@ impl AppUseCase {
         request: &MediaRequest,
         title: &mut NewTitle,
     ) {
-        let Some(route) = self
-            .list_route_for_request(&request.origin, &request.facet, &request.library_id)
+        let Some((route, filters)) = self
+            .list_route_and_filters_for_request(
+                &request.origin,
+                &request.facet,
+                &request.library_id,
+            )
             .await
         else {
             return;
         };
-        for tag in route_layout_tags(&route) {
+        for tag in route_layout_tags(&route)
+            .into_iter()
+            .chain(episode_policy_tags(&filters, &route.kind))
+        {
             if !title.tags.contains(&tag) {
                 title.tags.push(tag);
             }

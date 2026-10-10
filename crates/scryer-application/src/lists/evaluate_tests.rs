@@ -46,6 +46,47 @@ fn an_exclusion_wins_over_every_other_outcome() {
 }
 
 #[test]
+fn list_episode_policies_filter_special_entries_without_rejecting_whole_series() {
+    let mut item = resolved_item("series");
+    item.kind = Some(MediaFacet::Anime);
+    let specials = ListFilter::MonitorSpecials {
+        facet: MediaFacet::Anime,
+        enabled: false,
+    };
+    assert!(passes(&specials, &item));
+    item.item.season = Some(0);
+    assert!(!passes(&specials, &item));
+    assert!(passes(
+        &ListFilter::MonitorSpecials {
+            facet: MediaFacet::Series,
+            enabled: false
+        },
+        &item
+    ));
+    assert!(passes(
+        &ListFilter::MonitorSpecials {
+            facet: MediaFacet::Anime,
+            enabled: true
+        },
+        &item
+    ));
+    assert!(passes(
+        &ListFilter::FillerPolicy {
+            facet: MediaFacet::Anime,
+            skip: true
+        },
+        &item
+    ));
+    assert!(passes(
+        &ListFilter::RecapPolicy {
+            facet: MediaFacet::Anime,
+            skip: true
+        },
+        &item
+    ));
+}
+
+#[test]
 fn a_list_scoped_exclusion_only_covers_its_own_list() {
     let exclusions = [exclusion_for(
         "alpha",

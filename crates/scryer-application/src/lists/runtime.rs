@@ -277,6 +277,10 @@ impl ListActions for AppListActions<'_> {
         // A new title takes its options from its tags, as the add dialog's
         // titles do; the patch below only reaches a title that already exists.
         let mut tags = route_option_tags(route);
+        tags.extend(super::route_options::episode_policy_tags(
+            &subscription.filters,
+            &route.kind,
+        ));
         tags.extend(route.tags.iter().cloned());
         let request = NewTitle {
             name: item_name(item),

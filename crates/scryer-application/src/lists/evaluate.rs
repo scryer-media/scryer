@@ -259,6 +259,12 @@ pub fn filter_reason(subscription: &ListSubscription, item: &ResolvedItem) -> Op
 fn passes(filter: &ListFilter, item: &ResolvedItem) -> bool {
     let facts = item.facts.as_ref();
     match filter {
+        ListFilter::MonitorSpecials { facet, enabled } => {
+            item.kind.as_ref() != Some(facet) || *enabled || item.item.season != Some(0)
+        }
+        // These are the existing per-episode monitoring policies, not a reason
+        // to reject an entire series that contains some filler or recap episodes.
+        ListFilter::FillerPolicy { .. } | ListFilter::RecapPolicy { .. } => true,
         // A rating's scale names the source that rated the item, such as
         // `tmdb` or `imdb`, and its value is on that source's own scale. A
         // filter matches only a rating from the source it names.
@@ -382,6 +388,9 @@ fn rating_passes(
 
 fn filter_label(filter: &ListFilter) -> String {
     match filter {
+        ListFilter::MonitorSpecials { .. } => "specials",
+        ListFilter::FillerPolicy { .. } => "filler",
+        ListFilter::RecapPolicy { .. } => "recap",
         ListFilter::Ratings { .. } => "rating",
         ListFilter::ExcludeCanonicalTags { .. } => "genre",
         ListFilter::RatingAtLeast { .. } => "rating",
