@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
 import { Label } from "@/components/ui/label";
+import { TextActionButton } from "@/components/ui/text-action-button";
 import { RuleSetTestPanel } from "@/components/containers/settings/rule-set-test-panel";
 import {
   Table,
@@ -189,7 +190,7 @@ export function TrackedRulePacksSection({
                     <Checkbox id={autoUpdateId} size="large" checked={pack.autoUpdate} disabled={busy} onCheckedChange={(value) => void onSetAutoUpdate(pack, value === true)} />
                     <Label htmlFor={autoUpdateId} className="sr-only">Auto-update {pack.name}</Label>
                   </div> : <span className="text-xs text-muted-foreground">{pack.autoUpdate ? "On" : "Off"}</span>}</TableCell>
-                  <TableCell className="text-right">{canManage ? <div className="flex justify-end gap-2"><Button id={selectorId("settings-tracked-rule-pack-update", pack.packId)} type="button" variant="secondary" size="sm" disabled={busy} onClick={() => void onPreviewUpdate(pack).then((changes) => { if (changes) setPreview({ pack, changes }); })}><RefreshCw className="mr-2 h-4 w-4" />Check</Button><IconButton id={selectorId("settings-tracked-rule-pack-uninstall", pack.packId)} label={`Uninstall ${pack.name}`} tone="delete" disabled={busy} onClick={() => setPendingUninstall(pack)}><Trash2 className="h-4 w-4" /></IconButton></div> : null}</TableCell>
+                  <TableCell className="text-right">{canManage ? <div className="flex justify-end gap-2"><TextActionButton id={selectorId("settings-tracked-rule-pack-update", pack.packId)} tone="accent" disabled={busy} onClick={() => void onPreviewUpdate(pack).then((changes) => { if (changes) setPreview({ pack, changes }); })} leadingIcon={<RefreshCw className="h-4 w-4" />}>Check</TextActionButton><IconButton id={selectorId("settings-tracked-rule-pack-uninstall", pack.packId)} label={`Uninstall ${pack.name}`} tone="delete" disabled={busy} onClick={() => setPendingUninstall(pack)}><Trash2 className="h-4 w-4" /></IconButton></div> : null}</TableCell>
                 </TableRow>
                 {expanded ? <TableRow id={detailId} data-ui="settings-table-row">
                   <TableCell colSpan={6} className="p-4">
@@ -236,6 +237,7 @@ export function TrackedRulePacksSection({
         description={preview ? `Review changes for ${preview.pack.name} before applying.` : ""}
         confirmLabel="Apply update"
         cancelLabel="Cancel"
+        confirmButtonVariant="primary"
         isBusy={preview !== null && mutatingPackId === preview.pack.packId}
         onCancel={() => setPreview(null)}
         onConfirm={async () => {
