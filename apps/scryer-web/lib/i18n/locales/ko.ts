@@ -1243,7 +1243,7 @@ const ko: LocaleDictionary = {
   "settings.sub.syncMaxOffset": "최대 수정(초)",
   "settings.sub.syncMaxOffsetHelp":
     "이미 충분히 가까운 자막이 손상되는 것을 방지하려면 이 값보다 큰 타이밍 변경을 건너뜁니다.",
-  "settings.postProcessing": "스크립트",
+  "settings.postProcessing": "후처리",
   "settings.pp.title": "후처리 스크립트",
   "settings.pp.description":
     "미디어를 가져온 후 스크립트가 자동으로 실행됩니다. 차단 스크립트는 우선순위에 따라 실행됩니다. Fire-and-forget 스크립트는 가져오기 파이프라인을 지연시키지 않고 병렬로 실행됩니다.",

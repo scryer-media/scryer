@@ -1200,7 +1200,7 @@ const zh_CN: LocaleDictionary = {
   "settings.sub.syncMaxOffset": "最大校正（秒）",
   "settings.sub.syncMaxOffsetHelp":
     "跳过大于此值的时间变化，以避免损坏可能已经足够接近的字幕。",
-  "settings.postProcessing": "脚本",
+  "settings.postProcessing": "后处理",
   "settings.pp.title": "后处理脚本",
   "settings.pp.description":
     "导入媒体后脚本会自动运行。阻塞脚本按优先顺序执行。即发即忘脚本并行运行，不会延迟导入管道。",

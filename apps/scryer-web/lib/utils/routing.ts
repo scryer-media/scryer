@@ -36,13 +36,14 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   plugins: "plugins",
   listProviderApps: "lists/provider-apps",
   notifications: "notifications",
-  "post-processing": "scripts",
+  "post-processing": "post-processing",
   subtitles: "subtitles",
 };
 
 const AUTOMATION_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
   acquisition: "acquisition",
   subtitles: "subtitles",
+  "post-processing": "post-processing",
 };
 
 /// Panes of the Rules page. Scoring, maintenance and request rules all hang off
@@ -404,11 +405,9 @@ const MEDIA_SETTINGS_SECTIONS = new Set<ContentSettingsSection>([
 const AUTOMATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   acquisition: "acquisition",
   subtitles: "subtitles",
+  "post-processing": "post-processing",
+  "post-procesing": "post-processing",
 };
-
-/// Segments that named the Scripts page while it sat under Automation as
-/// Post-Processing. It is a Settings page now, so these redirect.
-const MOVED_SCRIPTS_SEGMENTS = new Set(["post-processing", "post-procesing"]);
 
 /// Segments that used to name a rules page of their own. Maintenance rules are
 /// a pane of the Rules page now, so these redirect rather than resolve.
@@ -450,9 +449,6 @@ const LOCAL_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   "title-tags": "titleTags",
   titletags: "titleTags",
   plugins: "plugins",
-  scripts: "post-processing",
-  "post-processing": "post-processing",
-  "post-procesing": "post-processing",
 };
 const SYSTEM_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   users: "users",
@@ -788,10 +784,6 @@ export function resolveAppRoute(
 
     if (MOVED_MAINTENANCE_RULES_SEGMENTS.has(section)) {
       return redirectTo(buildRulesPath("maintenance"), search, hash);
-    }
-
-    if (MOVED_SCRIPTS_SEGMENTS.has(section) && rawSegments.length === 2) {
-      return redirectTo(buildViewPath("settings", "post-processing"), search, hash);
     }
 
     const settingsSection = AUTOMATION_SETTINGS_BY_SEGMENT[section];

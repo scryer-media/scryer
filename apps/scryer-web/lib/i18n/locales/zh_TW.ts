@@ -1980,7 +1980,7 @@ const zh_TW: LocaleDictionary = {
   "settings.sub.syncPluginInstalled": "已安裝 {{plugin}}",
   "settings.sub.syncPluginLoadFailed": "無法載入外掛程式目錄。",
   "settings.sub.syncPluginInstallFailed": "無法安裝 {{plugin}}：{{error}}",
-  "settings.postProcessing": "指令碼",
+  "settings.postProcessing": "後處理",
   "settings.pp.title": "後處理指令碼",
   "settings.pp.description": "匯入媒體後腳本會自動執行。阻塞指令碼按優先順序執行。即發即忘指令碼並行執行，不會延遲匯入管道。",
   "settings.pp.noScripts": "未配置後處理指令碼。",

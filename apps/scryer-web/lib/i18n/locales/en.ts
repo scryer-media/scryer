@@ -2457,7 +2457,7 @@ const en: LocaleDictionary = {
   "settings.sub.syncPluginLoadFailed": "Could not load the plugin catalog.",
   "settings.sub.syncPluginInstallFailed":
     "Could not install {{plugin}}: {{error}}",
-  "settings.postProcessing": "Scripts",
+  "settings.postProcessing": "Post-Processing",
   "settings.pp.title": "Post-Processing Scripts",
   "settings.pp.description":
     "Scripts run automatically after media is imported. Blocking scripts execute in priority order. Fire-and-forget scripts run in parallel without delaying the import pipeline.",
@@ -5862,7 +5862,7 @@ const en: LocaleDictionary = {
   "script.editor.jobNamePlaceholder": "e.g. Nightly cleanup",
   "script.editor.inline": "Inline",
   "script.editor.language": "Language",
-  "script.editor.languageHelp": "The interpreter that runs the script. Set interpreter paths in Settings > Scripts.",
+  "script.editor.languageHelp": "The interpreter that runs the script. Set interpreter paths in Settings > Post-processing.",
   "script.editor.inlineHelp": "The script runs with the language selected above.",
   "script.editor.filePathHelp": "Absolute path to a script on the Scryer host.",
   "script.editor.selectFile": "Select script file",

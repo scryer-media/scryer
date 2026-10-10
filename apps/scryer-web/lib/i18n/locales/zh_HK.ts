@@ -1980,7 +1980,7 @@ const zh_HK: LocaleDictionary = {
   "settings.sub.syncPluginInstalled": "已安裝 {{plugin}}",
   "settings.sub.syncPluginLoadFailed": "無法載入插件目錄。",
   "settings.sub.syncPluginInstallFailed": "無法安裝 {{plugin}}：{{error}}",
-  "settings.postProcessing": "腳本",
+  "settings.postProcessing": "後處理",
   "settings.pp.title": "後處理腳本",
   "settings.pp.description": "導入媒體後腳本會自動運行。阻塞腳本按優先順序執行。即發即忘腳本並行運行，不會延遲導入管道。",
   "settings.pp.noScripts": "未配置後處理腳本。",

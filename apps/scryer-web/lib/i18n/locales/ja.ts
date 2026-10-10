@@ -1264,7 +1264,7 @@ const ja: LocaleDictionary = {
   "settings.sub.syncMaxOffset": "最大補正時間（秒）",
   "settings.sub.syncMaxOffsetHelp":
     "おそらくすでに十分に近づいている字幕の損傷を避けるために、この値より大きいタイミングの変更をスキップします。",
-  "settings.postProcessing": "スクリプト",
+  "settings.postProcessing": "ポストプロセス",
   "settings.pp.title": "後処理スクリプト",
   "settings.pp.description":
     "メディアがインポートされた後、スクリプトが自動的に実行されます。ブロック スクリプトは優先順位に従って実行されます。 Fire-and-Forget スクリプトは、インポート パイプラインを遅らせることなく並行して実行されます。",

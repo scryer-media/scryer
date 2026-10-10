@@ -2561,7 +2561,7 @@ const ru: LocaleDictionary = {
     "settings.sub.serviceStatus": "Сервис субтитров",
     "settings.sub.serviceStatusAvailable": "Доступен",
     "settings.sub.serviceStatusUnavailable": "Недоступен",
-    "settings.postProcessing": "Скрипты",
+    "settings.postProcessing": "Постобработка",
     "settings.postProcessingSaved": "Скрипт постобработки сохранён.",
     "settings.pp.title": "Скрипты постобработки",
     "settings.pp.description":

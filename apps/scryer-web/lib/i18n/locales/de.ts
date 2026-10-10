@@ -1281,7 +1281,7 @@ const de: LocaleDictionary = {
   "settings.sub.syncMaxOffset": "Maximale Korrektur (Sekunden)",
   "settings.sub.syncMaxOffsetHelp":
     "Überspringen Sie Zeitänderungen, die größer als dieser Wert sind, um eine Beschädigung eines Untertitels zu vermeiden, der wahrscheinlich bereits nah genug dran ist.",
-  "settings.postProcessing": "Skripte",
+  "settings.postProcessing": "Nachbearbeitung",
   "settings.pp.title": "Nachbearbeitungsskripte",
   "settings.pp.description":
     "Skripte werden automatisch ausgeführt, nachdem Medien importiert wurden. Blockierende Skripte werden in der Reihenfolge ihrer Priorität ausgeführt. Fire-and-Forget-Skripte werden parallel ausgeführt, ohne die Importpipeline zu verzögern.",
