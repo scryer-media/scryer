@@ -11,7 +11,7 @@ import { listProviderAppsQuery, updateListProviderAppMutation } from "@/lib/grap
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import type { ListProviderApp } from "@/lib/types/lists";
 
-export function ProviderAppsPanel() {
+export function ProviderAppsPanel({ onChanged }: { onChanged?: () => void }) {
   const client = useClient();
   const t = useTranslate();
   const [apps, setApps] = React.useState<ListProviderApp[] | null>(null);
@@ -37,7 +37,7 @@ export function ProviderAppsPanel() {
       {error ? <div role="alert"><p>{error}</p><Button onClick={() => setRetry((value) => value + 1)}>{t("lists.action.retry")}</Button></div> : null}
       {apps === null && !error ? <p role="status">{t("label.loading")}</p> : null}
       {apps?.filter((app) => ["trakt", "anilist", "mal"].includes(app.provider)).map((app) => (
-        <ProviderAppForm key={app.provider} app={app} onSaved={(saved) => setApps((current) => current?.map((entry) => entry.provider === saved.provider ? saved : entry) ?? null)} />
+        <ProviderAppForm key={app.provider} app={app} onSaved={(saved) => { setApps((current) => current?.map((entry) => entry.provider === saved.provider ? saved : entry) ?? null); onChanged?.(); }} />
       ))}
     </section>
   );

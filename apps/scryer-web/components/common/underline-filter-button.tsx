@@ -18,6 +18,8 @@ type UnderlineFilterButtonProps = Omit<
   /** A short tag after the label, such as one marking the tab as advanced. */
   badge?: string;
   tone?: UnderlineFilterButtonTone;
+  /** `lg` is for a page's main sections rather than a filter over one list. */
+  size?: "md" | "lg";
 };
 
 export const UnderlineFilterButton = React.forwardRef<
@@ -31,6 +33,7 @@ export const UnderlineFilterButton = React.forwardRef<
     count,
     badge,
     tone = "neutral",
+    size = "md",
     className,
     ...buttonProps
   },
@@ -38,6 +41,7 @@ export const UnderlineFilterButton = React.forwardRef<
 ) {
   const ariaLabel = buttonProps["aria-label"] ?? (badge ? `${label} (${badge})` : label);
   const ariaPressed = buttonProps["aria-pressed"] ?? selected;
+  const large = size === "lg";
 
   return (
     <button
@@ -47,10 +51,13 @@ export const UnderlineFilterButton = React.forwardRef<
       aria-label={ariaLabel}
       aria-pressed={ariaPressed}
       className={cn(
-        "relative inline-flex h-10 shrink-0 items-center gap-2 px-3.5 py-2.5 text-[13.5px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]",
+        "relative inline-flex shrink-0 items-center gap-2 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]",
+        large
+          ? "h-12 rounded-t-[10px] px-4 py-3 text-[15.5px]"
+          : "h-10 px-3.5 py-2.5 text-[13.5px]",
         selected
-          ? "text-white"
-          : "text-[var(--scry-muted)] hover:text-[var(--scry-ink2)]",
+          ? cn("text-white", large && "bg-[rgba(var(--scry-accent-rgb),0.14)]")
+          : cn("text-[var(--scry-muted)] hover:text-[var(--scry-ink2)]", large && "hover:bg-[var(--scry-hover)]"),
         className,
       )}
     >
@@ -81,9 +88,10 @@ export const UnderlineFilterButton = React.forwardRef<
       {typeof count === "number" ? (
         <span
           className={cn(
-            "inline-flex min-w-[6ch] justify-center rounded-[6px] px-1.5 py-0.5 text-[11px] font-bold leading-none tabular-nums",
+            "inline-flex justify-center rounded-[6px] font-bold leading-none tabular-nums",
+            large ? "min-w-[3ch] px-2 py-1 text-[12px]" : "min-w-[6ch] px-1.5 py-0.5 text-[11px]",
             selected
-              ? "bg-[rgba(var(--scry-accent-rgb),0.18)] text-[var(--scry-accent-text)]"
+              ? cn("text-[var(--scry-accent-text)]", large ? "bg-[rgba(var(--scry-accent-rgb),0.3)]" : "bg-[rgba(var(--scry-accent-rgb),0.18)]")
               : "bg-[var(--scry-chip)] text-[var(--scry-muted2)]",
           )}
         >
@@ -91,7 +99,12 @@ export const UnderlineFilterButton = React.forwardRef<
         </span>
       ) : null}
       {selected ? (
-        <span className="absolute bottom-[-1px] left-2 right-2 h-[2.5px] rounded-full bg-[var(--scry-accent-ring)]" />
+        <span
+          className={cn(
+            "absolute bottom-[-1px] rounded-full bg-[var(--scry-accent-ring)]",
+            large ? "left-0 right-0 h-[3px]" : "left-2 right-2 h-[2.5px]",
+          )}
+        />
       ) : null}
     </button>
   );

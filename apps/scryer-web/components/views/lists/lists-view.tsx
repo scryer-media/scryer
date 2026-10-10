@@ -50,9 +50,14 @@ export type ListDetailState = {
   error: string | null;
 };
 
+export type ListTabCounts = Partial<Record<ListsSection, number>>;
+
 type ListsViewProps = {
   section: ListsSection;
   onSectionChange: (section: ListsSection) => void;
+  /** How many entries each section holds; a section not counted yet is absent. */
+  tabCounts: ListTabCounts;
+  onProviderAppsChanged: () => void;
   canManageLists: boolean;
   experimentalFeaturesEnabled: boolean;
   canManageProviderApps: boolean;
@@ -101,6 +106,7 @@ export function ListsView(props: ListsViewProps) {
   const {
     section,
     onSectionChange,
+    tabCounts,
     canManageLists,
     loading,
     loadError,
@@ -203,37 +209,59 @@ export function ListsView(props: ListsViewProps) {
         </div>
 
         <div className="flex flex-wrap items-end gap-3 border-b border-[var(--scry-border3)]">
-          <div role="tablist" aria-label={t("nav.lists")} className="relative top-px flex min-h-10 flex-wrap gap-x-5">
+          <div role="tablist" aria-label={t("nav.lists")} className="relative top-px flex min-h-12 flex-wrap gap-x-2">
             <UnderlineFilterButton
               id="lists-tab-public"
               role="tab"
+              size="lg"
               aria-selected={section === "public"}
               selected={section === "public"}
               label={t("lists.tab.public")}
-              count={section === "public" ? subscriptions.length : undefined}
+              count={tabCounts.public}
               onClick={() => onSectionChange("public")}
             />
             {props.experimentalFeaturesEnabled ? (
-              <UnderlineFilterButton id="lists-tab-personal" role="tab" aria-selected={section === "personal"} selected={section === "personal"} label={t("lists.tab.personal")} count={section === "personal" ? subscriptions.length : undefined} onClick={() => onSectionChange("personal")} />
-            ) : null}
-            {props.experimentalFeaturesEnabled && props.canManageProviderApps ? (
-              <UnderlineFilterButton id="lists-tab-provider-apps" role="tab" aria-selected={section === "providerApps"} selected={section === "providerApps"} label={t("lists.providerApps.heading")} badge={t("label.advanced")} onClick={() => onSectionChange("providerApps")} />
+              <UnderlineFilterButton
+                id="lists-tab-personal"
+                role="tab"
+                size="lg"
+                aria-selected={section === "personal"}
+                selected={section === "personal"}
+                label={t("lists.tab.personal")}
+                count={tabCounts.personal}
+                onClick={() => onSectionChange("personal")}
+              />
             ) : null}
             {canManageLists ? (
               <UnderlineFilterButton
                 id="lists-tab-exclusions"
                 role="tab"
+                size="lg"
                 aria-selected={section === "exclusions"}
                 selected={section === "exclusions"}
                 label={t("lists.tab.exclusions")}
+                count={tabCounts.exclusions}
                 onClick={() => onSectionChange("exclusions")}
+              />
+            ) : null}
+            {props.experimentalFeaturesEnabled && props.canManageProviderApps ? (
+              <UnderlineFilterButton
+                id="lists-tab-provider-apps"
+                role="tab"
+                size="lg"
+                aria-selected={section === "providerApps"}
+                selected={section === "providerApps"}
+                label={t("lists.providerApps.heading")}
+                badge={t("label.advanced")}
+                count={tabCounts.providerApps}
+                onClick={() => onSectionChange("providerApps")}
               />
             ) : null}
           </div>
         </div>
 
         {section === "providerApps" && props.canManageProviderApps && props.experimentalFeaturesEnabled ? (
-          <ProviderAppsPanel />
+          <ProviderAppsPanel onChanged={props.onProviderAppsChanged} />
         ) : (section === "providerApps" || (section === "personal" && !props.experimentalFeaturesEnabled)) ? (
           <p role="status" className="py-6 text-sm">{t("status.permissionDenied")}</p>
         ) : loading ? (

@@ -6,6 +6,7 @@ import type { ListsSection } from "@/components/root/types";
 import {
   ListsView,
   type ListDetailState,
+  type ListTabCounts,
   type ListRouteOptions,
 } from "@/components/views/lists/lists-view";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -14,7 +15,7 @@ import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-
 import { useSessionUser } from "@/lib/hooks/use-auth";
 import { useListAccountLink } from "@/lib/hooks/use-list-account-link";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
-import { listAccountQuery, myListAccountsQuery, myListSubscriptionsQuery, personalListRouteOptionsQuery, unlinkListAccountMutation } from "@/lib/graphql/list-accounts";
+import { listAccountQuery, listTabCountsQuery, myListAccountsQuery, myListSubscriptionsQuery, personalListRouteOptionsQuery, unlinkListAccountMutation } from "@/lib/graphql/list-accounts";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import {
   addListExclusionMutation,
@@ -85,10 +86,66 @@ type ListsContainerProps = {
 export function ListsContainer({ canManageLists }: ListsContainerProps) {
   const user = useSessionUser();
   const location = useLocation();
-  return <ListsContainerBody key={`${user?.id ?? "anonymous"}:${listsSectionFromPath(location.pathname)}`} canManageLists={canManageLists} />;
+  const section = listsSectionFromPath(location.pathname);
+  const [tabCounts, reloadTabCounts] = useListTabCounts(canManageLists, section);
+  return (
+    <ListsContainerBody
+      key={`${user?.id ?? "anonymous"}:${section}`}
+      canManageLists={canManageLists}
+      tabCounts={tabCounts}
+      onTabCountsChanged={reloadTabCounts}
+    />
+  );
 }
 
-function ListsContainerBody({ canManageLists }: ListsContainerProps) {
+/**
+ * How many entries each section holds, for the tab strip. Counted again on
+ * every section change, so the sections left behind stay current; the section
+ * on screen is counted from what it has loaded.
+ */
+function useListTabCounts(canManageLists: boolean, section: ListsSection): [ListTabCounts, () => void] {
+  const client = useClient();
+  const user = useSessionUser();
+  const userId = user?.id;
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const providerApps = experimentalFeaturesEnabled && hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
+  const [counts, setCounts] = React.useState<ListTabCounts>({});
+  const [changes, setChanges] = React.useState(0);
+
+  React.useEffect(() => {
+    let active = true;
+    void client
+      .query(
+        listTabCountsQuery,
+        { personal: experimentalFeaturesEnabled, exclusions: canManageLists, providerApps },
+        { requestPolicy: "network-only" },
+      )
+      .toPromise()
+      .then(({ data }) => {
+        // A count is decoration: one that cannot be read is left off the tab.
+        if (!active || !data) return;
+        setCounts({
+          public: data.listSubscriptions?.length,
+          personal: data.myListSubscriptions?.length,
+          exclusions: data.listExclusions?.length,
+          providerApps: (data.listProviderApps as Array<{ enabled: boolean }> | undefined)?.filter((app) => app.enabled).length,
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [canManageLists, changes, client, experimentalFeaturesEnabled, providerApps, section, userId]);
+
+  const reload = React.useCallback(() => setChanges((value) => value + 1), []);
+  return [counts, reload];
+}
+
+type ListsContainerBodyProps = ListsContainerProps & {
+  tabCounts: ListTabCounts;
+  onTabCountsChanged: () => void;
+};
+
+function ListsContainerBody({ canManageLists, tabCounts, onTabCountsChanged }: ListsContainerBodyProps) {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -118,6 +175,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [exclusionsLoading, setExclusionsLoading] = React.useState(false);
+  const [exclusionsLoaded, setExclusionsLoaded] = React.useState(false);
   const [busyIds, setBusyIds] = React.useState<ReadonlySet<string>>(new Set());
   const [detail, setDetail] = React.useState<ListDetailState | null>(null);
 
@@ -242,6 +300,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         .toPromise();
       if (result.error) throw result.error;
       setExclusions((result.data?.listExclusions ?? []) as ListExclusion[]);
+      setExclusionsLoaded(true);
     } catch (error) {
       setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     } finally {
@@ -728,10 +787,18 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
     [navigate],
   );
 
+  const shownTabCounts: ListTabCounts = {
+    ...tabCounts,
+    ...(loading || loadError ? {} : { [personal ? "personal" : "public"]: subscriptions.length }),
+    ...(exclusionsLoaded ? { exclusions: exclusions.length } : {}),
+  };
+
   return (
     <ListsView
       section={section}
       onSectionChange={changeSection}
+      tabCounts={shownTabCounts}
+      onProviderAppsChanged={onTabCountsChanged}
       canManageLists={canManageLists}
       experimentalFeaturesEnabled={experimentalFeaturesEnabled}
       canManageProviderApps={canManageProviderApps}
