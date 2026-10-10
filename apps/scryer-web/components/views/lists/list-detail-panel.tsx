@@ -7,6 +7,7 @@ import {
   TITLE_TABLE_HEADER_ROW_CLASS,
   TITLE_TABLE_ROW_CLASS,
 } from "@/components/views/media-content/title-table-shared";
+import { LabeledFieldset } from "@/components/common/labeled-fieldset";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,8 +61,6 @@ type ListDetailPanelProps = {
   onSyncNow: (subscription: ListSubscription) => void;
   onUnsubscribe: (subscription: ListSubscription) => Promise<boolean>;
 };
-
-const SECTION_HEADING = "mb-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-[var(--scry-muted)]";
 
 export function ListDetailPanel({
   detail,
@@ -207,13 +206,11 @@ export function ListDetailPanel({
               </p>
             ) : null}
 
-            <section>
-              <h3 className={SECTION_HEADING}>{t("lists.detail.coverage")}</h3>
+            <LabeledFieldset label={t("lists.detail.coverage")}>
               <ListCoverageBar counts={subscription.counts} showLegend />
-            </section>
+            </LabeledFieldset>
 
-            <section>
-              <h3 className={SECTION_HEADING}>{t("lists.detail.settings")}</h3>
+            <LabeledFieldset label={t("lists.detail.settings")}>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] sm:grid-cols-3">
                 {(
                   [
@@ -239,35 +236,29 @@ export function ListDetailPanel({
                   href={subscription.providerUrl}
                   target="_blank"
                   rel="noreferrer noopener"
-                  className="mt-2 inline-block text-[12.5px] text-[var(--scry-accent-text)] hover:underline"
+                  className="inline-block text-[12.5px] text-[var(--scry-accent-text)] hover:underline"
                 >
                   {t("lists.detail.openAtProvider")}
                 </a>
               ) : null}
-            </section>
+            </LabeledFieldset>
 
-            <section>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <h3 className={SECTION_HEADING}>{t("lists.preview.nextSyncHeading")}</h3>
-                <Button
-                  id="list-detail-preview"
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  onClick={() => void runPreview()}
-                  disabled={previewing}
-                >
-                  {previewing ? <LoadingMark className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  {t("lists.preview.run")}
-                </Button>
-              </div>
+            <LabeledFieldset label={t("lists.preview.nextSyncHeading")}>
+              <Button
+                id="list-detail-preview"
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={() => void runPreview()}
+                disabled={previewing}
+              >
+                {previewing ? <LoadingMark className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                {t("lists.preview.run")}
+              </Button>
               {preview ? <ListPreviewSummary preview={preview} idPrefix="list-detail" /> : null}
-            </section>
+            </LabeledFieldset>
 
-            <section>
-              <h3 className={SECTION_HEADING}>
-                {t("lists.detail.titles", { count: memberships?.totalCount ?? 0 })}
-              </h3>
+            <LabeledFieldset label={t("lists.detail.titles", { count: memberships?.totalCount ?? 0 })}>
               {memberships && memberships.items.length > 0 ? (
                 <>
                   <Table id="list-detail-memberships" density="dense" wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]">
@@ -319,7 +310,7 @@ export function ListDetailPanel({
                     </TableBody>
                   </Table>
                   {memberships.totalCount > membershipPageSize ? (
-                    <div className="mt-2 flex items-center justify-between text-[12px] text-[var(--scry-muted)]">
+                    <div className="flex items-center justify-between text-[12px] text-[var(--scry-muted)]">
                       <span>
                         {t("lists.detail.pageRange", {
                           from: offset + 1,
@@ -355,10 +346,9 @@ export function ListDetailPanel({
                   {detail?.loading ? t("label.loading") : t("lists.detail.noTitles")}
                 </p>
               )}
-            </section>
+            </LabeledFieldset>
 
-            <section>
-              <h3 className={SECTION_HEADING}>{t("lists.detail.history")}</h3>
+            <LabeledFieldset label={t("lists.detail.history")}>
               {detail && detail.runs.length > 0 ? (
                 <ul id="list-detail-runs" className="space-y-1.5">
                   {detail.runs.map((run) => (
@@ -392,7 +382,7 @@ export function ListDetailPanel({
               ) : (
                 <p className="text-[12.5px] text-[var(--scry-muted)]">{t("lists.detail.noRuns")}</p>
               )}
-            </section>
+            </LabeledFieldset>
           </div>
         )}
 
