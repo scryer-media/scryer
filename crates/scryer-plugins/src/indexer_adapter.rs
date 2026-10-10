@@ -1245,6 +1245,7 @@ fn plugin_search_request_from_strategy(
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 last_seen_identity: marker.last_seen_identity,
             }),
+        page_cursor: None,
     }
 }
 
@@ -1820,6 +1821,7 @@ impl IndexerClient for WasmIndexerClient {
                 .collect(),
             context: Some(context),
             rss_catch_up: None,
+            page_cursor: None,
         };
         self.search_with_request(request, mode, operation, cancel_token)
             .await

@@ -43,7 +43,7 @@ pub use notification::{
     PluginNotificationTargetResult, coalesce_media_updates, rich_embed_from_request,
     to_script_environment, to_webhook_json,
 };
-pub const SDK_VERSION: &str = "3.13.0";
+pub const SDK_VERSION: &str = "3.14.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -2861,6 +2861,13 @@ pub struct PluginSearchRequest {
     /// asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rss_catch_up: Option<PluginRssCatchUp>,
+    /// Where a paged search resumes: the `next_cursor` of the previous
+    /// response for the same request, sent back verbatim. Opaque to the host;
+    /// the plugin defines its contents. Absent asks for the first page. Only
+    /// meaningful to a plugin that declares `paged_search` in its limit
+    /// capabilities; every other plugin ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_cursor: Option<String>,
 }
 
 /// The newest release the host saw on the previous successful RSS poll of one
@@ -2934,6 +2941,16 @@ pub struct PluginSearchResponse {
     pub grab_current: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grab_max: Option<u32>,
+    /// From a plugin that declares `paged_search`: `Some` when the provider
+    /// has more pages for this request, to be passed back as
+    /// `page_cursor` to read the next one; `None` on a successful response
+    /// when the provider is exhausted for this query. A paged response holds
+    /// at most `IndexerLimitCapabilities::paged_response_bound` results. A
+    /// paged plugin that fails mid-page returns the partial page through
+    /// `IndexerSearchPluginError::PartialResults` with this unset, and the
+    /// host replays that page. Plugins without `paged_search` never set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3286,6 +3303,7 @@ mod tests {
                     tagged_aliases: vec![],
                     context: None,
                     rss_catch_up: None,
+                    page_cursor: None,
                 },
             }],
         };
@@ -4170,6 +4188,106 @@ mod tests {
             ..marker
         };
         assert!(!date_only.names(&result));
+    }
+
+    #[test]
+    fn paged_search_fields_skip_when_unset_and_old_json_still_decodes() {
+        let request = serde_json::to_value(PluginSearchRequest {
+            query: "Sample Show".into(),
+            limit: 100,
+            ..PluginSearchRequest::default()
+        })
+        .unwrap();
+        assert!(
+            request.get("page_cursor").is_none(),
+            "an absent cursor must not reach plugins built against an older SDK"
+        );
+        let response = serde_json::to_value(PluginSearchResponse::default()).unwrap();
+        assert!(response.get("next_cursor").is_none());
+        let limits = serde_json::to_value(IndexerLimitCapabilities {
+            page_size: Some(100),
+            ..IndexerLimitCapabilities::default()
+        })
+        .unwrap();
+        assert!(limits.get("paged_search").is_none());
+
+        // Payloads serialized before the fields existed still decode.
+        let parsed: PluginSearchRequest =
+            serde_json::from_value(serde_json::json!({"query": "Sample Show", "limit": 1000}))
+                .unwrap();
+        assert!(parsed.page_cursor.is_none());
+        let parsed: PluginSearchResponse =
+            serde_json::from_value(serde_json::json!({"results": [], "api_current": 3})).unwrap();
+        assert!(parsed.next_cursor.is_none());
+        let parsed: IndexerLimitCapabilities =
+            serde_json::from_value(serde_json::json!({"page_size": 100, "max_pages": 30})).unwrap();
+        assert!(!parsed.paged_search);
+    }
+
+    #[test]
+    fn paged_search_fields_round_trip() {
+        let request = PluginSearchRequest {
+            query: "Sample Show".into(),
+            page_cursor: Some("offset:300".into()),
+            ..PluginSearchRequest::default()
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["page_cursor"], "offset:300");
+        let parsed: PluginSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.page_cursor.as_deref(), Some("offset:300"));
+
+        let response = PluginSearchResponse {
+            next_cursor: Some("offset:400".into()),
+            ..PluginSearchResponse::default()
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["next_cursor"], "offset:400");
+        let parsed: PluginSearchResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.next_cursor.as_deref(), Some("offset:400"));
+
+        let limits = IndexerLimitCapabilities {
+            paged_search: true,
+            ..IndexerLimitCapabilities::default()
+        };
+        let json = serde_json::to_value(&limits).unwrap();
+        assert_eq!(json["paged_search"], true);
+        let parsed: IndexerLimitCapabilities = serde_json::from_value(json).unwrap();
+        assert!(parsed.paged_search);
+
+        // The cursor survives the strategy-event envelope the host decodes.
+        let event = PluginSearchStrategyEvent {
+            strategy_id: "strategy-1".into(),
+            result: PluginResult::Ok(response),
+        };
+        let parsed: PluginSearchStrategyEvent =
+            serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).unwrap();
+        match parsed.result {
+            PluginResult::Ok(response) => {
+                assert_eq!(response.next_cursor.as_deref(), Some("offset:400"))
+            }
+            other => panic!("expected a response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn paged_response_bound_follows_the_declared_page_size() {
+        let declared = IndexerLimitCapabilities {
+            page_size: Some(50),
+            max_page_size: Some(100),
+            ..IndexerLimitCapabilities::default()
+        };
+        assert_eq!(declared.paged_response_bound(0), Some(100));
+        assert_eq!(declared.paged_response_bound(1000), Some(100));
+        assert_eq!(declared.paged_response_bound(25), Some(25));
+        let page_size_only = IndexerLimitCapabilities {
+            page_size: Some(50),
+            ..IndexerLimitCapabilities::default()
+        };
+        assert_eq!(page_size_only.paged_response_bound(1000), Some(50));
+        assert_eq!(
+            IndexerLimitCapabilities::default().paged_response_bound(1000),
+            None
+        );
     }
 
     #[test]
