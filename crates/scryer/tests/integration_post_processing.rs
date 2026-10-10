@@ -75,6 +75,10 @@ async fn create_script_with_type(
         priority: 0,
         enabled: true,
         debug,
+        language: scryer_domain::ScriptLanguage::Shell,
+        trigger: scryer_domain::ScriptTrigger::PostImport,
+        schedule: None,
+        run_on_startup: false,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -643,6 +647,10 @@ async fn script_configuration_changes_are_audited_without_script_content() {
         priority: 0,
         enabled: true,
         debug: false,
+        language: scryer_domain::ScriptLanguage::Shell,
+        trigger: scryer_domain::ScriptTrigger::PostImport,
+        schedule: None,
+        run_on_startup: false,
         created_at: now,
         updated_at: now,
     };
@@ -706,4 +714,824 @@ async fn script_configuration_changes_are_audited_without_script_content() {
         2,
         "update and toggle should both emit updated audit events"
     );
+}
+
+const SCRIPT_INTERPRETER_KEYS: [&str; 4] = [
+    scryer_application::SCRIPT_INTERPRETER_PYTHON_KEY,
+    scryer_application::SCRIPT_INTERPRETER_POWERSHELL_KEY,
+    scryer_application::SCRIPT_INTERPRETER_BATCH_KEY,
+    scryer_application::SCRIPT_INTERPRETER_GO_KEY,
+];
+
+async fn seed_script_interpreter_setting_definitions(ctx: &TestContext) {
+    ctx.settings_store
+        .batch_ensure_setting_definitions(
+            SCRIPT_INTERPRETER_KEYS
+                .iter()
+                .map(
+                    |key_name| scryer_infrastructure_sql::types::SettingDefinitionSeed {
+                        category: "general".into(),
+                        scope: scryer_application::SETTINGS_SCOPE_SYSTEM.into(),
+                        key_name: (*key_name).into(),
+                        data_type: "string".into(),
+                        default_value_json: "null".into(),
+                        is_sensitive: false,
+                        validation_json: None,
+                    },
+                )
+                .collect(),
+        )
+        .await
+        .expect("seed script interpreter setting definitions");
+}
+
+async fn script_interpreter_gql(
+    ctx: &TestContext,
+    query: &str,
+    variables: serde_json::Value,
+) -> serde_json::Value {
+    let response = ctx
+        .http_client()
+        .post(ctx.graphql_url())
+        .json(&serde_json::json!({ "query": query, "variables": variables }))
+        .send()
+        .await
+        .expect("graphql request should succeed");
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("valid JSON body");
+    assert!(
+        body.get("errors").is_none(),
+        "unexpected GraphQL errors: {body}"
+    );
+    body
+}
+
+#[tokio::test]
+async fn graphql_script_interpreter_settings_round_trip() {
+    let ctx = TestContext::new().await;
+    seed_script_interpreter_setting_definitions(&ctx).await;
+    let read = "query { scriptInterpreterSettings { python powershell batch go } }";
+    let update = r#"mutation($input: ScriptInterpreterSettingsInput!) {
+        updateScriptInterpreterSettings(input: $input) { python powershell batch go }
+    }"#;
+
+    let body = script_interpreter_gql(&ctx, read, serde_json::json!({})).await;
+    assert_eq!(
+        body["data"]["scriptInterpreterSettings"],
+        serde_json::json!({ "python": null, "powershell": null, "batch": null, "go": null })
+    );
+
+    let body = script_interpreter_gql(
+        &ctx,
+        update,
+        serde_json::json!({ "input": {
+            "python": "/opt/synthetic/python3",
+            "powershell": "  /opt/synthetic/pwsh  ",
+            "batch": "",
+            "go": "/opt/synthetic/go",
+        } }),
+    )
+    .await;
+    let expected = serde_json::json!({
+        "python": "/opt/synthetic/python3",
+        "powershell": "/opt/synthetic/pwsh",
+        "batch": null,
+        "go": "/opt/synthetic/go",
+    });
+    assert_eq!(body["data"]["updateScriptInterpreterSettings"], expected);
+    let body = script_interpreter_gql(&ctx, read, serde_json::json!({})).await;
+    assert_eq!(body["data"]["scriptInterpreterSettings"], expected);
+
+    // Omitted fields keep their pins; null and blank clear only their own.
+    let body = script_interpreter_gql(
+        &ctx,
+        update,
+        serde_json::json!({ "input": { "python": null } }),
+    )
+    .await;
+    let expected = serde_json::json!({
+        "python": null,
+        "powershell": "/opt/synthetic/pwsh",
+        "batch": null,
+        "go": "/opt/synthetic/go",
+    });
+    assert_eq!(body["data"]["updateScriptInterpreterSettings"], expected);
+
+    let body = script_interpreter_gql(
+        &ctx,
+        update,
+        serde_json::json!({ "input": { "powershell": "", "batch": "cmd.exe" } }),
+    )
+    .await;
+    let expected = serde_json::json!({
+        "python": null,
+        "powershell": null,
+        "batch": "cmd.exe",
+        "go": "/opt/synthetic/go",
+    });
+    assert_eq!(body["data"]["updateScriptInterpreterSettings"], expected);
+    let body = script_interpreter_gql(&ctx, read, serde_json::json!({})).await;
+    assert_eq!(body["data"]["scriptInterpreterSettings"], expected);
+}
+
+#[tokio::test]
+async fn script_interpreter_settings_require_system_settings_permission() {
+    let ctx = TestContext::new().await;
+    seed_script_interpreter_setting_definitions(&ctx).await;
+
+    // The catalog-settings admin used by the other tests lacks system settings.
+    let read_error = ctx
+        .app
+        .get_script_interpreter_settings(&admin())
+        .await
+        .expect_err("reading requires system settings");
+    assert!(
+        matches!(read_error, scryer_application::AppError::Unauthorized(_)),
+        "unexpected error: {read_error:?}"
+    );
+    let update_error = ctx
+        .app
+        .update_script_interpreter_settings(
+            &admin(),
+            scryer_application::UpdateScriptInterpreterSettings {
+                python: Some(Some("/opt/synthetic/python3".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("updating requires system settings");
+    assert!(
+        matches!(update_error, scryer_application::AppError::Unauthorized(_)),
+        "unexpected error: {update_error:?}"
+    );
+}
+
+#[tokio::test]
+async fn script_interpreter_pins_must_be_absolute_paths_or_command_names() {
+    let ctx = TestContext::new().await;
+    seed_script_interpreter_setting_definitions(&ctx).await;
+    let mut system_admin = admin();
+    system_admin.authorization.app =
+        AppPermissionMask::from_permissions([AppPermission::ManageSystemSettings]);
+
+    for rejected in ["bin/python3", "./python3", "..\\tools\\pwsh.exe"] {
+        let error = ctx
+            .app
+            .update_script_interpreter_settings(
+                &system_admin,
+                scryer_application::UpdateScriptInterpreterSettings {
+                    go: Some(Some("/opt/synthetic/go".to_string())),
+                    python: Some(Some(rejected.to_string())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("relative interpreter paths are rejected");
+        assert!(
+            matches!(error, scryer_application::AppError::Validation(_)),
+            "{rejected:?} gave {error:?}"
+        );
+    }
+    // A rejected update writes none of its pins.
+    let settings = ctx
+        .app
+        .get_script_interpreter_settings(&system_admin)
+        .await
+        .expect("read settings");
+    assert_eq!(settings, Default::default());
+
+    let settings = ctx
+        .app
+        .update_script_interpreter_settings(
+            &system_admin,
+            scryer_application::UpdateScriptInterpreterSettings {
+                python: Some(Some("python3".to_string())),
+                go: Some(Some("/opt/synthetic/go".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("absolute paths and command names are accepted");
+    assert_eq!(settings.python, Some(std::path::PathBuf::from("python3")));
+    assert_eq!(
+        settings.go,
+        Some(std::path::PathBuf::from("/opt/synthetic/go"))
+    );
+}
+
+/// A file script with a `.py` entry point is launched through the configured
+/// Python interpreter.
+#[cfg(unix)]
+#[tokio::test]
+async fn file_python_script_runs_through_the_configured_interpreter() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-pp-test", "Test Movie", MediaFacet::Movie).await;
+    seed_script_interpreter_setting_definitions(&ctx).await;
+
+    let script_dir = tempfile::tempdir().expect("tempdir");
+    let fake_python = script_dir.path().join("fake-python");
+    write_executable_script(
+        &fake_python,
+        "#!/bin/sh\nfor a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done\n",
+    );
+    let script_path = script_dir.path().join("synthetic-job.py");
+    std::fs::write(&script_path, "print('synthetic')\n").expect("write script");
+
+    let mut system_admin = admin();
+    system_admin.authorization.app =
+        AppPermissionMask::from_permissions([AppPermission::ManageSystemSettings]);
+    ctx.app
+        .update_script_interpreter_settings(
+            &system_admin,
+            scryer_application::UpdateScriptInterpreterSettings {
+                python: Some(Some(fake_python.to_string_lossy().into_owned())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("configure python interpreter");
+
+    let script_id = create_script_with_type(
+        &ctx,
+        MediaFacet::Movie,
+        ScriptType::File,
+        script_path.to_str().expect("utf-8 script path"),
+        300,
+        true,
+    )
+    .await;
+
+    let dest_dir = tempfile::tempdir().expect("tempdir");
+    let dest_file = dest_dir.path().join("Movie.2024.1080p.mkv");
+    std::fs::write(&dest_file, b"fake").expect("write");
+    run_post_processing(movie_context(&ctx.app, &dest_file))
+        .await
+        .expect("run");
+
+    let runs = ctx
+        .app
+        .list_post_processing_script_runs(&admin(), &script_id, 1)
+        .await
+        .expect("list script runs");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, ScriptRunStatus::Success);
+    assert_eq!(
+        runs[0].stdout_tail.as_deref(),
+        Some(format!("arg={}", script_path.display()).as_str())
+    );
+}
+fn system_admin() -> User {
+    let mut user = admin();
+    user.authorization.app = AppPermissionMask::from_permissions([
+        AppPermission::ManageCatalogSettings,
+        AppPermission::ManageSystemSettings,
+    ]);
+    user
+}
+
+fn scheduled_script(id: &str, schedule: scryer_domain::ScriptSchedule) -> PostProcessingScript {
+    let now = chrono::Utc::now();
+    PostProcessingScript {
+        id: id.to_string(),
+        name: format!("Scheduled fixture {id}"),
+        description: String::new(),
+        script_type: ScriptType::Inline,
+        script_content: "echo scheduled-fixture".to_string(),
+        applied_facets: vec![],
+        execution_mode: scryer_domain::ExecutionMode::Blocking,
+        timeout_secs: 60,
+        priority: 0,
+        enabled: true,
+        debug: false,
+        language: scryer_domain::ScriptLanguage::Shell,
+        trigger: scryer_domain::ScriptTrigger::Schedule,
+        schedule: Some(schedule),
+        run_on_startup: false,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn assert_unauthorized<T: std::fmt::Debug>(result: Result<T, scryer_application::AppError>) {
+    match result {
+        Err(scryer_application::AppError::Unauthorized(_)) => {}
+        other => panic!("expected Unauthorized, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn scheduled_scripts_require_system_settings_permission() {
+    let ctx = TestContext::new().await;
+    let system = system_admin();
+    let catalog_only = admin();
+    let interval = scryer_domain::ScriptSchedule::Interval { every_seconds: 600 };
+
+    let stored = ctx
+        .app
+        .create_post_processing_script(
+            &system,
+            scheduled_script("pp-scheduled-guarded", interval.clone()),
+        )
+        .await
+        .expect("system admin creates scheduled script");
+    create_script(&ctx, MediaFacet::Movie, "echo import-fixture", 60, false).await;
+
+    assert_unauthorized(
+        ctx.app
+            .create_post_processing_script(
+                &catalog_only,
+                scheduled_script("pp-scheduled-refused", interval.clone()),
+            )
+            .await,
+    );
+    let mut edited = stored.clone();
+    edited.description = "edited".to_string();
+    assert_unauthorized(
+        ctx.app
+            .update_post_processing_script(&catalog_only, edited.clone())
+            .await,
+    );
+    // The stored trigger decides, so relabelling the row does not get past the check.
+    edited.trigger = scryer_domain::ScriptTrigger::PostImport;
+    assert_unauthorized(
+        ctx.app
+            .update_post_processing_script(&catalog_only, edited)
+            .await,
+    );
+    assert_unauthorized(
+        ctx.app
+            .toggle_post_processing_script(&catalog_only, &stored.id)
+            .await,
+    );
+    assert_unauthorized(
+        ctx.app
+            .delete_post_processing_script(&catalog_only, &stored.id)
+            .await,
+    );
+    assert_unauthorized(
+        ctx.app
+            .validate_script_schedule(&catalog_only, &interval)
+            .await,
+    );
+    assert_unauthorized(
+        ctx.app
+            .list_post_processing_scripts_by_trigger(
+                &catalog_only,
+                scryer_domain::ScriptTrigger::Schedule,
+            )
+            .await,
+    );
+
+    let visible = ctx
+        .app
+        .list_post_processing_scripts(&catalog_only)
+        .await
+        .expect("catalog admin lists scripts");
+    assert!(!visible.is_empty(), "import scripts stay visible");
+    assert!(
+        visible
+            .iter()
+            .all(|script| script.trigger == scryer_domain::ScriptTrigger::PostImport),
+        "scheduled scripts are hidden from a catalog-only actor"
+    );
+    let all = ctx
+        .app
+        .list_post_processing_scripts(&system)
+        .await
+        .expect("system admin lists scripts");
+    assert!(all.iter().any(|script| script.id == stored.id));
+
+    let still_enabled = ctx
+        .app
+        .list_post_processing_scripts_by_trigger(&system, scryer_domain::ScriptTrigger::Schedule)
+        .await
+        .expect("list scheduled");
+    assert!(
+        still_enabled
+            .iter()
+            .any(|script| script.id == stored.id && script.enabled)
+    );
+}
+
+#[tokio::test]
+async fn trigger_cannot_change_on_update() {
+    let ctx = TestContext::new().await;
+    let system = system_admin();
+    let stored = ctx
+        .app
+        .create_post_processing_script(
+            &system,
+            scheduled_script("pp-trigger-fixed", scryer_domain::ScriptSchedule::Manual),
+        )
+        .await
+        .expect("create scheduled script");
+    let mut relabelled = stored;
+    relabelled.trigger = scryer_domain::ScriptTrigger::PostImport;
+    match ctx
+        .app
+        .update_post_processing_script(&system, relabelled)
+        .await
+    {
+        Err(scryer_application::AppError::Validation(_)) => {}
+        other => panic!("expected Validation, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn cron_schedule_that_never_fires_is_rejected_on_create() {
+    let ctx = TestContext::new().await;
+    let result = ctx
+        .app
+        .create_post_processing_script(
+            &system_admin(),
+            scheduled_script(
+                "pp-cron-never",
+                scryer_domain::ScriptSchedule::Cron {
+                    expression: "0 0 30 2 *".to_string(),
+                },
+            ),
+        )
+        .await;
+    match result {
+        Err(scryer_application::AppError::Validation(_)) => {}
+        other => panic!("expected Validation, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled scripts run as jobs
+// ---------------------------------------------------------------------------
+
+/// A system admin that exists in the user table, as a run's actor must.
+async fn persisted_system_admin(ctx: &TestContext) -> User {
+    ctx.app
+        .find_or_create_default_user()
+        .await
+        .expect("default user")
+}
+
+async fn create_custom_job(
+    ctx: &TestContext,
+    id: &str,
+    content: &str,
+    execution_mode: scryer_domain::ExecutionMode,
+) -> PostProcessingScript {
+    let mut script = scheduled_script(id, scryer_domain::ScriptSchedule::Manual);
+    script.script_content = content.to_string();
+    script.execution_mode = execution_mode;
+    ctx.app
+        .create_post_processing_script(&system_admin(), script)
+        .await
+        .expect("create scheduled script")
+}
+
+/// Waits for the job run `run_id` of `script_id` to reach a terminal state.
+async fn wait_for_custom_job_run(
+    ctx: &TestContext,
+    script_id: &str,
+    run_id: &str,
+) -> scryer_application::JobRun {
+    let found = std::sync::Arc::new(std::sync::Mutex::new(None));
+    common::wait_until(&format!("job run {run_id} to finish"), || {
+        let found = found.clone();
+        async move {
+            let runs = ctx
+                .app
+                .list_custom_job_runs(&system_admin(), script_id, 20)
+                .await
+                .expect("list custom job runs");
+            match runs
+                .into_iter()
+                .find(|run| run.id == run_id && run.status.is_terminal())
+            {
+                Some(run) => {
+                    *found.lock().unwrap() = Some(run);
+                    true
+                }
+                None => false,
+            }
+        }
+    })
+    .await;
+    found.lock().unwrap().take().expect("terminal run")
+}
+
+fn summary(run: &scryer_application::JobRun) -> serde_json::Value {
+    serde_json::from_str(run.summary_json.as_deref().expect("summary json")).expect("summary")
+}
+
+async fn script_run(
+    ctx: &TestContext,
+    script_id: &str,
+    script_run_id: &str,
+) -> scryer_domain::PostProcessingScriptRun {
+    ctx.app
+        .list_post_processing_script_runs(&system_admin(), script_id, 20)
+        .await
+        .expect("list script runs")
+        .into_iter()
+        .find(|run| run.id == script_run_id)
+        .expect("script run recorded")
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_custom_job_run_records_its_script_run_and_summary() {
+    let ctx = TestContext::new().await;
+    let script = create_custom_job(
+        &ctx,
+        "cj-success",
+        "printf '%s|%s|%s|%s|%s' \"$SCRYER_EVENT\" \"$SCRYER_JOB_ID\" \"$SCRYER_TRIGGER_SOURCE\" \"$SCRYER_RUN_ID\" \"$(basename \"$PWD\")\"",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+
+    let started = ctx
+        .app
+        .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+        .await
+        .expect("trigger custom job");
+    assert_eq!(started.job_key, scryer_application::JobKey::CustomJob);
+    assert_eq!(started.custom_job_id(), Some(script.id.as_str()));
+    assert_eq!(
+        started.trigger_source,
+        scryer_application::JobTriggerSource::Manual
+    );
+
+    let finished = wait_for_custom_job_run(&ctx, &script.id, &started.id).await;
+    assert_eq!(finished.status, scryer_application::JobRunStatus::Completed);
+    let summary = summary(&finished);
+    assert_eq!(summary["exit_code"], 0);
+    assert!(summary["duration_ms"].is_i64(), "{summary}");
+    let script_run_id = summary["script_run_id"].as_str().expect("script run id");
+
+    let recorded = script_run(&ctx, &script.id, script_run_id).await;
+    assert_eq!(recorded.status, ScriptRunStatus::Success);
+    assert_eq!(recorded.exit_code, Some(0));
+    assert_eq!(recorded.title_id, None);
+    assert_eq!(recorded.file_path, None);
+    assert_eq!(
+        recorded.stdout_tail.as_deref(),
+        Some(format!("scheduled_job|{}|manual|{}|scripts", script.id, started.id).as_str())
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_custom_job_fails_its_run_with_the_exit_code() {
+    let ctx = TestContext::new().await;
+    let script = create_custom_job(
+        &ctx,
+        "cj-failing",
+        "exit 3",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    let started = ctx
+        .app
+        .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+        .await
+        .expect("trigger custom job");
+    let finished = wait_for_custom_job_run(&ctx, &script.id, &started.id).await;
+    assert_eq!(finished.status, scryer_application::JobRunStatus::Failed);
+    let summary = summary(&finished);
+    assert_eq!(summary["exit_code"], 3);
+    let recorded = script_run(
+        &ctx,
+        &script.id,
+        summary["script_run_id"].as_str().expect("script run id"),
+    )
+    .await;
+    assert_eq!(recorded.status, ScriptRunStatus::Failed);
+    assert_eq!(recorded.exit_code, Some(3));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_fire_and_forget_custom_job_completes_at_spawn_and_records_the_exit_later() {
+    let ctx = TestContext::new().await;
+    let gate_dir = tempfile::tempdir().expect("tempdir");
+    let gate = gate_dir.path().join("release");
+    let script = create_custom_job(
+        &ctx,
+        "cj-detached",
+        &format!(
+            "while [ ! -f '{}' ]; do sleep 0.05; done; echo released",
+            gate.display()
+        ),
+        scryer_domain::ExecutionMode::FireAndForget,
+    )
+    .await;
+    let started = ctx
+        .app
+        .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+        .await
+        .expect("trigger custom job");
+
+    // The job finishes while the script is still held at the gate.
+    let finished = wait_for_custom_job_run(&ctx, &script.id, &started.id).await;
+    assert_eq!(finished.status, scryer_application::JobRunStatus::Completed);
+    let summary = summary(&finished);
+    let script_run_id = summary["script_run_id"]
+        .as_str()
+        .expect("script run id")
+        .to_string();
+    let running = script_run(&ctx, &script.id, &script_run_id).await;
+    assert_eq!(running.status, ScriptRunStatus::Running);
+    assert_eq!(running.completed_at, None);
+
+    std::fs::write(&gate, b"").expect("open gate");
+    common::wait_until("the detached script run to finish", || {
+        let script_id = script.id.clone();
+        let script_run_id = script_run_id.clone();
+        let ctx = &ctx;
+        async move {
+            script_run(ctx, &script_id, &script_run_id).await.status == ScriptRunStatus::Success
+        }
+    })
+    .await;
+    let done = script_run(&ctx, &script.id, &script_run_id).await;
+    assert_eq!(done.exit_code, Some(0));
+    assert_eq!(done.stdout_tail.as_deref(), Some("released"));
+    assert_eq!(done.started_at, running.started_at);
+    assert!(done.completed_at.is_some());
+}
+
+#[tokio::test]
+async fn a_disabled_custom_job_cannot_be_triggered() {
+    let ctx = TestContext::new().await;
+    let script = create_custom_job(
+        &ctx,
+        "cj-disabled",
+        "echo never",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    ctx.app
+        .toggle_post_processing_script(&system_admin(), &script.id)
+        .await
+        .expect("disable");
+    match ctx
+        .app
+        .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+        .await
+    {
+        Err(scryer_application::AppError::Validation(message)) => {
+            assert!(message.contains("disabled"), "{message}")
+        }
+        other => panic!("expected Validation, got {other:?}"),
+    }
+    let jobs = ctx.app.list_jobs(&system_admin()).await.expect("list jobs");
+    assert!(
+        jobs.iter()
+            .all(|job| job.custom_job_id.as_deref() != Some(script.id.as_str())),
+        "a disabled script is not listed as a job"
+    );
+}
+
+#[tokio::test]
+async fn custom_jobs_require_system_settings_permission() {
+    let ctx = TestContext::new().await;
+    let script = create_custom_job(
+        &ctx,
+        "cj-guarded",
+        "echo guarded",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    assert_unauthorized(ctx.app.trigger_custom_job(&admin(), &script.id).await);
+    assert_unauthorized(ctx.app.list_custom_job_runs(&admin(), &script.id, 5).await);
+    // A scheduled script's output is held to the same permission.
+    assert_unauthorized(
+        ctx.app
+            .list_post_processing_script_runs(&admin(), &script.id, 5)
+            .await,
+    );
+    ctx.app
+        .list_post_processing_script_runs(&system_admin(), &script.id, 5)
+        .await
+        .expect("system admin reads scheduled script runs");
+}
+
+#[tokio::test]
+async fn scheduled_scripts_are_listed_as_jobs_with_their_next_run() {
+    let ctx = TestContext::new().await;
+    let interval = ctx
+        .app
+        .create_post_processing_script(
+            &system_admin(),
+            scheduled_script(
+                "cj-interval",
+                scryer_domain::ScriptSchedule::Interval { every_seconds: 600 },
+            ),
+        )
+        .await
+        .expect("create interval script");
+    for (id, schedule) in [
+        (
+            "cj-cron",
+            scryer_domain::ScriptSchedule::Cron {
+                expression: "30 3 * * *".to_string(),
+            },
+        ),
+        (
+            "cj-weekly",
+            scryer_domain::ScriptSchedule::Weekly {
+                days: vec![scryer_domain::ScheduleWeekday::Monday],
+                time_local: "03:30".to_string(),
+            },
+        ),
+    ] {
+        ctx.app
+            .create_post_processing_script(&system_admin(), scheduled_script(id, schedule))
+            .await
+            .expect("create scheduled script");
+    }
+    let manual = create_custom_job(
+        &ctx,
+        "cj-manual",
+        "echo manual",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+
+    let jobs = ctx.app.list_jobs(&system_admin()).await.expect("list jobs");
+    let job = |id: &str| {
+        jobs.iter()
+            .find(|job| job.custom_job_id.as_deref() == Some(id))
+            .unwrap_or_else(|| panic!("job for {id}"))
+            .clone()
+    };
+    let interval_job = job(&interval.id);
+    assert_eq!(interval_job.key, scryer_application::JobKey::CustomJob);
+    assert_eq!(interval_job.display_name, interval.name);
+    assert!(interval_job.schedule.next_run_at.is_some());
+    assert_eq!(interval_job.schedule.interval_seconds, Some(600));
+    assert!(!interval_job.schedule.description.is_empty());
+    assert_eq!(
+        interval_job.schedule.kind,
+        scryer_application::JobScheduleKind::Interval
+    );
+    let cron_job = job("cj-cron");
+    assert_eq!(
+        cron_job.schedule.kind,
+        scryer_application::JobScheduleKind::Cron
+    );
+    assert!(cron_job.schedule.next_run_at.is_some());
+    assert_eq!(
+        job("cj-weekly").schedule.kind,
+        scryer_application::JobScheduleKind::WeeklyAtTime
+    );
+    let manual_job = job(&manual.id);
+    assert_eq!(manual_job.schedule.next_run_at, None);
+    assert!(manual_job.manual_trigger_allowed);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn latest_job_runs_has_a_row_per_custom_job() {
+    let ctx = TestContext::new().await;
+    let first = create_custom_job(
+        &ctx,
+        "cj-latest-a",
+        "echo a",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    let second = create_custom_job(
+        &ctx,
+        "cj-latest-b",
+        "echo b",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    for script in [&first, &second] {
+        let started = ctx
+            .app
+            .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+            .await
+            .expect("trigger custom job");
+        wait_for_custom_job_run(&ctx, &script.id, &started.id).await;
+    }
+    let latest = ctx
+        .app
+        .list_latest_job_runs(&system_admin())
+        .await
+        .expect("latest job runs");
+    for script in [&first, &second] {
+        assert_eq!(
+            latest
+                .iter()
+                .filter(|run| run.custom_job_id() == Some(script.id.as_str()))
+                .count(),
+            1,
+            "one latest run for {}",
+            script.id
+        );
+        let run = latest
+            .iter()
+            .find(|run| run.custom_job_id() == Some(script.id.as_str()))
+            .expect("latest run");
+        assert_eq!(run.display_name, script.name, "runs carry the script name");
+    }
 }

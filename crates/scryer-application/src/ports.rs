@@ -6100,6 +6100,32 @@ pub trait JobRunRepository: Send + Sync {
         limit: usize,
     ) -> AppResult<Vec<JobRunRecord>>;
 
+    /// Newest runs of `job_key` whose operation type is exactly
+    /// `operation_type`, such as one user-defined job's runs.
+    async fn list_job_runs_by_operation_type(
+        &self,
+        job_key: JobKey,
+        operation_type: &str,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        Ok(self
+            .list_job_runs(Some(job_key), limit.saturating_mul(20).max(200))
+            .await?
+            .into_iter()
+            .filter(|run| run.operation_type == operation_type)
+            .take(limit)
+            .collect())
+    }
+
+    /// The newest run of each operation type recorded under `job_key`, in
+    /// one read; used to show the last run of every user-defined job.
+    async fn list_latest_job_run_per_operation_type(
+        &self,
+        _job_key: JobKey,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        Ok(Vec::new())
+    }
+
     async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>>;
 
     /// Fail every persisted run still in a non-terminal state and return the
@@ -8968,11 +8994,27 @@ pub trait PostProcessingScriptRepository: Send + Sync {
         script: scryer_domain::PostProcessingScript,
     ) -> AppResult<scryer_domain::PostProcessingScript>;
     async fn delete_script(&self, id: &str) -> AppResult<()>;
+    /// Enabled import-triggered scripts that apply to `facet`. Scheduled
+    /// scripts never run on import.
     async fn list_enabled_for_facet(
         &self,
         facet: &str,
     ) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
+    /// Enabled scripts started by their own schedule.
+    async fn list_enabled_scheduled(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
+    /// Every script with the given trigger, enabled or not.
+    async fn list_scripts_by_trigger(
+        &self,
+        trigger: scryer_domain::ScriptTrigger,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
     async fn record_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
+    /// Replace a recorded run's outcome, keyed by its id. A fire-and-forget
+    /// scheduled script records its run at spawn and finishes it here.
+    async fn update_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
+    /// Fail every script run still marked running and return how many. Only
+    /// a previous process can have left one running, so this runs once at
+    /// startup, before any script can start.
+    async fn reconcile_interrupted_runs(&self) -> AppResult<u64>;
     async fn list_runs_for_script(
         &self,
         script_id: &str,

@@ -2157,6 +2157,7 @@ ${LIBRARY_SCAN_PROGRESS_FIELDS}
 export const jobsQuery = `query Jobs {
   jobs {
     key
+    customJobId
     displayName
     description
     category
@@ -2176,6 +2177,7 @@ export const jobsQuery = `query Jobs {
 export const JOB_RUN_FIELDS = `
   id
   jobKey
+  customJobId
   displayName
   category
   section
@@ -2198,8 +2200,8 @@ ${JOB_RUN_FIELDS}
   }
 }`;
 
-export const jobRunsQuery = `query JobRuns($jobKey: JobKeyValue!, $limit: Int) {
-  jobRuns(jobKey: $jobKey, limit: $limit) {
+export const jobRunsQuery = `query JobRuns($jobKey: JobKeyValue!, $customJobId: ID, $limit: Int) {
+  jobRuns(jobKey: $jobKey, customJobId: $customJobId, limit: $limit) {
 ${JOB_RUN_FIELDS}
   }
 }`;
@@ -4502,8 +4504,15 @@ export const browsePathQuery = `query BrowsePath($path: String!, $includeFiles: 
   }
 }`;
 
-export const postProcessingScriptsQuery = `query PostProcessingScripts {
-  postProcessingScripts {
+export const SCRIPT_SCHEDULE_FIELDS = `
+      kind
+      everySeconds
+      timeLocal
+      days
+      expression
+`;
+
+export const POST_PROCESSING_SCRIPT_FIELDS = `
     id
     name
     description
@@ -4515,9 +4524,43 @@ export const postProcessingScriptsQuery = `query PostProcessingScripts {
     priority
     enabled
     debug
+    language
+    trigger
+    schedule {${SCRIPT_SCHEDULE_FIELDS}    }
+    runOnStartup
+    scheduleDescription
     createdAt
     updatedAt
+`;
+
+/** Scripts that run after an import, the ones the post-processing settings manage. */
+export const postProcessingScriptsQuery = `query PostProcessingScripts {
+  postProcessingScripts(trigger: POST_IMPORT) {${POST_PROCESSING_SCRIPT_FIELDS}  }
+}`;
+
+/** Scripts that run on their own schedule, listed on the Jobs page. */
+export const scheduledScriptsQuery = `query ScheduledScripts {
+  postProcessingScripts(trigger: SCHEDULE) {${POST_PROCESSING_SCRIPT_FIELDS}  }
+}`;
+
+export const validateScriptScheduleQuery = `query ValidateScriptSchedule($schedule: ScriptScheduleInput!) {
+  validateScriptSchedule(schedule: $schedule) {
+    valid
+    error
+    description
+    nextRuns
   }
+}`;
+
+export const SCRIPT_INTERPRETER_SETTINGS_FIELDS = `
+    python
+    powershell
+    batch
+    go
+`;
+
+export const scriptInterpreterSettingsQuery = `query ScriptInterpreterSettings {
+  scriptInterpreterSettings {${SCRIPT_INTERPRETER_SETTINGS_FIELDS}  }
 }`;
 
 export const postProcessingScriptRunsQuery = `query PostProcessingScriptRuns($scriptId: ID!, $limit: Int) {

@@ -1422,6 +1422,9 @@ impl HousekeepingRepository for HousekeepingStore {
         warning_failed_days: i64,
     ) -> AppResult<u32> {
         let now = Utc::now();
+        // The newest terminal run of each job is kept whatever its age. Every
+        // user-defined job shares the `custom_job` key, so those runs keep
+        // one per operation type (one per script) instead of one in total.
         execute_housekeeping_delete(
             &self.datastore,
             "delete_stale_workflow_operations",
@@ -1436,7 +1439,11 @@ impl HousekeepingRepository for HousekeepingStore {
                       FROM (
                             SELECT id,
                                    ROW_NUMBER() OVER (
-                                       PARTITION BY job_key
+                                       PARTITION BY job_key,
+                                           CASE WHEN job_key = 'custom_job'
+                                                THEN operation_type
+                                                ELSE ''
+                                           END
                                        ORDER BY started_at DESC NULLS LAST, id DESC
                                    ) AS retention_rank
                               FROM workflow_operations

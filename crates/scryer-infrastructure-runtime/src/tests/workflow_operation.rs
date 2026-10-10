@@ -350,13 +350,26 @@ async fn seed_workflow_operation(
     status: &str,
     started_at: chrono::DateTime<chrono::Utc>,
 ) {
+    seed_workflow_operation_of_type(services, id, job_key, "retention-test", status, started_at)
+        .await;
+}
+
+async fn seed_workflow_operation_of_type(
+    services: &SqliteServices,
+    id: &str,
+    job_key: Option<&str>,
+    operation_type: &str,
+    status: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+) {
     sqlx::query(
         "INSERT INTO workflow_operations
          (id, operation_type, status, started_at, completed_at, created_at, updated_at,
           job_key, trigger_source)
-         VALUES (?, 'retention-test', ?, ?, ?, ?, ?, ?, 'manual')",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual')",
     )
     .bind(id)
+    .bind(operation_type)
     .bind(status)
     .bind(started_at)
     .bind(started_at)
@@ -478,6 +491,123 @@ async fn housekeeping_prunes_stale_terminal_job_runs_and_preserves_each_job_late
 }
 
 #[tokio::test]
+async fn housekeeping_keeps_the_latest_run_of_each_custom_job() {
+    let (services, _db) = temp_services("workflow_operation_custom_job_retention").await;
+    let now = Utc::now();
+    let days_ago = |days| now - chrono::Duration::days(days);
+    for (id, job_key, operation_type, started_at) in [
+        // A weekly script whose last run is older than a daily one's.
+        (
+            "weekly-old",
+            "custom_job",
+            "custom_job:weekly",
+            days_ago(40),
+        ),
+        (
+            "weekly-latest",
+            "custom_job",
+            "custom_job:weekly",
+            days_ago(20),
+        ),
+        ("daily-old", "custom_job", "custom_job:daily", days_ago(12)),
+        (
+            "daily-latest",
+            "custom_job",
+            "custom_job:daily",
+            days_ago(10),
+        ),
+        // A built-in key still keeps one run whatever its operation types.
+        ("builtin-old", "housekeeping", "housekeeping", days_ago(30)),
+        (
+            "builtin-other",
+            "housekeeping",
+            "housekeeping:other",
+            days_ago(20),
+        ),
+        (
+            "builtin-latest",
+            "housekeeping",
+            "housekeeping",
+            days_ago(10),
+        ),
+    ] {
+        seed_workflow_operation_of_type(
+            &services,
+            id,
+            Some(job_key),
+            operation_type,
+            "completed",
+            started_at,
+        )
+        .await;
+    }
+
+    let deleted = housekeeping_store(&services)
+        .delete_stale_workflow_operations(7, 30)
+        .await
+        .expect("prune stale workflow operations");
+    assert_eq!(deleted, 4);
+
+    let remaining =
+        sqlx::query_scalar::<_, String>("SELECT id FROM workflow_operations ORDER BY id ASC")
+            .fetch_all(&services.pool)
+            .await
+            .expect("list retained workflow operations")
+            .into_iter()
+            .collect::<HashSet<_>>();
+    assert_eq!(
+        remaining,
+        HashSet::from([
+            "weekly-latest".to_string(),
+            "daily-latest".to_string(),
+            "builtin-latest".to_string(),
+        ])
+    );
+}
+
+#[tokio::test]
+async fn latest_run_per_operation_type_reads_each_custom_job_once() {
+    let (services, _db) = temp_services("workflow_operation_latest_per_type").await;
+    let now = Utc::now();
+    let days_ago = |days| now - chrono::Duration::days(days);
+    for (id, job_key, operation_type, started_at) in [
+        ("a-old", "custom_job", "custom_job:a", days_ago(3)),
+        ("a-new", "custom_job", "custom_job:a", days_ago(1)),
+        ("b-only", "custom_job", "custom_job:b", days_ago(5)),
+        // Equal start times break on id, newest id first.
+        ("c-1", "custom_job", "custom_job:c", days_ago(2)),
+        ("c-2", "custom_job", "custom_job:c", days_ago(2)),
+        ("builtin", "housekeeping", "housekeeping", days_ago(0)),
+    ] {
+        seed_workflow_operation_of_type(
+            &services,
+            id,
+            Some(job_key),
+            operation_type,
+            "completed",
+            started_at,
+        )
+        .await;
+    }
+
+    let latest = workflow_operation_store(&services)
+        .list_latest_job_run_per_operation_type(JobKey::CustomJob)
+        .await
+        .expect("latest per operation type");
+    let ids = latest.iter().map(|run| run.id.as_str()).collect::<Vec<_>>();
+    assert_eq!(ids, vec!["a-new", "c-2", "b-only"]);
+
+    let c_runs = workflow_operation_store(&services)
+        .list_job_runs_by_operation_type(JobKey::CustomJob, "custom_job:c", 10)
+        .await
+        .expect("runs of one custom job");
+    assert_eq!(
+        c_runs.iter().map(|run| run.id.as_str()).collect::<Vec<_>>(),
+        vec!["c-2", "c-1"]
+    );
+}
+
+#[tokio::test]
 async fn migration_registers_job_run_listing_indexes() {
     let services = SqliteServices::new("sqlite::memory:")
         .await
@@ -497,6 +627,7 @@ async fn migration_registers_job_run_listing_indexes() {
         "idx_workflow_operations_actor_job_started",
         "idx_workflow_operations_active_job_started",
         "idx_workflow_operations_status_started",
+        "idx_workflow_operations_job_operation_started",
     ] {
         assert!(index_names.contains(expected), "missing index {expected}");
     }

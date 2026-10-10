@@ -5,8 +5,10 @@ use super::backup_bundle::{
 };
 use super::*;
 use crate::domain_events::DomainEventActor;
+use crate::scripts::schedule::{
+    ScheduleError, parse_local_time_of_day, resolve_local_scheduled_time,
+};
 use crate::types::{BackupStatus, BackupTrigger};
-use chrono::TimeZone;
 use scryer_domain::{ConfigurationChangeAction, Id};
 use semver::Version;
 use std::collections::{BTreeMap, BTreeSet};
@@ -823,49 +825,12 @@ pub enum AutoBackupRunOutcome {
     Skipped { reason: String },
 }
 
-fn parse_daily_time_local(value: &str) -> AppResult<(u32, u32)> {
-    let (hour, minute) = value
-        .trim()
-        .split_once(':')
-        .ok_or_else(|| AppError::Validation("daily time must use HH:MM format".to_string()))?;
-    let hour = hour
-        .parse::<u32>()
-        .map_err(|_| AppError::Validation("daily time hour must be numeric".to_string()))?;
-    let minute = minute
-        .parse::<u32>()
-        .map_err(|_| AppError::Validation("daily time minute must be numeric".to_string()))?;
-    if hour > 23 || minute > 59 {
-        return Err(AppError::Validation(
-            "daily time must be between 00:00 and 23:59".to_string(),
-        ));
-    }
-    Ok((hour, minute))
-}
-
-fn resolve_local_scheduled_time(
-    date: chrono::NaiveDate,
-    hour: u32,
-    minute: u32,
-) -> Option<chrono::DateTime<chrono::Local>> {
-    let naive = date.and_hms_opt(hour, minute, 0)?;
-    for minute_offset in 0..=180 {
-        let candidate = naive + chrono::Duration::minutes(minute_offset);
-        match chrono::Local.from_local_datetime(&candidate) {
-            chrono::LocalResult::Single(value) => return Some(value),
-            chrono::LocalResult::Ambiguous(first, second) => {
-                return Some(if first <= second { first } else { second });
-            }
-            chrono::LocalResult::None => continue,
-        }
-    }
-    None
-}
-
 pub(crate) fn compute_next_auto_backup_run_at(
     daily_time_local: &str,
     now_utc: chrono::DateTime<chrono::Utc>,
 ) -> AppResult<chrono::DateTime<chrono::Utc>> {
-    let (hour, minute) = parse_daily_time_local(daily_time_local)?;
+    let (hour, minute) =
+        parse_local_time_of_day(daily_time_local).map_err(ScheduleError::into_app_error)?;
     let now_local = now_utc.with_timezone(&chrono::Local);
     let today = now_local.date_naive();
     let today_run = resolve_local_scheduled_time(today, hour, minute).ok_or_else(|| {

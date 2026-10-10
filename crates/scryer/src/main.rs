@@ -113,8 +113,9 @@ use scryer_application::{
     RuntimePluginLoad, SETTINGS_SCOPE_SYSTEM, SeriesFacetHandler, SubtitlePluginProvider,
     SystemInfoProvider, TitleImageKind, TitleImageRepository,
     load_runtime_plugin_from_persisted_installation_payload, start_background_acquisition_poller,
-    start_background_auto_backup_scheduler, start_background_download_delete_poller,
-    start_background_library_refresh_loop, start_background_manual_import_poller,
+    start_background_auto_backup_scheduler, start_background_custom_job_scheduler,
+    start_background_download_delete_poller, start_background_library_refresh_loop,
+    start_background_manual_import_poller,
     start_background_media_server_playback_reconciliation_loop, start_background_subtitle_poller,
     start_background_title_hydration_loop, start_background_title_image_loop,
     start_download_queue_poller_with_options, start_navigation_badge_facts_refresh,
@@ -1849,6 +1850,12 @@ async fn bootstrap_application(
         }
     }
 
+    // A script run still marked running was cut off by the previous
+    // process; nothing in this one can finish it.
+    if let Err(error) = app_use_case.reconcile_interrupted_script_runs().await {
+        tracing::warn!(error = %error, "failed to reconcile interrupted script runs on startup");
+    }
+
     // Durable maintenance search intents resume with their original job ids.
     // Keep those reservations out of generic interrupted-job reconciliation.
     match app_use_case.resume_interrupted_maintenance_searches().await {
@@ -2162,6 +2169,10 @@ async fn bootstrap_application(
         shutdown_token.child_token(),
     ));
     tokio::spawn(start_background_auto_backup_scheduler(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    tokio::spawn(start_background_custom_job_scheduler(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));

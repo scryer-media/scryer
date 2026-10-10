@@ -119,6 +119,7 @@ pub use rules::preview::{
 };
 pub use rules::tracked_packs::{RulePackPreviewChange, TrackedRulePackPreview};
 mod scheduler;
+pub mod scripts;
 mod security;
 mod services;
 mod settings;
@@ -388,6 +389,7 @@ pub(crate) use integration::integration::ManualImportSourceResolution;
 pub use integration::workflow::{
     ImportRecordResultOverlay, import_record_result_overlay, start_navigation_badge_facts_refresh,
 };
+pub use jobs::jobs::start_background_custom_job_scheduler;
 pub use jobs::jobs::start_background_library_refresh_loop;
 pub use library::rename::{
     LibraryRenamer, NullLibraryRenamer, RenameApplyItemResult, RenameApplyResult,
@@ -462,8 +464,8 @@ pub use settings::settings::{
     SecuritySettings, ServiceSettings, SubtitleSettings, UpdateAutoBackupSettings,
     UpdateBackupSettings, UpdateFacetScoringPersonaSelection, UpdateGeneralSettings,
     UpdateLibraryPaths, UpdateMediaSettings, UpdatePluginAutoUpdateSettings,
-    UpdateQualityProfileSelection, UpdateSecuritySettings, UpdateServiceSettings,
-    UpdateSubtitleSettings,
+    UpdateQualityProfileSelection, UpdateScriptInterpreterSettings, UpdateSecuritySettings,
+    UpdateServiceSettings, UpdateSubtitleSettings,
 };
 pub use subtitles::orchestration::{
     DownloadSubtitleForMediaFileRequest, SubtitleSearchOutcome, SubtitleSearchStatus,
@@ -717,9 +719,10 @@ pub use settings::keys::{
     RENAME_MISSING_METADATA_POLICY_SERIES_GLOBAL_KEY, RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
     RENAME_TEMPLATE_KEY, RENAME_TEMPLATE_MOVIE_GLOBAL_KEY, RENAME_TEMPLATE_SERIES_GLOBAL_KEY,
     REQUEST_RULE_GATE_EVALUATION_KEY, REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY,
-    SEARCH_LANGUAGES_KEY, SEASON_FOLDER_TEMPLATE_KEY, SERIES_PATH_KEY, SERIES_ROOT_FOLDERS_KEY,
-    SESSION_DURATION_DAYS_KEY, SET_PERMISSIONS_LINUX_KEY, SETTINGS_SCOPE_MEDIA,
-    SETTINGS_SCOPE_SYSTEM, SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY,
+    SCRIPT_INTERPRETER_BATCH_KEY, SCRIPT_INTERPRETER_GO_KEY, SCRIPT_INTERPRETER_POWERSHELL_KEY,
+    SCRIPT_INTERPRETER_PYTHON_KEY, SEARCH_LANGUAGES_KEY, SEASON_FOLDER_TEMPLATE_KEY,
+    SERIES_PATH_KEY, SERIES_ROOT_FOLDERS_KEY, SESSION_DURATION_DAYS_KEY, SET_PERMISSIONS_LINUX_KEY,
+    SETTINGS_SCOPE_MEDIA, SETTINGS_SCOPE_SYSTEM, SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY,
     SKIP_LOGIN_FOR_LOCAL_IPS_KEY, SPECIALS_FOLDER_TEMPLATE_KEY,
     SRRDB_FILENAME_RECOVERY_ENABLED_KEY, TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
     TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY, TLS_KEY_PATH_KEY,

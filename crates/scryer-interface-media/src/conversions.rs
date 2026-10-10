@@ -369,6 +369,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::AcquisitionSearch => AppJobKey::AcquisitionSearch,
             Self::ApplicationUpgrade => AppJobKey::ApplicationUpgrade,
             Self::LocationOperation => AppJobKey::LocationOperation,
+            Self::CustomJob => AppJobKey::CustomJob,
         }
     }
 }
@@ -407,6 +408,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::AcquisitionSearch => Self::AcquisitionSearch,
             AppJobKey::ApplicationUpgrade => Self::ApplicationUpgrade,
             AppJobKey::LocationOperation => Self::LocationOperation,
+            AppJobKey::CustomJob => Self::CustomJob,
         }
     }
 }
@@ -439,6 +441,8 @@ impl FromApplication<AppJobScheduleKind> for JobScheduleKindValue {
             AppJobScheduleKind::Interval => Self::Interval,
             AppJobScheduleKind::StartupAndInterval => Self::StartupAndInterval,
             AppJobScheduleKind::DailyAtTime => Self::DailyAtTime,
+            AppJobScheduleKind::Cron => Self::Cron,
+            AppJobScheduleKind::WeeklyAtTime => Self::WeeklyAtTime,
         }
     }
 }

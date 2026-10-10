@@ -422,6 +422,38 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_GENERAL,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SCRIPT_INTERPRETER_PYTHON_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SCRIPT_INTERPRETER_POWERSHELL_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SCRIPT_INTERPRETER_BATCH_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SCRIPT_INTERPRETER_GO_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY,
             data_type: "string",
             default_value_json: "null",
@@ -3128,6 +3160,23 @@ mod tests {
                 && seed.default_value_json == "false"
                 && !seed.is_sensitive
         }));
+        for key_name in [
+            scryer_application::SCRIPT_INTERPRETER_PYTHON_KEY,
+            scryer_application::SCRIPT_INTERPRETER_POWERSHELL_KEY,
+            scryer_application::SCRIPT_INTERPRETER_BATCH_KEY,
+            scryer_application::SCRIPT_INTERPRETER_GO_KEY,
+        ] {
+            assert!(
+                service_setting_seeds().iter().any(|seed| {
+                    seed.scope == SETTINGS_SCOPE_SYSTEM
+                        && seed.key_name == key_name
+                        && seed.data_type == "string"
+                        && seed.default_value_json == "null"
+                        && !seed.is_sensitive
+                }),
+                "{key_name} is seeded as an unset string"
+            );
+        }
         assert!(service_setting_seeds().iter().any(|seed| {
             seed.scope == SETTINGS_SCOPE_SYSTEM
                 && seed.key_name == AUTO_BACKUP_ENABLED_KEY
