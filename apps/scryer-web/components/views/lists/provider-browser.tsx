@@ -27,8 +27,10 @@ const AUTH_BADGE_KEY: Partial<Record<ListAuthBadge, string>> = {
   SERVER_API_KEY: "lists.catalog.auth.serverKey",
 };
 
-/** The rail entry that follows a list by its address instead of from a provider's catalog. */
+/** The rail entry for lists that come from an address the reader supplies. */
 const CUSTOM = "__custom__";
+/** The provider whose lists are feeds at any address; it has no rail entry of its own. */
+const CUSTOM_PROVIDER_TYPE = "custom";
 
 const RAIL_ENTRY =
   "flex flex-none items-center gap-2.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]";
@@ -49,7 +51,8 @@ type ProviderBrowserProps = {
 
 /**
  * The catalog of public lists: a provider rail and that provider's followable
- * lists, plus a custom entry that follows a list by its address.
+ * lists, plus a custom entry that follows a list by its address and holds the
+ * custom provider's lists.
  */
 export function ProviderBrowser({
   providers,
@@ -63,12 +66,15 @@ export function ProviderBrowser({
   const t = useTranslate();
   const catalog = React.useMemo(() => publicProviders(providers), [providers]);
   const [selectedType, setSelectedType] = React.useState<string | null>(null);
+  const rail = catalog.filter((provider) => provider.providerType !== CUSTOM_PROVIDER_TYPE);
   const selected =
     selectedType === CUSTOM
       ? null
-      : (catalog.find((provider) => provider.providerType === selectedType) ?? catalog[0] ?? null);
-  const settingFields = selected
-    ? (providerSettings?.find((entry) => entry.providerType === selected.providerType)?.fields ?? selected.configFields)
+      : (rail.find((provider) => provider.providerType === selectedType) ?? rail[0] ?? null);
+  // The provider whose lists the pane offers: the custom entry offers the custom provider's.
+  const shown = selected ?? catalog.find((provider) => provider.providerType === CUSTOM_PROVIDER_TYPE) ?? null;
+  const settingFields = shown
+    ? (providerSettings?.find((entry) => entry.providerType === shown.providerType)?.fields ?? shown.configFields)
     : [];
 
   return (
@@ -79,7 +85,7 @@ export function ProviderBrowser({
         </p>
       ) : null}
       <nav aria-label={t("lists.catalog.providers")} className="flex gap-1.5 overflow-x-auto md:flex-col md:overflow-visible">
-        {catalog.map((provider) => {
+        {rail.map((provider) => {
           const active = provider.providerType === selected?.providerType;
           return (
             <button
@@ -112,92 +118,90 @@ export function ProviderBrowser({
         </button>
       </nav>
 
-      {selected ? (
-        <div className="min-w-0 space-y-4">
+      <div className="min-w-0 space-y-4">
+        {selected ? (
           <div className="flex items-center gap-3">
             <ProviderTile provider={selected} />
             <h3 className="min-w-0 truncate font-display text-[17px] font-bold text-[var(--scry-ink)]">{selected.name}</h3>
           </div>
-          {onSaveProviderSettings && settingFields.length > 0 ? (
-            <ProviderSettingsCard
-              key={selected.providerType}
-              providerType={selected.providerType}
-              fields={settingFields}
-              onSave={onSaveProviderSettings}
-            />
-          ) : null}
-          {selected.groups.map((group) => {
-            const authBadgeKey = AUTH_BADGE_KEY[group.authBadge];
-            return (
-              <section key={group.label} className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <h4 className="text-[13px] font-semibold text-[var(--scry-ink2)]">{group.label}</h4>
-                  {authBadgeKey ? (
-                    <Badge tone="outline" className="text-[10.5px]">
-                      {t(authBadgeKey)}
-                    </Badge>
-                  ) : null}
-                </div>
-                <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {group.items.map((item) => {
-                    const interval = listIntervalParts(item.defaultIntervalSeconds);
-                    // Only a list that takes no value is one fixed source; the rest
-                    // can be followed again with a different value.
-                    const followed =
-                      item.params.length === 0 &&
-                      isListSourceFollowed(subscriptions, { provider: selected.providerType, sourceType: item.sourceType, params: [] });
-                    return (
-                      <li
-                        key={item.id}
-                        className="flex min-w-0 flex-col gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-3"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13.5px] font-semibold text-[var(--scry-ink)]">{item.name}</p>
-                          {item.description ? (
-                            <p className="line-clamp-2 text-[12px] text-[var(--scry-muted)]">{item.description}</p>
-                          ) : null}
-                          <div className="mt-1.5 flex flex-wrap gap-1">
-                            {item.kinds.map((kind) => (
-                              <Badge key={kind} tone="neutral" className="px-1.5 py-0 text-[10.5px]">
-                                {t(listKindLabelKey(kind))}
-                              </Badge>
-                            ))}
-                            {item.params.map((param) => (
-                              <Badge key={param.key} tone="info" className="px-1.5 py-0 text-[10.5px]">
-                                {param.label}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11.5px] text-[var(--scry-muted)]">
-                            {t("lists.catalog.every", { interval: t(interval.key, { count: interval.count }) })}
-                          </span>
-                          <Button
-                            id={`lists-catalog-follow-${selected.providerType}-${item.id}`}
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            disabled={followed}
-                            onClick={() => onFollow(selected, item)}
-                          >
-                            {followed ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                            {t(followed ? "lists.catalog.followed" : "lists.catalog.follow")}
-                          </Button>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="min-w-0">
+        ) : (
           <AddByUrlCard providers={providers} onPreviewUrl={onPreviewUrl} onRecognized={onFollowUrl} />
-        </div>
-      )}
+        )}
+        {shown && onSaveProviderSettings && settingFields.length > 0 ? (
+          <ProviderSettingsCard
+            key={shown.providerType}
+            providerType={shown.providerType}
+            fields={settingFields}
+            onSave={onSaveProviderSettings}
+          />
+        ) : null}
+        {shown?.groups.map((group) => {
+          const authBadgeKey = AUTH_BADGE_KEY[group.authBadge];
+          return (
+            <section key={group.label} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <h4 className="text-[13px] font-semibold text-[var(--scry-ink2)]">{group.label}</h4>
+                {authBadgeKey ? (
+                  <Badge tone="outline" className="text-[10.5px]">
+                    {t(authBadgeKey)}
+                  </Badge>
+                ) : null}
+              </div>
+              <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {group.items.map((item) => {
+                  const interval = listIntervalParts(item.defaultIntervalSeconds);
+                  // Only a list that takes no value is one fixed source; the rest
+                  // can be followed again with a different value.
+                  const followed =
+                    item.params.length === 0 &&
+                    isListSourceFollowed(subscriptions, { provider: shown.providerType, sourceType: item.sourceType, params: [] });
+                  return (
+                    <li
+                      key={item.id}
+                      className="flex min-w-0 flex-col gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13.5px] font-semibold text-[var(--scry-ink)]">{item.name}</p>
+                        {item.description ? (
+                          <p className="line-clamp-2 text-[12px] text-[var(--scry-muted)]">{item.description}</p>
+                        ) : null}
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {item.kinds.map((kind) => (
+                            <Badge key={kind} tone="neutral" className="px-1.5 py-0 text-[10.5px]">
+                              {t(listKindLabelKey(kind))}
+                            </Badge>
+                          ))}
+                          {item.params.map((param) => (
+                            <Badge key={param.key} tone="info" className="px-1.5 py-0 text-[10.5px]">
+                              {param.label}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11.5px] text-[var(--scry-muted)]">
+                          {t("lists.catalog.every", { interval: t(interval.key, { count: interval.count }) })}
+                        </span>
+                        <Button
+                          id={`lists-catalog-follow-${shown.providerType}-${item.id}`}
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={followed}
+                          onClick={() => onFollow(shown, item)}
+                        >
+                          {followed ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                          {t(followed ? "lists.catalog.followed" : "lists.catalog.follow")}
+                        </Button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }
