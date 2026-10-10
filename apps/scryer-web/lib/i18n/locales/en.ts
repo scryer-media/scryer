@@ -5918,6 +5918,7 @@ const en: LocaleDictionary = {
   "settings.scriptInterpreters.containerHelp": "The Scryer container image ships no interpreters. Install the ones you need and point these paths at them.",
   "settings.scriptInterpreters.powershellHelp": "PowerShell scripts run with pwsh, which is PowerShell 7.",
   "settings.scriptInterpreters.saved": "Interpreter paths saved",
+  "settings.scriptInterpreters.selectFile": "Select the {{language}} interpreter",
 };
 
 export default en;
