@@ -33,6 +33,7 @@ import {
   inheritedListEpisodePolicyLabelKey,
   splitListValues,
   withListFilter,
+  exclusionFieldsFromMetadataResult,
   exclusionInputFromTitle,
   isListModeSelectable,
   isListSourceFollowed,
@@ -363,6 +364,31 @@ test("subscribe input is public, drops blank parameters and routes for unfollowe
     ["MOVIE", "lib-movies", "root-a"],
   ]);
   assert.equal(input.maxPerSync, 5);
+});
+
+test("a picked search result fills the exclusion form with its name, year and ids", () => {
+  const fields = exclusionFieldsFromMetadataResult(
+    {
+      name: "Sample Film",
+      year: 2031,
+      tvdbId: "",
+      smgId: 41,
+      tmdbId: 9001,
+      imdbId: "tt0000041",
+      externalIds: [{ source: "TMDB", kind: "movie", value: "9001" }],
+    },
+    "MOVIE",
+  );
+  assert.deepEqual(fields, { title: "Sample Film", year: "2031", ids: "tmdb:9001, smg:41, imdb:tt0000041" });
+  assert.deepEqual(parseExternalIdList(fields.ids), [
+    { source: "tmdb", value: "9001" },
+    { source: "smg", value: "41" },
+    { source: "imdb", value: "tt0000041" },
+  ]);
+  assert.equal(
+    exclusionFieldsFromMetadataResult({ name: "Sample Show", year: null, tvdbId: "77", imdbId: null }, "SERIES").year,
+    "",
+  );
 });
 
 test("deleted titles become all-lists exclusions only when they carry external ids", () => {

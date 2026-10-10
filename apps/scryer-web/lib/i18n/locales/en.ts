@@ -5778,6 +5778,7 @@ const en: LocaleDictionary = {
   "lists.status.syncAllQueued": "Syncing all lists.",
   "lists.exclusions.addHeading": "Exclude a title",
   "lists.exclusions.titleLabel": "Title",
+  "lists.exclusions.titlePlaceholder": "Search for a title",
   "lists.exclusions.yearLabel": "Year",
   "lists.exclusions.kindLabel": "Kind",
   "lists.exclusions.idsLabel": "External IDs",

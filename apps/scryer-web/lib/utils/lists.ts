@@ -26,6 +26,7 @@ import type { ExternalId, Facet } from "../types/titles.ts";
 import { allOf, forEventTypes, forTitle, type DomainEventPredicate } from "../reactive/domain-event-feed.ts";
 import { selectorToken } from "./dom-ids.ts";
 import { facetById } from "../facets/registry.ts";
+import { metadataResultExternalIds, type MetadataResultIdentity } from "./metadata-result-external-ids.ts";
 import { getPluginLogoSources } from "./plugin-logos.ts";
 import { ratingSourceInfo } from "./title-ratings.ts";
 
@@ -643,6 +644,26 @@ export function exclusionInputFromTitle(title: {
     year: title.year ?? null,
     scope: "ALL_LISTS",
     subscriptionId: null,
+  };
+}
+
+/** External ids as the exclusion form's field shows them: "tmdb:603, imdb:tt0133093". */
+export function formatExternalIdList(ids: readonly ExternalId[]): string {
+  return ids.map((id) => `${id.source}:${id.value}`).join(", ");
+}
+
+/**
+ * What the exclusion form takes from a metadata search result: its name, its
+ * year and every id it is known by.
+ */
+export function exclusionFieldsFromMetadataResult(
+  result: MetadataResultIdentity & { name: string; year: number | null },
+  kind: Facet,
+): { title: string; year: string; ids: string } {
+  return {
+    title: result.name,
+    year: result.year ? String(result.year) : "",
+    ids: formatExternalIdList(metadataResultExternalIds(result, kind)),
   };
 }
 
