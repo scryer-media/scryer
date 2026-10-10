@@ -78,6 +78,9 @@ export function ScriptChoiceGroup({
               type="button"
               size="sm"
               variant={option.value === value ? "default" : "ghost"}
+              // The button's own tighter icon padding only sees inline SVGs,
+              // and these marks are images and text.
+              className={option.icon ? "px-2.5" : undefined}
             >
               {option.icon}
               {option.label}

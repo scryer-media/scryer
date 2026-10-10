@@ -122,7 +122,7 @@ export function ScriptEditorForm({
       </div>
 
       {/* Script Type + Interpreter */}
-      <div className="flex flex-wrap gap-x-6 gap-y-4">
+      <div className="flex flex-wrap gap-x-4 gap-y-4">
         <ScriptChoiceGroup
           id="script-editor-type"
           label={t("settings.pp.scriptType")}

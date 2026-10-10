@@ -1224,7 +1224,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
       >
         <DialogContent
           id="jobs-custom-editor"
-          className="max-h-[90vh] overflow-y-auto sm:max-w-3xl"
+          className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
         >
           <DialogHeader>
             <DialogTitle>

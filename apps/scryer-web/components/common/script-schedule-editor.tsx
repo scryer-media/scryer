@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 import { useClient } from "urql";
 
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { validateScriptScheduleQuery } from "@/lib/graphql/queries";
+import { cn } from "@/lib/utils";
 import {
   SCHEDULE_WEEKDAYS,
   type ScheduleWeekdayValue,
@@ -37,6 +38,33 @@ const SCHEDULE_KINDS: readonly ScriptScheduleKindValue[] = ["MANUAL", "INTERVAL"
 const INTERVAL_UNITS: readonly IntervalUnit[] = ["minutes", "hours", "days"];
 const VALIDATION_DEBOUNCE_MS = 400;
 const NEXT_RUNS_SHOWN = 3;
+
+// The height of a choice group, so a text field beside one is the same size.
+const SCHEDULE_INPUT_HEIGHT_CLASS = "h-10.5";
+
+/** A labelled text field laid out like a choice group, so the two line up side by side. */
+function ScheduleField({
+  label,
+  htmlFor,
+  className,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("min-w-0 space-y-1.5", className)}>
+      <div className="flex h-5 items-center">
+        <Label htmlFor={htmlFor} className="block">
+          {label}
+        </Label>
+      </div>
+      {children}
+    </div>
+  );
+}
 
 type CronValidationState = {
   expression: string;
@@ -192,46 +220,50 @@ function IntervalFields({
   };
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <label className="block">
-        <Label className="mb-2 block">{t("script.schedule.every")}</Label>
-        <Input
-          id="script-schedule-interval-amount"
-          {...integerInputProps}
-          value={amountText}
+    <div className="space-y-3">
+      {/* Two equal columns sized by the unit group, so the amount field matches it. */}
+      <div className="inline-grid max-w-full grid-cols-2 gap-x-4">
+        <ScheduleField label={t("script.schedule.every")} htmlFor="script-schedule-interval-amount">
+          {/* Takes the column's width without widening it. */}
+          <div className="w-0 min-w-full">
+            <Input
+              id="script-schedule-interval-amount"
+              {...integerInputProps}
+              className={SCHEDULE_INPUT_HEIGHT_CLASS}
+              value={amountText}
+              disabled={disabled}
+              onChange={(event) => {
+                const text = sanitizeDigits(event.target.value);
+                setAmountText(text);
+                commit(text, unit);
+              }}
+              onBlur={() => {
+                if (!amountText || Number(amountText) < 1) {
+                  setAmountText("1");
+                  commit("1", unit);
+                }
+              }}
+            />
+          </div>
+        </ScheduleField>
+        <ScriptChoiceGroup
+          id="script-schedule-interval-unit"
+          label={t("script.schedule.unit")}
+          value={unit}
           disabled={disabled}
-          onChange={(event) => {
-            const text = sanitizeDigits(event.target.value);
-            setAmountText(text);
-            commit(text, unit);
+          onValueChange={(next) => {
+            const nextUnit = next as IntervalUnit;
+            setUnit(nextUnit);
+            commit(amountText || "1", nextUnit);
           }}
-          onBlur={() => {
-            if (!amountText || Number(amountText) < 1) {
-              setAmountText("1");
-              commit("1", unit);
-            }
-          }}
+          options={INTERVAL_UNITS.map((candidate) => ({
+            value: candidate,
+            dataValue: candidate.toUpperCase(),
+            label: t(`script.schedule.unit.${candidate}`),
+          }))}
         />
-      </label>
-      <ScriptChoiceGroup
-        id="script-schedule-interval-unit"
-        label={t("script.schedule.unit")}
-        value={unit}
-        disabled={disabled}
-        onValueChange={(next) => {
-          const nextUnit = next as IntervalUnit;
-          setUnit(nextUnit);
-          commit(amountText || "1", nextUnit);
-        }}
-        options={INTERVAL_UNITS.map((candidate) => ({
-          value: candidate,
-          dataValue: candidate.toUpperCase(),
-          label: t(`script.schedule.unit.${candidate}`),
-        }))}
-      />
-      <p className="text-xs text-muted-foreground sm:col-span-2">
-        {t("script.schedule.minimumInterval")}
-      </p>
+      </div>
+      <p className="text-xs text-muted-foreground">{t("script.schedule.minimumInterval")}</p>
     </div>
   );
 }
@@ -247,18 +279,18 @@ function TimeField({
 }) {
   const t = useTranslate();
   return (
-    <label className="block max-w-[12rem]">
-      <Label className="mb-2 block">{t("script.schedule.time")}</Label>
+    <ScheduleField label={t("script.schedule.time")} htmlFor="script-schedule-time" className="w-48">
       <Input
         id="script-schedule-time"
         type="time"
+        className={SCHEDULE_INPUT_HEIGHT_CLASS}
         value={value ?? ""}
         disabled={disabled}
         onChange={(event) => {
           if (event.target.value) onChange(event.target.value);
         }}
       />
-    </label>
+    </ScheduleField>
   );
 }
 
@@ -275,9 +307,11 @@ function WeekdayToggles({
   const labelId = "script-schedule-days-label";
   return (
     <div className="min-w-0 space-y-1.5">
-      <Label id={labelId} className="block">
-        {t("script.schedule.days")}
-      </Label>
+      <div className="flex h-5 items-center">
+        <Label id={labelId} className="block">
+          {t("script.schedule.days")}
+        </Label>
+      </div>
       <ToggleGroupPrimitive.Root
         id="script-schedule-days"
         type="multiple"
@@ -364,7 +398,7 @@ export function ScriptScheduleEditor({
           onChange={(everySeconds) => onChange({ ...value, everySeconds })}
         />
       ) : null}
-      {value.kind === "DAILY" || value.kind === "WEEKLY" ? (
+      {value.kind === "DAILY" ? (
         <TimeField
           value={value.timeLocal}
           disabled={disabled}
@@ -372,11 +406,18 @@ export function ScriptScheduleEditor({
         />
       ) : null}
       {value.kind === "WEEKLY" ? (
-        <WeekdayToggles
-          days={value.days ?? []}
-          disabled={disabled}
-          onChange={(days) => onChange({ ...value, days })}
-        />
+        <div className="flex flex-wrap gap-x-4 gap-y-3">
+          <WeekdayToggles
+            days={value.days ?? []}
+            disabled={disabled}
+            onChange={(days) => onChange({ ...value, days })}
+          />
+          <TimeField
+            value={value.timeLocal}
+            disabled={disabled}
+            onChange={(timeLocal) => onChange({ ...value, timeLocal })}
+          />
+        </div>
       ) : null}
       {value.kind === "CRON" ? (
         <CronExpressionField
