@@ -2744,7 +2744,6 @@ const zh_CN: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "列表",
   "lists.commandDescription": "关注公开列表和排行榜，并自动添加其中的作品。",
-  "lists.heading.copy": "关注排行榜和精选列表。关注的列表出现新作品时，会按计划添加或留待审核；已在媒体库中的作品不会被改动。",
   "lists.tab.public": "公开列表",
   "lists.tab.exclusions": "排除项",
   "lists.exclusions.commandDescription": "任何列表都不能添加的作品。",

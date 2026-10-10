@@ -3627,7 +3627,6 @@ const nl: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "Lijsten",
   "lists.commandDescription": "Volg openbare lijsten en hitlijsten en voeg hun titels automatisch toe.",
-  "lists.heading.copy": "Volg hitlijsten en samengestelde lijsten. Nieuwe titels op een gevolgde lijst worden volgens een schema toegevoegd of vastgehouden voor beoordeling, en titels die al in je bibliotheek staan blijven ongemoeid.",
   "lists.tab.public": "Openbare lijsten",
   "lists.tab.exclusions": "Uitsluitingen",
   "lists.exclusions.commandDescription": "Titels die geen enkele lijst mag toevoegen.",

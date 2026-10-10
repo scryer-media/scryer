@@ -98,12 +98,7 @@ export function ProviderBrowser({
               className={cn(RAIL_ENTRY, active ? RAIL_ENTRY_ACTIVE : RAIL_ENTRY_IDLE)}
             >
               <ProviderTile provider={provider} size="sm" />
-              <span className="min-w-0">
-                <span className="block truncate text-[13px] font-semibold text-[var(--scry-ink2)]">{provider.name}</span>
-                {provider.summary ? (
-                  <span className="hidden truncate text-[11.5px] text-[var(--scry-muted)] md:block">{provider.summary}</span>
-                ) : null}
-              </span>
+              <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--scry-ink2)]">{provider.name}</span>
             </button>
           );
         })}
@@ -120,21 +115,15 @@ export function ProviderBrowser({
           >
             <Link2 className="h-5 w-5" />
           </span>
-          <span className="min-w-0">
-            <span className="block truncate text-[13px] font-semibold text-[var(--scry-ink2)]">{t("label.custom")}</span>
-            <span className="hidden truncate text-[11.5px] text-[var(--scry-muted)] md:block">{t("lists.url.label")}</span>
-          </span>
+          <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--scry-ink2)]">{t("label.custom")}</span>
         </button>
       </nav>
 
       {selected ? (
         <div className="min-w-0 space-y-4">
-          <div className="flex items-start gap-3">
+          <div className="flex items-center gap-3">
             <ProviderTile provider={selected} />
-            <div className="min-w-0">
-              <h3 className="font-display text-[17px] font-bold text-[var(--scry-ink)]">{selected.name}</h3>
-              {selected.blurb ? <p className="text-[13px] text-[var(--scry-muted)]">{selected.blurb}</p> : null}
-            </div>
+            <h3 className="min-w-0 truncate font-display text-[17px] font-bold text-[var(--scry-ink)]">{selected.name}</h3>
           </div>
           {onSaveProviderSettings && settingFields.length > 0 ? (
             <ProviderSettingsCard

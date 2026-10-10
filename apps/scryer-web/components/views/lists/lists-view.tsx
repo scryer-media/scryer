@@ -185,7 +185,7 @@ export function ListsView(props: ListsViewProps) {
       <div className="w-full px-4 py-6 sm:px-6 lg:px-8">
       <div ref={contentRef} className="flex items-start justify-center gap-5">
       <div className="flex min-w-0 max-w-[1280px] flex-[1_1_1280px] flex-col gap-4">
-        <div className="flex items-start gap-4">
+        <div className="flex items-center gap-4">
           <div className="flex h-11 w-11 flex-none items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-accent-text)]">
             <ListPlus className="h-5 w-5" />
           </div>
@@ -193,7 +193,6 @@ export function ListsView(props: ListsViewProps) {
             <h1 className="font-display text-[25px] font-bold leading-tight text-[var(--scry-ink)]">
               {t("nav.lists")}
             </h1>
-            <p className="mt-1 max-w-2xl text-[13.5px] text-[var(--scry-muted)]">{t("lists.heading.copy")}</p>
           </div>
           {showPlugins && !pluginsDocked ? (
             <Button type="button" variant="outline" size="sm" aria-expanded={pluginsOpen} aria-controls="lists-plugins-panel" onClick={() => setPluginsOpen(true)}>

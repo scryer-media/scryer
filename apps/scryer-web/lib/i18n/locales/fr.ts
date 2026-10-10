@@ -2937,7 +2937,6 @@ const fr: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "Listes",
   "lists.commandDescription": "Suivre des listes et classements publics et ajouter leurs titres automatiquement.",
-  "lists.heading.copy": "Suivez des classements et des listes éditoriales. Les nouveaux titres d'une liste suivie sont ajoutés ou mis en attente de validation selon un calendrier, et les titres déjà dans votre bibliothèque ne sont pas modifiés.",
   "lists.tab.public": "Listes publiques",
   "lists.tab.exclusions": "Exclusions",
   "lists.exclusions.commandDescription": "Titres qu'aucune liste ne peut ajouter.",

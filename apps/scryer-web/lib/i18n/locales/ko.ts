@@ -2825,7 +2825,6 @@ const ko: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "목록",
   "lists.commandDescription": "공개 목록과 차트를 팔로우하고 작품을 자동으로 추가합니다.",
-  "lists.heading.copy": "차트와 큐레이션 목록을 팔로우하세요. 팔로우한 목록에 새 작품이 올라오면 일정에 따라 추가되거나 검토 대기로 보류되며, 이미 라이브러리에 있는 작품은 건드리지 않습니다.",
   "lists.tab.public": "공개 목록",
   "lists.tab.exclusions": "제외",
   "lists.exclusions.commandDescription": "어떤 목록도 추가할 수 없는 작품입니다.",

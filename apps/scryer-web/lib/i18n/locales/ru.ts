@@ -6278,7 +6278,6 @@ const ru: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "Списки",
   "lists.commandDescription": "Отслеживайте публичные списки и чарты и автоматически добавляйте их тайтлы.",
-  "lists.heading.copy": "Отслеживайте чарты и подборки. Новые тайтлы из отслеживаемого списка по расписанию добавляются или ждут проверки, а тайтлы, уже находящиеся в библиотеке, не затрагиваются.",
   "lists.tab.public": "Публичные списки",
   "lists.tab.exclusions": "Исключения",
   "lists.exclusions.commandDescription": "Тайтлы, которые не может добавить ни один список.",

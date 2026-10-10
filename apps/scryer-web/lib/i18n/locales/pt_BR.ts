@@ -2916,7 +2916,6 @@ const pt_BR: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "Listas",
   "lists.commandDescription": "Siga listas e rankings públicos e adicione seus títulos automaticamente.",
-  "lists.heading.copy": "Siga rankings e listas selecionadas. Títulos novos em uma lista seguida são adicionados ou retidos para revisão conforme um agendamento, e títulos que já estão na sua biblioteca não são alterados.",
   "lists.tab.public": "Listas públicas",
   "lists.tab.exclusions": "Exclusões",
   "lists.exclusions.commandDescription": "Títulos que nenhuma lista pode adicionar.",

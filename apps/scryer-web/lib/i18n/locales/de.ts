@@ -2908,7 +2908,6 @@ const de: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "Listen",
   "lists.commandDescription": "Öffentlichen Listen und Charts folgen und ihre Titel automatisch hinzufügen.",
-  "lists.heading.copy": "Folge Charts und kuratierten Listen. Neue Titel auf einer gefolgten Liste werden nach Zeitplan hinzugefügt oder zur Prüfung zurückgehalten; Titel in deiner Bibliothek bleiben unberührt.",
   "lists.tab.public": "Öffentliche Listen",
   "lists.tab.exclusions": "Ausschlüsse",
   "lists.exclusions.commandDescription": "Titel, die keine Liste hinzufügen darf.",

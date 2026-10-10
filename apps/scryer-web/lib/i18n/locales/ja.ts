@@ -2869,7 +2869,6 @@ const ja: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "リスト",
   "lists.commandDescription": "公開リストやチャートをフォローし、タイトルを自動で追加します。",
-  "lists.heading.copy": "チャートやキュレーションリストをフォローします。フォロー中のリストに新しいタイトルが載ると、スケジュールに従って追加されるか承認待ちになります。ライブラリにあるタイトルには手を加えません。",
   "lists.tab.public": "公開リスト",
   "lists.tab.exclusions": "除外",
   "lists.exclusions.commandDescription": "どのリストからも追加されないタイトル。",

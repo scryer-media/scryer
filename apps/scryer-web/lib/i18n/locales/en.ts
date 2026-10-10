@@ -5605,7 +5605,6 @@ const en: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "Lists",
   "lists.commandDescription": "Follow public lists and charts and add their titles automatically.",
-  "lists.heading.copy": "Follow charts and curated lists. New titles on a followed list are added or held for review on a schedule, and titles already in your library are left alone.",
   "lists.tab.public": "Public lists",
   "lists.tab.exclusions": "Exclusions",
   "lists.exclusions.commandDescription": "Titles that no list may add.",
