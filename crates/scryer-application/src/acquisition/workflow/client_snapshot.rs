@@ -114,6 +114,10 @@ pub(crate) struct DownloadFailureContext {
     pub reason: String,
     pub remove_from_client_if_configured: bool,
     pub skip_reacquire: bool,
+    /// The blocklist entry's reason. `None` records the failure as one the
+    /// download client reported; a failure Scryer's own import gate raised
+    /// names itself here instead.
+    pub blocklist_reason: Option<String>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FailureHandlingOutcome {
@@ -1013,6 +1017,7 @@ async fn check_grabbed_for_failures(app: &AppUseCase, dl_snapshot: &DownloadClie
                     release_title: release_title.clone(),
                     reason: failed_item.reason.clone(),
                     remove_from_client_if_configured: true,
+                    blocklist_reason: None,
                     skip_reacquire: false,
                 },
             )
@@ -1293,7 +1298,10 @@ async fn handle_download_failure_for_download(
     )
     .await;
 
-    let blocklist_reason = format!("download client failure: {}", context.reason);
+    let blocklist_reason = context
+        .blocklist_reason
+        .clone()
+        .unwrap_or_else(|| format!("download client failure: {}", context.reason));
     let mut failure_recorded = false;
 
     let (outcome, failure_reason) = if operator_submission {

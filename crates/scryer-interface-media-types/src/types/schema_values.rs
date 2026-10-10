@@ -1151,6 +1151,8 @@ pub enum ImportSkipReasonValue {
     UnparseableEpisode,
     /// No video files were found.
     NoVideoFiles,
+    /// No video files were found and the download held only executables.
+    UnwantedExecutables,
     /// The download client is still writing or unpacking the source file.
     DownloadInProgress,
     /// Storage is full.
@@ -1175,6 +1177,7 @@ impl ImportSkipReasonValue {
             ImportSkipReason::UnresolvedIdentity => Self::UnresolvedIdentity,
             ImportSkipReason::UnparseableEpisode => Self::UnparseableEpisode,
             ImportSkipReason::NoVideoFiles => Self::NoVideoFiles,
+            ImportSkipReason::UnwantedExecutables => Self::UnwantedExecutables,
             ImportSkipReason::DownloadInProgress => Self::DownloadInProgress,
             ImportSkipReason::DiskFull => Self::DiskFull,
             ImportSkipReason::PermissionDenied => Self::PermissionDenied,

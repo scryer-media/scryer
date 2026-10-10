@@ -2813,6 +2813,9 @@ pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> boo
         // execution failure. Its message quotes operator-authored rule names
         // and rule source, so the message allowlist must not be consulted.
         _ if result.skip_reason == Some(ImportSkipReason::PostDownloadRuleBlocked) => false,
+        // Unwanted executables are a verdict on the download's contents, and
+        // the message quotes a file name from the download.
+        _ if result.skip_reason == Some(ImportSkipReason::UnwantedExecutables) => false,
         _ => {
             matches!(
                 result.skip_reason,

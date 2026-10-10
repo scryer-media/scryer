@@ -1348,3 +1348,79 @@ fn community_season_rows_stored_before_the_contiguous_start_still_deserialize() 
     assert_eq!(season.absolute_start, Some(1));
     assert_eq!(season.contiguous_absolute_start, None);
 }
+
+fn classify_names<'a>(names: &[&'a str]) -> NoVideoDownloadContents<'a> {
+    classify_no_video_download(names.iter().map(|name| Path::new(*name)))
+}
+
+#[test]
+fn no_video_download_of_only_an_executable_is_unwanted() {
+    let exe = "Fixture.Release.2020.1080p-GROUP/Fixture.Release.2020.1080p-GROUP.EXE";
+    assert_eq!(
+        classify_names(&[exe]),
+        NoVideoDownloadContents::UnwantedExecutables(vec![Path::new(exe)])
+    );
+}
+
+#[test]
+fn no_video_download_of_executable_with_helpers_is_unwanted() {
+    assert_eq!(
+        classify_names(&[
+            "job/Fixture.Release.2020.1080p-GROUP.nfo",
+            "job/Fixture.Release.2020.1080p-GROUP.exe",
+            "job/Fixture.Release.2020.1080p-GROUP.srt",
+            "job/Fixture.Release.2020.1080p-GROUP.vol00+01.PAR2",
+            "job/Setup.Lnk",
+        ]),
+        NoVideoDownloadContents::UnwantedExecutables(vec![
+            Path::new("job/Fixture.Release.2020.1080p-GROUP.exe"),
+            Path::new("job/Setup.Lnk"),
+        ])
+    );
+}
+
+#[test]
+fn no_video_download_with_an_ambiguous_file_needs_review() {
+    for ambiguous in [
+        "job/abcdef0123456789",
+        "job/abcdef0123456789.x7q",
+        "job/Fixture.Release.2020.1080p-GROUP.rar",
+        "job/Fixture.Release.2020.1080p-GROUP.r00",
+    ] {
+        assert_eq!(
+            classify_names(&["job/Fixture.Release.2020.1080p-GROUP.exe", ambiguous]),
+            NoVideoDownloadContents::Other,
+            "{ambiguous}"
+        );
+    }
+}
+
+#[test]
+fn no_video_download_with_a_video_is_not_unwanted() {
+    assert_eq!(
+        classify_names(&[
+            "job/Fixture.Release.2020.1080p-GROUP.exe",
+            "job/Sample/fixture-sample.mkv",
+        ]),
+        NoVideoDownloadContents::Other
+    );
+}
+
+#[test]
+fn no_video_download_without_files_or_with_helpers_alone_is_unchanged() {
+    assert_eq!(classify_names(&[]), NoVideoDownloadContents::Empty);
+    assert_eq!(
+        classify_names(&["job/Fixture.Release.2020.1080p-GROUP.nfo"]),
+        NoVideoDownloadContents::Other
+    );
+}
+
+#[test]
+fn executable_extensions_match_case_insensitively() {
+    for extension in EXECUTABLE_EXTENSIONS {
+        let upper = format!("file.{}", extension.to_ascii_uppercase());
+        assert!(is_executable_file(Path::new(&upper)), "{upper}");
+    }
+    assert!(!is_executable_file(Path::new("file.mkv")));
+    assert!(!is_executable_file(Path::new("exe")));
+}

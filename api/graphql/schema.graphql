@@ -7889,6 +7889,10 @@ enum ImportSkipReasonValue {
 	"""
 	NO_VIDEO_FILES
 	"""
+	No video files were found and the download held only executables.
+	"""
+	UNWANTED_EXECUTABLES
+	"""
 	The download client is still writing or unpacking the source file.
 	"""
 	DOWNLOAD_IN_PROGRESS
