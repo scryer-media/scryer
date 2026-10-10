@@ -108,10 +108,9 @@ export type ScriptRunsLeadingColumn = {
   render: (run: PostProcessingScriptRun) => ReactNode;
 };
 
-const TITLE_COLUMN: ScriptRunsLeadingColumn = {
-  header: "Title",
-  render: (run) => run.titleName || run.titleId || "--",
-};
+function renderRunTitle(run: PostProcessingScriptRun): ReactNode {
+  return run.titleName || run.titleId || "--";
+}
 
 /** Recent runs of one script with their status, duration and captured output. */
 export function ScriptRunsTable({
@@ -120,7 +119,7 @@ export function ScriptRunsTable({
   noRunsLabel,
   outputNotCapturedLabel,
   ids = SETTINGS_SCRIPT_RUN_IDS,
-  leadingColumn = TITLE_COLUMN,
+  leadingColumn,
 }: {
   scriptId: string;
   runs: PostProcessingScriptRun[];
@@ -131,6 +130,10 @@ export function ScriptRunsTable({
 }) {
   const t = useTranslate();
   const [outputFilter, setOutputFilter] = useState<ScriptOutputFilter>("combined");
+  const leading: ScriptRunsLeadingColumn = leadingColumn ?? {
+    header: t("label.title"),
+    render: renderRunTitle,
+  };
 
   if (runs.length === 0) {
     return (
@@ -152,10 +155,10 @@ export function ScriptRunsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>{leadingColumn.header}</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Duration</TableHead>
-            <TableHead>Output</TableHead>
+            <TableHead>{leading.header}</TableHead>
+            <TableHead>{t("label.status")}</TableHead>
+            <TableHead>{t("label.duration")}</TableHead>
+            <TableHead>{t("label.output")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -164,7 +167,7 @@ export function ScriptRunsTable({
             const stderr = showStderr ? run.stderrTail : null;
             return (
               <TableRow data-ui="settings-table-row" key={run.id} id={ids.row(run)}>
-                <TableCell className="text-xs">{leadingColumn.render(run)}</TableCell>
+                <TableCell className="text-xs">{leading.render(run)}</TableCell>
                 <TableCell>
                   <span
                     id={ids.status(run)}
