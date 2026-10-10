@@ -214,7 +214,6 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "calendar" },
       { kind: "view", id: "lists" },
       { kind: "view", id: "activity" },
-      { kind: "settings", id: "acquisition", icon: Rss },
       { kind: "settings", id: "subtitles", icon: Captions },
       // Scoring, maintenance and request rules share this entry; the Rules
       // page's own gutter picks the kind, so the sidebar names the subject once.

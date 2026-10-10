@@ -15,7 +15,6 @@ import {
   ListPlus,
   Network,
   Puzzle,
-  Rss,
   Server,
   Settings,
   ShieldCheck,
@@ -484,14 +483,6 @@ export function buildRouteCommands({
       : []),
     ...(canManageSystemSettings
       ? [{
-          id: "settings-acquisition",
-          label: `${automationGroupLabel} / ${t("settings.acquisition")}`,
-          description: t("settings.acquisition"),
-          groupLabel: automationGroupLabel,
-          keywords: ["settings", "acquisition", "rss", "search", "upgrades", "backfill"],
-          icon: Rss,
-          onSelect: buildNavigate(onNavigate, "settings", "acquisition"),
-        } satisfies RouteCommand, {
           id: "settings-download-clients",
           label: `${integrationsGroupLabel} / ${t("settings.downloadClients")}`,
           description: t("settings.downloadClients"),
