@@ -28,6 +28,19 @@ pub const LIST_CHART_LANGUAGE: &str = "eng";
 /// The most refs one `resolveTitles` call carries.
 pub const RESOLVE_TITLES_BATCH: usize = 50;
 
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
+pub struct ListMovieTarget {
+    pub movie_id: i64,
+    pub parents: Vec<ListMovieParent>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
+pub struct ListMovieParent {
+    pub title_id: i64,
+    pub tvdb_id: i64,
+    pub name: String,
+}
+
 /// One public chart the gateway serves.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ListChartCatalogEntry {
@@ -217,6 +230,24 @@ pub struct GatewayListItemResolver<L> {
 #[async_trait]
 pub trait ListLibraryLookup: Send + Sync {
     async fn find_title(&self, kind: &MediaFacet, ids: &[ExternalId]) -> AppResult<Option<String>>;
+    async fn find_titles(
+        &self,
+        targets: &[(MediaFacet, Vec<ExternalId>)],
+    ) -> AppResult<Vec<Option<String>>> {
+        let mut found = Vec::with_capacity(targets.len());
+        for (kind, ids) in targets {
+            found.push(self.find_title(kind, ids).await?);
+        }
+        Ok(found)
+    }
+    async fn find_series_movies(
+        &self,
+        _targets: &[(scryer_domain::ListSeriesMovieTarget, Vec<ExternalId>)],
+    ) -> AppResult<Vec<Option<(String, String)>>> {
+        Err(crate::AppError::Repository(
+            "series movie lookup is not implemented".into(),
+        ))
+    }
 }
 
 impl<L: ListLibraryLookup> GatewayListItemResolver<L> {
@@ -267,7 +298,7 @@ impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
         let mut series = BTreeSet::new();
         for item in items.iter() {
             if let Some(id) = item.smg_title_id {
-                if item.kind == Some(MediaFacet::Movie) {
+                if item.kind == Some(MediaFacet::Movie) || item.series_movie.is_some() {
                     movies.insert(id);
                 } else {
                     series.insert(id);
@@ -365,7 +396,10 @@ impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
         for item in items {
             item.facts = item.smg_title_id.and_then(|id| {
                 facts
-                    .get(&(item.kind == Some(MediaFacet::Movie), id))
+                    .get(&(
+                        item.kind == Some(MediaFacet::Movie) || item.series_movie.is_some(),
+                        id,
+                    ))
                     .cloned()
             });
         }
@@ -410,11 +444,91 @@ impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
             }
         }
 
-        for (input, output) in inputs.iter().zip(outputs.iter_mut()) {
-            output.library_title_id = self
-                .library
-                .find_title(&input.kind, &output.external_ids)
-                .await?;
+        let movie_ids = inputs
+            .iter()
+            .zip(&outputs)
+            .filter(|(input, output)| input.kind == MediaFacet::Movie && output.resolved)
+            .filter_map(|(_, output)| output.smg_title_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut targets = HashMap::new();
+        for chunk in movie_ids.chunks(RESOLVE_TITLES_BATCH) {
+            let rows = self.gateway.list_movie_targets(chunk).await?;
+            if rows.len() != chunk.len() {
+                return Err(crate::AppError::Repository(
+                    "incomplete movie relationship response".into(),
+                ));
+            }
+            for row in rows {
+                if !chunk.contains(&row.movie_id)
+                    || targets.insert(row.movie_id, row.parents).is_some()
+                {
+                    return Err(crate::AppError::Repository(
+                        "invalid movie relationship response".into(),
+                    ));
+                }
+            }
+        }
+        let mut linked_positions = Vec::new();
+        let mut linked_targets = Vec::new();
+        let mut title_positions = Vec::new();
+        let mut title_targets = Vec::new();
+        for (position, (input, output)) in inputs.iter().zip(outputs.iter_mut()).enumerate() {
+            if input.kind == MediaFacet::Movie
+                && let Some(parents) = output.smg_title_id.and_then(|id| targets.get(&id))
+            {
+                match parents.as_slice() {
+                    [] => {}
+                    [parent] => {
+                        let target = scryer_domain::ListSeriesMovieTarget {
+                            parent_smg_id: parent.title_id,
+                            parent_tvdb_id: parent.tvdb_id,
+                            parent_name: parent.name.clone(),
+                            link_id: None,
+                        };
+                        linked_positions.push(position);
+                        linked_targets.push((target.clone(), output.external_ids.clone()));
+                        output.series_movie = Some(target);
+                        continue;
+                    }
+                    _ => {
+                        output.resolved = false;
+                        output.resolution_reason = Some("ambiguous_series_movie".into());
+                        continue;
+                    }
+                }
+            }
+            title_positions.push(position);
+            title_targets.push((input.kind.clone(), output.external_ids.clone()));
+        }
+        if !title_targets.is_empty() {
+            let found = self.library.find_titles(&title_targets).await?;
+            if found.len() != title_positions.len() {
+                return Err(crate::AppError::Repository(
+                    "incomplete library lookup".into(),
+                ));
+            }
+            for (position, title_id) in title_positions.into_iter().zip(found) {
+                outputs[position].library_title_id = title_id;
+            }
+        }
+        if !linked_targets.is_empty() {
+            let found = self.library.find_series_movies(&linked_targets).await?;
+            if found.len() != linked_positions.len() {
+                return Err(crate::AppError::Repository(
+                    "incomplete series movie lookup".into(),
+                ));
+            }
+            for (position, found) in linked_positions.into_iter().zip(found) {
+                if let Some((title_id, link_id)) = found {
+                    let output = &mut outputs[position];
+                    output.library_title_id = Some(title_id);
+                    if let Some(target) = &mut output.series_movie {
+                        target.link_id = Some(link_id);
+                    }
+                }
+            }
         }
         Ok(outputs)
     }

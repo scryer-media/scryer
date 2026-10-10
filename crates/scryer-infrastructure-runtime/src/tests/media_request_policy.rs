@@ -10,6 +10,182 @@ use scryer_application::{MediaRequestRepository, MediaRequestResolution};
 use scryer_domain::MediaRequestStatus;
 
 #[tokio::test]
+async fn list_movie_approval_preserves_parent_and_scopes_request_ownership() {
+    use scryer_domain::{MediaRequestOrigin, MonitorSelection, MonitorSelectionMovie};
+    for existing in [false, true] {
+        let (services, _db) = temp_services("list_movie_approval").await;
+        seed_library(&services, "library-1").await;
+        sqlx::query("UPDATE libraries SET facet = 'anime' WHERE id = 'library-1'")
+            .execute(services.pool())
+            .await
+            .unwrap();
+        seed_user(&services, "requester-1").await;
+        let selection = MonitorSelection {
+            seasons: vec![],
+            series_movies: vec![MonitorSelectionMovie {
+                name: "Selected movie".into(),
+                external_ids: vec![ExternalId::new("tmdb", "802401")],
+            }],
+        };
+        let mut title = make_test_title("parent-title", None);
+        title.library_id = "library-1".into();
+        title.facet = MediaFacet::Anime;
+        title.external_ids = vec![ExternalId::new("tvdb", "9000001")];
+        title.tags = vec!["scryer:monitor-type:advanced".into()];
+        let titles = title_store(&services);
+        if existing {
+            title.monitored = false;
+            titles.create(title.clone()).await.unwrap();
+        }
+        let mut requested = new_request("movie-request", "library-1", "requester-1");
+        requested.facet = MediaFacet::Anime;
+        requested.origin = MediaRequestOrigin::PublicList {
+            subscription_id: "fixture-list".into(),
+        };
+        requested.identity_fingerprint = "list-movie:fixture-movie".into();
+        requested.external_ids = title.external_ids.clone();
+        requested.requested_monitor_type = Some("advanced".into());
+        requested.requested_monitor_selection = Some(selection.clone());
+        let store = request_store(&services);
+        let mut sibling = requested.clone();
+        sibling.id = "sibling-request".into();
+        sibling.identity_fingerprint = "list-movie:sibling".into();
+        sibling
+            .requested_monitor_selection
+            .as_mut()
+            .unwrap()
+            .series_movies[0]
+            .external_ids = vec![ExternalId::new("tmdb", "802402")];
+        store
+            .submit(
+                sibling,
+                &user("requester-1"),
+                request_event("sibling-request"),
+            )
+            .await
+            .unwrap();
+        let request = store
+            .submit(
+                requested,
+                &user("requester-1"),
+                request_event("movie-request"),
+            )
+            .await
+            .unwrap()
+            .request;
+        let before = titles.get_by_id(&title.id).await.unwrap();
+        title.monitored = true;
+        let (created, resolved, _) = store
+            .approve_with_title(
+                &request,
+                title.clone(),
+                scryer_application::TitleOptionsPatch {
+                    monitor_selection: Some(Some(selection.clone())),
+                    ..Default::default()
+                },
+                MediaRequestResolution {
+                    status: MediaRequestStatus::Approved,
+                    resolved_by_user_id: Some("requester-1".into()),
+                    resolved_at: Utc::now(),
+                    created_title_id: Some(title.id.clone()),
+                    approved_quality_profile_id: None,
+                    approved_quality_profile_name: None,
+                    approved_lease_days: None,
+                    decision_id: None,
+                    decided_by_rule_set_ids: vec![],
+                    policy_tags: vec![],
+                    event: request_event("approved-movie"),
+                },
+                request_event("added-parent"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resolved.updated, 1);
+        assert_eq!(created.reused_existing, existing);
+        assert_eq!(
+            store.get("sibling-request").await.unwrap().unwrap().status,
+            MediaRequestStatus::Pending
+        );
+        if let Some(before) = before {
+            assert_eq!(created.title.monitored, before.monitored);
+            assert_eq!(created.title.tags, before.tags);
+            assert!(
+                titles
+                    .get_title_monitor_selection(&title.id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        } else {
+            assert_eq!(
+                titles.get_title_monitor_selection(&title.id).await.unwrap(),
+                Some(selection)
+            );
+        }
+        let claims: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM lifecycle_claims WHERE title_id = ?")
+                .bind(&title.id)
+                .fetch_one(services.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            claims, 0,
+            "movie approval must not establish parent ownership"
+        );
+        assert!(
+            store
+                .requester_user_ids_by_title_ids(&[title.id])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn list_movie_admission_retains_each_selected_movie_before_hydration() {
+    use scryer_domain::{MonitorSelection, MonitorSelectionMovie};
+    let (services, _db) = temp_services("list_movie_selections").await;
+    seed_library(&services, "library-1").await;
+    sqlx::query("UPDATE libraries SET facet = 'anime' WHERE id = 'library-1'")
+        .execute(services.pool())
+        .await
+        .unwrap();
+    let titles = title_store(&services);
+    let mut parent = make_test_title("container", None);
+    parent.library_id = "library-1".into();
+    parent.facet = MediaFacet::Anime;
+    parent.monitored = true;
+    parent.tags = vec!["scryer:monitor-type:advanced".into()];
+    parent.external_ids = vec![ExternalId::new("tvdb", "9000001")];
+    for (index, id) in ["9000002", "9000003"].into_iter().enumerate() {
+        let selection = MonitorSelection {
+            seasons: vec![],
+            series_movies: vec![MonitorSelectionMovie {
+                name: format!("Movie {index}"),
+                external_ids: vec![ExternalId::new("tmdb", id)],
+            }],
+        };
+        let outcome = titles
+            .create_or_get_existing_preserving_options(parent.clone(), selection)
+            .await
+            .unwrap();
+        assert_eq!(outcome.reused_existing, index > 0);
+    }
+    let selection = titles
+        .get_title_monitor_selection(&parent.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(selection.seasons.is_empty());
+    assert_eq!(selection.series_movies.len(), 2);
+    assert_eq!(
+        titles.get_by_id(&parent.id).await.unwrap().unwrap().tags,
+        parent.tags
+    );
+}
+
+#[tokio::test]
 async fn approval_rolls_back_title_events_and_claims_together() {
     let (services, _db) = temp_services("atomic_request_approval").await;
     seed_library(&services, "library-1").await;

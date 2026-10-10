@@ -7215,6 +7215,13 @@ impl MetadataGateway for MetadataGatewayClient {
         Ok(response.canonical_tag_vocabulary)
     }
 
+    async fn list_movie_targets(
+        &self,
+        ids: &[i64],
+    ) -> AppResult<Vec<scryer_application::lists::gateway::ListMovieTarget>> {
+        self.fetch_list_movie_targets(ids).await
+    }
+
     async fn list_chart_catalog(
         &self,
         language: &str,

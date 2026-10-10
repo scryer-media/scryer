@@ -223,6 +223,9 @@ async fn title_still_exists(actions: &dyn ListActions, title_id: &str) -> bool {
 /// The title a departed row's on-leave action would touch: only a title this
 /// list added, and only when the list's on-leave action is not `Keep`.
 fn acting_title<'a>(subscription: &ListSubscription, row: &'a ListMembership) -> Option<&'a str> {
+    if row.series_movie.is_some() {
+        return None;
+    }
     match (&row.title_id, row.added_by_list, subscription.on_leave) {
         (Some(title_id), true, on_leave) if on_leave != ListOnLeave::Keep => Some(title_id),
         _ => None,

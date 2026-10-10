@@ -22,6 +22,8 @@ pub struct ResolveInput {
 /// What the resolver found for one input, index-aligned with the inputs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResolveOutput {
+    pub series_movie: Option<scryer_domain::ListSeriesMovieTarget>,
+    pub resolution_reason: Option<String>,
     /// The gateway matched the item (or created a title for it).
     pub resolved: bool,
     pub smg_title_id: Option<i64>,
@@ -60,6 +62,8 @@ pub struct ListMetadataFacts {
 /// One fetched item after resolution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedItem {
+    pub series_movie: Option<scryer_domain::ListSeriesMovieTarget>,
+    pub resolution_reason: Option<String>,
     pub facts: Option<ListMetadataFacts>,
     pub item: ListPluginItem,
     /// `None` when neither the item nor the subscription says what it is.
@@ -76,6 +80,8 @@ impl ResolvedItem {
         let external_ids = item_external_ids(&item);
         Self {
             facts: None,
+            series_movie: None,
+            resolution_reason: None,
             item,
             kind,
             external_ids,
@@ -106,7 +112,7 @@ pub fn item_kind(item: &ListPluginItem, subscription: &ListSubscription) -> Opti
         Some(MediaFacet::Series) if subscription.kinds.contains(&MediaFacet::Anime) => {
             Some(MediaFacet::Anime)
         }
-        Some(_) => None,
+        Some(kind) => Some(kind),
         None => match subscription.kinds.as_slice() {
             [only] => Some(only.clone()),
             _ => None,
@@ -181,8 +187,26 @@ pub async fn resolve_items(
     }
 
     let outputs = resolver.resolve(&inputs).await?;
+    if outputs.len() != inputs.len() {
+        return Err(crate::AppError::Repository(
+            "incomplete list resolution response".into(),
+        ));
+    }
     for (position, output) in positions.into_iter().zip(outputs) {
         let item = &mut resolved[position];
+        item.series_movie = output.series_movie;
+        item.resolution_reason = output.resolution_reason;
+        if item.series_movie.is_some() {
+            item.kind = Some(
+                if subscription.kinds.contains(&MediaFacet::Series)
+                    && !subscription.kinds.contains(&MediaFacet::Anime)
+                {
+                    MediaFacet::Series
+                } else {
+                    MediaFacet::Anime
+                },
+            );
+        }
         item.resolved = output.resolved || output.library_title_id.is_some();
         item.smg_title_id = output.smg_title_id;
         item.library_title_id = output.library_title_id;

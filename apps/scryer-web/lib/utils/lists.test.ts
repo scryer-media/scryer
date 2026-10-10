@@ -6,6 +6,7 @@ test("membership title links use library IDs for every facet and omit unlinked t
   assert.equal(listMembershipTitleHref("MOVIE", "movie-1"), "/movies?id=movie-1");
   assert.equal(listMembershipTitleHref("SERIES", "series-1"), "/series?id=series-1");
   assert.equal(listMembershipTitleHref("ANIME", "anime-1"), "/anime?id=anime-1");
+  assert.equal(listMembershipTitleHref("ANIME", "parent-1", "movie&1"), "/anime?id=parent-1&seriesMovie=movie%261");
   assert.equal(listMembershipTitleHref("ANIME", "title&other=1"), "/anime?id=title%26other%3D1");
   assert.equal(listMembershipTitleHref("ANIME", null), null);
   assert.equal(listMembershipTitleHref("ANIME", "  "), null);

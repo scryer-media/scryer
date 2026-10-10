@@ -95,6 +95,8 @@ pub struct ListSourceDraft {
 /// One title the next sync would act on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListPreviewItem {
+    pub canonical_smg_id: Option<i64>,
+    pub series_movie: Option<scryer_domain::ListSeriesMovieTarget>,
     pub facts: Option<super::resolve::ListMetadataFacts>,
     pub item_key: String,
     pub display_title: Option<String>,
@@ -363,6 +365,8 @@ pub fn summarize_preview(
                 if preview.would_add.len() < LIST_PREVIEW_WOULD_ADD_MAX {
                     let key = &item.item.item.item_key;
                     preview.would_add.push(ListPreviewItem {
+                        canonical_smg_id: item.item.smg_title_id,
+                        series_movie: item.item.series_movie.clone(),
                         facts: item.item.facts.clone(),
                         item_key: key.clone(),
                         display_title: trimmed(item.item.item.title.as_deref()),

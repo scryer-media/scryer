@@ -5475,6 +5475,8 @@ const LIST_PREVIEW_FIELDS = `
     excluded
     unresolved
     wouldAdd {
+      canonicalSmgId
+      seriesMovieParentSmgId
       externalRatings { source value score normalized votes url }
       genresAndThemes
       originalLanguage
@@ -5630,6 +5632,7 @@ export const listSubscriptionDetailQuery = `query ListSubscriptionDetail($id: ID
       displayTitle
       year
       titleId
+      seriesMovieLinkId
       requestId
       addedByList
       firstSeenAt

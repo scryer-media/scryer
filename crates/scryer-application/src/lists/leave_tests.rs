@@ -16,6 +16,29 @@ fn departed_added(subscription_id: &str, key: &str) -> scryer_domain::ListMember
 }
 
 #[tokio::test]
+async fn a_series_movie_departure_never_changes_its_parent() {
+    for on_leave in [ListOnLeave::Unmonitor, ListOnLeave::Tag, ListOnLeave::Log] {
+        let mut list = subscription("movie-list");
+        list.on_leave = on_leave;
+        let store = MemoryListStore::with_subscriptions(vec![list.clone()]);
+        let mut row = departed_added(&list.id, "movie");
+        row.series_movie = Some(scryer_domain::ListSeriesMovieTarget {
+            parent_smg_id: 42,
+            parent_tvdb_id: 43,
+            parent_name: "Fixture parent".into(),
+            link_id: Some("movie-link".into()),
+        });
+        store.insert_rows(vec![row]);
+        let actions = RecordingActions::default();
+        let report = handle_departures(&list, &store, &store, &actions)
+            .await
+            .unwrap();
+        assert_eq!(report.acted, 0);
+        assert!(actions.calls().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn personal_departure_preserves_monitoring_and_tags_after_owner_grants_are_revoked() {
     for on_leave in [ListOnLeave::Unmonitor, ListOnLeave::Tag] {
         let mut list = subscription("private-follow");

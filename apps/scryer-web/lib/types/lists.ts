@@ -196,6 +196,8 @@ export type ListSubscription = {
 };
 
 export type ListPreviewItem = {
+  canonicalSmgId: number | null;
+  seriesMovieParentSmgId: number | null;
   externalRatings: import("@/lib/utils/title-ratings").TitleExternalRating[];
   genresAndThemes: string[];
   originalLanguage: string | null;
@@ -223,6 +225,7 @@ export type ListPreview = {
 };
 
 export type ListMembership = {
+  seriesMovieLinkId: string | null;
   itemKey: string;
   rank: number | null;
   season: number | null;

@@ -291,9 +291,9 @@ export function ListDetailPanel({
                           <TableCodeCell className="text-center text-[12px] text-[var(--scry-muted)]">{membership.rank ?? "—"}</TableCodeCell>
                           <TableCell>
                             <div className="text-[13px] font-medium text-[var(--scry-ink)]">
-                              {listMembershipTitleHref(membership.kind, membership.titleId) ? (
+                              {listMembershipTitleHref(membership.kind, membership.titleId, membership.seriesMovieLinkId) ? (
                                 <a
-                                  href={listMembershipTitleHref(membership.kind, membership.titleId)!}
+                                  href={listMembershipTitleHref(membership.kind, membership.titleId, membership.seriesMovieLinkId)!}
                                   className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
                                 >
                                   {membership.displayTitle ?? membership.itemKey}

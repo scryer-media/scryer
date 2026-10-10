@@ -33,6 +33,45 @@ use crate::{
 
 /// The name a list item is created or requested under: its own title when the
 /// provider sent one, otherwise its first id. Metadata hydration replaces it.
+fn series_movie_parent_ids(target: &scryer_domain::ListSeriesMovieTarget) -> Vec<ExternalId> {
+    vec![
+        ExternalId {
+            source: "smg".into(),
+            kind: Some("series".into()),
+            value: target.parent_smg_id.to_string(),
+        },
+        ExternalId {
+            source: "tvdb".into(),
+            kind: Some("series".into()),
+            value: target.parent_tvdb_id.to_string(),
+        },
+    ]
+}
+
+fn series_movie_selection(item: &ResolvedItem) -> scryer_domain::MonitorSelection {
+    scryer_domain::MonitorSelection {
+        seasons: vec![],
+        series_movies: vec![scryer_domain::MonitorSelectionMovie {
+            name: item_name(item),
+            external_ids: item.external_ids.clone(),
+        }],
+    }
+}
+
+fn series_movie_matches(movie: &scryer_domain::MovieEntity, ids: &[ExternalId]) -> bool {
+    ids.iter().any(|id| {
+        let value = match id.source.as_str() {
+            "tvdb" => &movie.tvdb_id,
+            "tmdb" => &movie.tmdb_id,
+            "imdb" => &movie.imdb_id,
+            "mal" => &movie.mal_id,
+            "anidb" => &movie.anidb_id,
+            _ => return false,
+        };
+        value.as_deref() == Some(id.value.as_str())
+    })
+}
+
 fn item_name(item: &ResolvedItem) -> String {
     item.item
         .title
@@ -159,6 +198,81 @@ impl ListActions for AppListActions<'_> {
                 .await?;
         }
         let actor = User::system_execution_actor();
+        if let Some(target) = &item.series_movie {
+            let mut parent_route = route.clone();
+            parent_route.monitor_type = "advanced".into();
+            let request = NewTitle {
+                name: target.parent_name.clone(),
+                facet: route.kind.clone(),
+                monitored: true,
+                tags: route_option_tags(&parent_route),
+                external_ids: series_movie_parent_ids(target),
+                root_folder_id: route.root_folder_id.clone(),
+                ..NewTitle::default()
+            };
+            let _profile_guard = self
+                .app
+                .runtime
+                .catalog
+                .quality_profile_reference_lock
+                .lock()
+                .await;
+            let title = self
+                .app
+                .new_title_for_library(&actor, request, route.library_id.clone())
+                .await?;
+            let created = self
+                .app
+                .services
+                .catalog
+                .titles
+                .create_or_get_existing_preserving_options(title, series_movie_selection(item))
+                .await?;
+            let reused = created.reused_existing;
+            if !reused {
+                self.app.invalidate_monitored_title_matcher().await;
+                self.app
+                    .append_list_event(new_title_domain_event(
+                        &actor,
+                        &created.title,
+                        DomainEventPayload::TitleAdded(scryer_domain::TitleAddedEventData {
+                            title: title_context_snapshot(&created.title),
+                        }),
+                    ))
+                    .await;
+            }
+            let outcome = self.app.finish_add_title_with_outcome(created).await?;
+            if reused {
+                let links = self
+                    .app
+                    .services
+                    .catalog
+                    .shows
+                    .list_series_movie_links_for_title(&outcome.title.id)
+                    .await?;
+                if !links
+                    .iter()
+                    .any(|link| series_movie_matches(&link.movie, &item.external_ids))
+                {
+                    self.app
+                        .services
+                        .catalog
+                        .titles
+                        .mark_title_metadata_hydration_due_now(&outcome.title.id)
+                        .await?;
+                    self.app.runtime.catalog.title_hydration_wake.notify_one();
+                    return Err(AppError::Repository(
+                        "series movie is waiting for metadata hydration".into(),
+                    ));
+                }
+            }
+            // Hydration and ordinary wanted scheduling see only this movie in
+            // the advanced selection. Never queue a parent-wide search here.
+            return Ok(AddedTitle {
+                title_id: outcome.title.id,
+                created: !reused,
+            });
+        }
         let monitor_type = route_monitor_type(route);
         // A new title takes its options from its tags, as the add dialog's
         // titles do; the patch below only reaches a title that already exists.
@@ -281,7 +395,11 @@ impl ListActions for AppListActions<'_> {
                 SubmitMediaRequestInput {
                     library_id: route.library_id.clone(),
                     facet: route.kind.clone(),
-                    title: item_name(item),
+                    title: item
+                        .series_movie
+                        .as_ref()
+                        .map(|target| target.parent_name.clone())
+                        .unwrap_or_else(|| item_name(item)),
                     sort_title: None,
                     slug: None,
                     year: item.item.year,
@@ -291,10 +409,21 @@ impl ListActions for AppListActions<'_> {
                     content_status: None,
                     rating_summary: Default::default(),
                     requested_quality_profile_id: route.quality_profile_id.clone(),
-                    requested_monitor_type: non_empty(&route.monitor_type),
-                    requested_monitor_selection: None,
+                    requested_monitor_type: if item.series_movie.is_some() {
+                        Some("advanced".into())
+                    } else {
+                        non_empty(&route.monitor_type)
+                    },
+                    requested_monitor_selection: item
+                        .series_movie
+                        .as_ref()
+                        .map(|_| series_movie_selection(item)),
                     requested_lease_days: None,
-                    external_ids: item.external_ids.clone(),
+                    external_ids: item
+                        .series_movie
+                        .as_ref()
+                        .map(series_movie_parent_ids)
+                        .unwrap_or_else(|| item.external_ids.clone()),
                     origin: MediaRequestOrigin::for_subscription(subscription),
                     // Hold waits for review whatever the owner's grants and
                     // the request rules would allow.
@@ -524,20 +653,110 @@ impl<'a> AppListLibraryLookup<'a> {
 
 #[async_trait]
 impl ListLibraryLookup for AppListLibraryLookup<'_> {
-    async fn find_title(&self, kind: &MediaFacet, ids: &[ExternalId]) -> AppResult<Option<String>> {
-        for id in ids {
-            if let Some(title) = self
+    async fn find_series_movies(
+        &self,
+        targets: &[(scryer_domain::ListSeriesMovieTarget, Vec<ExternalId>)],
+    ) -> AppResult<Vec<Option<(String, String)>>> {
+        let mut result = vec![None; targets.len()];
+        for (batch, targets) in targets
+            .chunks(super::gateway::RESOLVE_TITLES_BATCH)
+            .enumerate()
+        {
+            let lookups = targets
+                .iter()
+                .enumerate()
+                .map(|(index, (target, _))| crate::TitleExternalIdLookup {
+                    lookup_index: index,
+                    source: "tvdb".into(),
+                    external_id: target.parent_tvdb_id.to_string(),
+                })
+                .collect::<Vec<_>>();
+            let parents = self
                 .app
                 .services
                 .catalog
                 .titles
-                .find_by_external_id_in_facet(kind.clone(), id)
-                .await?
-            {
-                return Ok(Some(title.id));
+                .list_by_external_id_lookups(&lookups)
+                .await?;
+            let parent_ids = parents
+                .iter()
+                .filter(|entry| entry.title.facet != MediaFacet::Movie)
+                .map(|entry| entry.title.id.clone())
+                .collect::<Vec<_>>();
+            let links = self
+                .app
+                .services
+                .catalog
+                .shows
+                .list_series_movie_links_for_titles(&parent_ids)
+                .await?;
+            for parent in &parents {
+                if parent.title.facet == MediaFacet::Movie {
+                    continue;
+                }
+                let Some((_, ids)) = targets.get(parent.lookup_index) else {
+                    continue;
+                };
+                if let Some(link) = links.iter().find(|link| {
+                    link.series_title_id == parent.title.id
+                        && series_movie_matches(&link.movie, ids)
+                }) {
+                    result[batch * super::gateway::RESOLVE_TITLES_BATCH + parent.lookup_index] =
+                        Some((parent.title.id.clone(), link.id.clone()));
+                }
             }
         }
-        Ok(None)
+        Ok(result)
+    }
+
+    async fn find_title(&self, kind: &MediaFacet, ids: &[ExternalId]) -> AppResult<Option<String>> {
+        Ok(self
+            .find_titles(&[(kind.clone(), ids.to_vec())])
+            .await?
+            .remove(0))
+    }
+
+    async fn find_titles(
+        &self,
+        targets: &[(MediaFacet, Vec<ExternalId>)],
+    ) -> AppResult<Vec<Option<String>>> {
+        let mut found = vec![None; targets.len()];
+        for (batch, targets) in targets
+            .chunks(super::gateway::RESOLVE_TITLES_BATCH)
+            .enumerate()
+        {
+            let lookups = targets
+                .iter()
+                .enumerate()
+                .flat_map(|(index, (_, ids))| {
+                    ids.iter().map(move |id| crate::TitleExternalIdLookup {
+                        lookup_index: index,
+                        source: id.source.clone(),
+                        external_id: id.value.clone(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            for entry in self
+                .app
+                .services
+                .catalog
+                .titles
+                .list_by_external_id_lookups(&lookups)
+                .await?
+            {
+                let Some((kind, _)) = targets.get(entry.lookup_index) else {
+                    return Err(AppError::Repository("invalid library lookup index".into()));
+                };
+                if &entry.title.facet == kind {
+                    let slot = &mut found
+                        [batch * super::gateway::RESOLVE_TITLES_BATCH + entry.lookup_index];
+                    if slot.as_ref().is_none_or(|id: &String| id > &entry.title.id) {
+                        *slot = Some(entry.title.id);
+                    }
+                }
+            }
+        }
+        Ok(found)
     }
 }
 

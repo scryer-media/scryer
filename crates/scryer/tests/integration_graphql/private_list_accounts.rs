@@ -144,6 +144,7 @@ async fn fixture() -> MatrixFixture {
     .unwrap();
     store
         .upsert_many(&[ListMembership {
+            series_movie: None,
             subscription_id: FOLLOW_ID.into(),
             item_key: "private-item".into(),
             rank: Some(1),

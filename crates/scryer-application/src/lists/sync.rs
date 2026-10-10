@@ -410,17 +410,23 @@ pub async fn sync_subscription(
                         title: row.display_title,
                         year: row.year,
                         external_ids,
-                        kind_hint: Some(match row.kind {
-                            scryer_domain::MediaFacet::Movie => {
-                                scryer_plugin_sdk::ListMediaKind::Movie
-                            }
-                            scryer_domain::MediaFacet::Series => {
-                                scryer_plugin_sdk::ListMediaKind::Series
-                            }
-                            scryer_domain::MediaFacet::Anime => {
-                                scryer_plugin_sdk::ListMediaKind::Anime
-                            }
-                        }),
+                        kind_hint: Some(
+                            match if row.series_movie.is_some() {
+                                scryer_domain::MediaFacet::Movie
+                            } else {
+                                row.kind
+                            } {
+                                scryer_domain::MediaFacet::Movie => {
+                                    scryer_plugin_sdk::ListMediaKind::Movie
+                                }
+                                scryer_domain::MediaFacet::Series => {
+                                    scryer_plugin_sdk::ListMediaKind::Series
+                                }
+                                scryer_domain::MediaFacet::Anime => {
+                                    scryer_plugin_sdk::ListMediaKind::Anime
+                                }
+                            },
+                        ),
                         ..Default::default()
                     }
                 })
@@ -524,7 +530,10 @@ pub async fn sync_subscription(
                 // rejected request.
                 row.state_reason = previous.and_then(|row| row.state_reason.clone());
             }
-            ItemDecision::Unresolved => row.state = ListMembershipState::Unresolved,
+            ItemDecision::Unresolved => {
+                row.state = ListMembershipState::Unresolved;
+                row.state_reason = evaluated.item.resolution_reason.clone();
+            }
             ItemDecision::Deferred => row.state = ListMembershipState::Pending,
             ItemDecision::Candidate => {
                 if !stopped {
@@ -709,7 +718,23 @@ fn membership_row(
     // A row that left and came back starts over: its earlier outcome belonged
     // to the earlier appearance.
     let carried = previous.filter(|row| row.left_at.is_none());
+    let bound = carried.filter(|row| row.title_id.is_some());
+    let series_movie = if let Some(bound) = bound {
+        bound.series_movie.clone().map(|mut target| {
+            if item.library_title_id == bound.title_id
+                && let Some(current) = &item.series_movie
+                && current.parent_smg_id == target.parent_smg_id
+                && current.link_id.is_some()
+            {
+                target.link_id = current.link_id.clone();
+            }
+            target
+        })
+    } else {
+        item.series_movie.clone()
+    };
     ListMembership {
+        series_movie,
         subscription_id: subscription.id.clone(),
         item_key: item.item.item_key.clone(),
         rank: item.item.rank.map(i64::from),
@@ -726,9 +751,9 @@ fn membership_row(
         smg_title_id: item.smg_title_id,
         title_id: carried.and_then(|row| row.title_id.clone()),
         request_id: carried.and_then(|row| row.request_id.clone()),
-        kind: item
-            .kind
-            .clone()
+        kind: bound
+            .map(|row| row.kind.clone())
+            .or_else(|| item.kind.clone())
             .or_else(|| subscription.kinds.first().cloned())
             .unwrap_or_default(),
         state: ListMembershipState::Unresolved,
@@ -761,10 +786,13 @@ async fn has_unfinished_work(
         .memberships
         .list_by_subscription(&subscription.id)
         .await?;
-    if rows
-        .iter()
-        .any(|row| row.left_at.is_none() && row.state == ListMembershipState::Pending)
-    {
+    if rows.iter().any(|row| {
+        row.left_at.is_none()
+            && matches!(
+                row.state,
+                ListMembershipState::Pending | ListMembershipState::Unresolved
+            )
+    }) {
         return Ok(true);
     }
     // A title the list added was deleted from the library: the next sync

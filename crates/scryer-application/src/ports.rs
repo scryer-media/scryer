@@ -2009,6 +2009,16 @@ pub trait TitleRepository: Send + Sync {
         Ok(None)
     }
     async fn create_or_get_existing(&self, title: Title) -> AppResult<CreateTitleOutcome>;
+    /// Creation-only options: an existing identity is returned without modification.
+    async fn create_or_get_existing_preserving_options(
+        &self,
+        _title: Title,
+        _selection: MonitorSelection,
+    ) -> AppResult<CreateTitleOutcome> {
+        Err(AppError::Repository(
+            "creation-only title options are not supported".into(),
+        ))
+    }
     async fn create_or_get_existing_with_options_patch(
         &self,
         title: Title,

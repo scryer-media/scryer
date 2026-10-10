@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[path = "movie_target_tests.rs"]
+mod movie_target_tests;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -89,12 +91,28 @@ async fn a_chart_the_gateway_cannot_serve_is_a_plain_failure() {
 
 #[derive(Default)]
 struct RecordingResolveGateway {
+    movie_parents: HashMap<i64, Vec<ListMovieParent>>,
+    relationship_calls: Mutex<Vec<Vec<i64>>>,
+    relationship_failure: bool,
     metadata_calls: Mutex<Vec<(bool, usize)>>,
     calls: Mutex<Vec<(String, Vec<TitleExternalRef>)>>,
 }
 
 #[async_trait]
 impl MetadataGateway for RecordingResolveGateway {
+    async fn list_movie_targets(&self, ids: &[i64]) -> AppResult<Vec<ListMovieTarget>> {
+        self.relationship_calls.lock().unwrap().push(ids.to_vec());
+        if self.relationship_failure {
+            return Err(AppError::Repository("fixture relationship outage".into()));
+        }
+        Ok(ids
+            .iter()
+            .map(|id| ListMovieTarget {
+                movie_id: *id,
+                parents: self.movie_parents.get(id).cloned().unwrap_or_default(),
+            })
+            .collect())
+    }
     async fn get_movie_titles(
         &self,
         refs: &[crate::MovieTitleRef],
@@ -218,7 +236,10 @@ impl MetadataGateway for RecordingResolveGateway {
             .iter()
             .enumerate()
             .filter_map(|(index, reference)| {
-                let alias = reference.external_ids.first()?;
+                let alias = reference.external_ids.first();
+                if alias.is_none() && reference.smg_id.is_none() {
+                    return None;
+                }
                 let smg_id = reference.smg_id.unwrap_or(1000 + index as i64);
                 Some(TitleResolution {
                     ref_index: index,
@@ -228,7 +249,9 @@ impl MetadataGateway for RecordingResolveGateway {
                     primary_source: "tmdb".to_string(),
                     redirected_from: None,
                     created: false,
-                    external_ids: vec![id("tmdb", &format!("{}{}", alias.value, 5))],
+                    external_ids: alias
+                        .map(|alias| vec![id("tmdb", &format!("{}{}", alias.value, 5))])
+                        .unwrap_or_default(),
                     reason: String::new(),
                 })
             })
@@ -296,6 +319,12 @@ struct FixtureLibrary(HashMap<String, String>);
 
 #[async_trait]
 impl ListLibraryLookup for FixtureLibrary {
+    async fn find_series_movies(
+        &self,
+        targets: &[(scryer_domain::ListSeriesMovieTarget, Vec<ExternalId>)],
+    ) -> AppResult<Vec<Option<(String, String)>>> {
+        Ok(targets.iter().map(|_| None).collect())
+    }
     async fn find_title(
         &self,
         _kind: &MediaFacet,
@@ -432,14 +461,17 @@ async fn a_gateway_series_on_an_anime_list_resolves_as_anime() {
     .expect("resolve");
 
     let calls = gateway.calls.lock().unwrap().clone();
-    assert_eq!(calls.len(), 1);
+    assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].0, "anime");
     assert_eq!(calls[0].1[0].smg_id, Some(41));
     assert_eq!(resolved[0].kind, Some(MediaFacet::Anime));
     assert!(resolved[0].resolved);
     assert_eq!(resolved[0].smg_title_id, Some(41));
-    assert_eq!(resolved[1].kind, None, "an anime list has no movie route");
-    assert!(!resolved[1].resolved);
+    assert_eq!(resolved[1].kind, Some(MediaFacet::Movie));
+    assert!(
+        resolved[1].resolved,
+        "destination filtering follows identity resolution"
+    );
 }
 
 #[tokio::test]

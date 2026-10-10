@@ -68,10 +68,19 @@ pub fn evaluate(
     memberships: &HashMap<String, ListMembership>,
 ) -> Vec<EvaluatedItem> {
     let mut remaining_cap = subscription.max_per_sync.map(|cap| cap as usize);
+    let mut candidate_ids = std::collections::HashSet::new();
     items
         .into_iter()
         .map(|item| {
             let mut decision = decide(subscription, &item, exclusions, memberships);
+            if decision == ItemDecision::Candidate
+                && let Some(id) = item.smg_title_id
+                && !candidate_ids.insert(id)
+            {
+                decision = ItemDecision::Filtered {
+                    reason: "duplicate_target".into(),
+                };
+            }
             if decision == ItemDecision::Candidate
                 && let Some(remaining) = remaining_cap.as_mut()
             {
@@ -92,10 +101,13 @@ fn decide(
     exclusions: &[ListExclusion],
     memberships: &HashMap<String, ListMembership>,
 ) -> ItemDecision {
-    if let Some(kind) = item.kind.clone()
-        && exclusions
-            .iter()
-            .any(|exclusion| exclusion.matches(kind.clone(), &item.external_ids, &subscription.id))
+    if let Some(kind) = if item.series_movie.is_some() {
+        Some(scryer_domain::MediaFacet::Movie)
+    } else {
+        item.kind.clone()
+    } && exclusions
+        .iter()
+        .any(|exclusion| exclusion.matches(kind.clone(), &item.external_ids, &subscription.id))
     {
         return ItemDecision::Excluded;
     }
@@ -114,6 +126,9 @@ fn decide(
         };
     }
 
+    if item.resolution_reason.is_some() {
+        return ItemDecision::Unresolved;
+    }
     if let Some(reason) = filter_reason(subscription, item) {
         return ItemDecision::Filtered { reason };
     }
@@ -186,6 +201,9 @@ fn refusal_may_have_lifted(
 /// filtered with [`NO_ROUTE_REASON`].
 pub fn filter_reason(subscription: &ListSubscription, item: &ResolvedItem) -> Option<String> {
     let kind = item.kind.clone()?;
+    if !subscription.kinds.is_empty() && !subscription.kinds.contains(&kind) {
+        return Some("media_type_not_included".into());
+    }
     if subscription.route_for(kind).is_none() {
         return Some(NO_ROUTE_REASON.to_string());
     }

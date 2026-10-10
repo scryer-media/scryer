@@ -113,6 +113,52 @@ fn alias_ref_input(reference: &TitleExternalRef) -> AliasTitleRefInput {
 }
 
 impl MetadataGatewayClient {
+    pub(super) async fn fetch_list_movie_targets(
+        &self,
+        ids: &[i64],
+    ) -> AppResult<Vec<scryer_application::lists::gateway::ListMovieTarget>> {
+        use scryer_application::lists::gateway::ListMovieTarget;
+        const QUERY: &str = include_str!("metadata_gateway/list_movie_targets.graphql");
+        static HASH: LazyLock<String> = LazyLock::new(|| apq_hash(QUERY));
+        #[derive(Deserialize)]
+        struct Response {
+            #[serde(rename = "listMovieTargets")]
+            targets: Vec<ListMovieTarget>,
+        }
+        let ids = ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut result = Vec::with_capacity(ids.len());
+        for chunk in ids.into_iter().collect::<Vec<_>>().chunks(50) {
+            let response: Response = self
+                .execute_graphql_apq("ListMovieTargets", QUERY, &HASH, json!({"movieIds": chunk}))
+                .await?;
+            let returned = response
+                .targets
+                .iter()
+                .map(|row| row.movie_id)
+                .collect::<std::collections::BTreeSet<_>>();
+            if returned.len() != chunk.len()
+                || response.targets.len() != chunk.len()
+                || chunk.iter().any(|id| !returned.contains(id))
+                || response.targets.iter().any(|row| {
+                    row.parents.len() > 2
+                        || row
+                            .parents
+                            .iter()
+                            .any(|parent| parent.title_id <= 0 || parent.tvdb_id <= 0)
+                })
+            {
+                return Err(scryer_application::AppError::Repository(
+                    "invalid movie relationship response".into(),
+                ));
+            }
+            result.extend(response.targets);
+        }
+        Ok(result)
+    }
+
     pub(super) async fn fetch_list_chart_catalog(
         &self,
         language: &str,

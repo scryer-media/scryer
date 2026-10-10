@@ -261,14 +261,37 @@ impl AppUseCase {
 
         self.require_request_submission_permission(actor, &library.id, input.admission)
             .await?;
-        let metadata_enrichment = self.enrich_request_draft(&input.facet, external_ids).await;
-        external_ids = metadata_enrichment.external_ids;
-        self.ensure_request_subject_is_not_in_library(
-            &library.id,
-            library.facet.clone(),
-            &external_ids,
-        )
-        .await?;
+        let list_movie = input.origin.subscription_id().is_some()
+            && input.requested_monitor_type.as_deref() == Some("advanced")
+            && input
+                .requested_monitor_selection
+                .as_ref()
+                .is_some_and(|selection| {
+                    selection.seasons.is_empty() && selection.series_movies.len() == 1
+                });
+        let metadata_enrichment = if list_movie {
+            let movie = &input
+                .requested_monitor_selection
+                .as_ref()
+                .expect("movie selection checked above")
+                .series_movies[0];
+            self.enrich_request_draft(&MediaFacet::Movie, movie.external_ids.clone())
+                .await
+        } else {
+            self.enrich_request_draft(&input.facet, external_ids.clone())
+                .await
+        };
+        if !list_movie {
+            external_ids = metadata_enrichment.external_ids;
+        }
+        if !list_movie {
+            self.ensure_request_subject_is_not_in_library(
+                &library.id,
+                library.facet.clone(),
+                &external_ids,
+            )
+            .await?;
+        }
         let profile_reference_guard = self
             .runtime
             .catalog
@@ -311,7 +334,20 @@ impl AppUseCase {
             id: Id::new().0,
             library_id: library.id.clone(),
             facet: input.facet,
-            identity_fingerprint: media_request_identity_fingerprint(&external_ids),
+            identity_fingerprint: if list_movie {
+                format!(
+                    "list-movie:{}",
+                    media_request_identity_fingerprint(
+                        &requested_monitor_selection
+                            .as_ref()
+                            .expect("validated movie selection")
+                            .series_movies[0]
+                            .external_ids
+                    )
+                )
+            } else {
+                media_request_identity_fingerprint(&external_ids)
+            },
             title,
             sort_title: normalized_optional_string(input.sort_title),
             slug: normalized_optional_string(input.slug),
@@ -624,6 +660,14 @@ impl AppUseCase {
             approved_monitor_type.as_deref(),
             monitor_selection.or_else(|| request.requested_monitor_selection.clone()),
         )?;
+        if request.is_list_series_movie()
+            && (approved_monitor_type.as_deref() != Some("advanced")
+                || approved_monitor_selection != request.requested_monitor_selection)
+        {
+            return Err(AppError::Validation(
+                "a list movie approval must retain its selected movie".into(),
+            ));
+        }
         let mut new_title = media_request_to_new_title(
             &request,
             Some(&approved_quality_profile_id),
@@ -698,6 +742,20 @@ impl AppUseCase {
         }
         let outcome = self.finish_add_title_with_outcome(created).await?;
         let title_id = outcome.title.id.clone();
+        if request.is_list_series_movie() {
+            self.services
+                .catalog
+                .titles
+                .mark_title_metadata_hydration_due_now(&title_id)
+                .await?;
+            self.runtime.catalog.title_hydration_wake.notify_one();
+            return Ok(ApproveMediaRequestOutcome {
+                title_id,
+                wanted_search: None,
+                search_error: None,
+                claim_error: None,
+            });
+        }
         let claim_error = self
             .create_request_lifecycle_claims(actor, &request, &title_id, approved_lease_days)
             .await;
@@ -873,6 +931,14 @@ impl AppUseCase {
             requested_monitor_type.as_deref(),
             input.requested_monitor_selection,
         )?;
+        if request.is_list_series_movie()
+            && (requested_monitor_type.as_deref() != Some("advanced")
+                || requested_monitor_selection != request.requested_monitor_selection)
+        {
+            return Err(AppError::Validation(
+                "a list movie request must retain its selected movie".into(),
+            ));
+        }
         let requested_lease_days = crate::request_rules::validate_lease_days(
             input
                 .requested_lease_days
@@ -1110,6 +1176,15 @@ impl AppUseCase {
         )
         .await;
 
+        if request.is_list_series_movie() {
+            self.services
+                .catalog
+                .titles
+                .mark_title_metadata_hydration_due_now(&outcome.title.id)
+                .await?;
+            self.runtime.catalog.title_hydration_wake.notify_one();
+            return Ok(());
+        }
         // Request policy already authorized this add; the requester usually
         // lacks ManageTitles, so the post-add search runs with system authority.
         if let Err(error) = self
@@ -1198,6 +1273,9 @@ impl AppUseCase {
         title_id: &str,
         approved_lease_days: Option<i64>,
     ) -> Option<String> {
+        if request.is_list_series_movie() {
+            return None;
+        }
         let mut errors: Vec<String> = Vec::new();
         let resolved = self
             .resolved_requests_for_title(request, title_id)
@@ -2327,6 +2405,18 @@ fn media_request_to_new_title(
         .collect::<Vec<_>>();
     if let Some(monitor_type) = monitor_type {
         tags.push(format!("{TITLE_MONITOR_TYPE_TAG_PREFIX}{monitor_type}"));
+    }
+    if request.is_list_series_movie() {
+        // The request's facts and user tags describe the selected movie, not
+        // the series container. Hydration supplies the parent's own metadata.
+        return NewTitle {
+            name: request.title.clone(),
+            facet: request.facet.clone(),
+            monitored,
+            tags,
+            external_ids: request.external_ids.clone(),
+            ..NewTitle::default()
+        };
     }
     // Policy and approver tags are plain labels beside the structured
     // `scryer:`-prefixed ones. The tag validator refuses that prefix, so a rule

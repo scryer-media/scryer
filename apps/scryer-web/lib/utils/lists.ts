@@ -31,10 +31,13 @@ import { ratingSourceInfo } from "./title-ratings.ts";
 
 export type ListTone = "neutral" | "positive" | "warning" | "negative" | "info" | "outline";
 
-export function listMembershipTitleHref(kind: Facet, titleId: string | null): string | null {
+export function listMembershipTitleHref(kind: Facet, titleId: string | null, seriesMovieLinkId?: string | null): string | null {
   const facet = facetById(kind);
   const id = titleId?.trim();
-  return facet && id ? `/${facet.viewId}?${new URLSearchParams({ id })}` : null;
+  if (!facet || !id) return null;
+  const params = new URLSearchParams({ id });
+  if (seriesMovieLinkId) params.set("seriesMovie", seriesMovieLinkId);
+  return `/${facet.viewId}?${params}`;
 }
 
 /** Modes offered for public lists. `REQUEST` belongs to personal lists only. */

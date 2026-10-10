@@ -257,7 +257,7 @@ async fn add_outcome(
     Ok(if added.created {
         ActOutcome {
             title_id: Some(added.title_id),
-            added_by_list: true,
+            added_by_list: item.series_movie.is_none(),
             ..ActOutcome::state(ListMembershipState::Added)
         }
     } else {

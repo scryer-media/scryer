@@ -105,6 +105,8 @@ pub(crate) fn plugin_item(key: &str) -> ListPluginItem {
 pub(crate) fn resolved_item(key: &str) -> ResolvedItem {
     let item = plugin_item(key);
     ResolvedItem {
+        series_movie: None,
+        resolution_reason: None,
         facts: None,
         external_ids: vec![tmdb(&format!("{key}-id"))],
         item,
@@ -121,6 +123,7 @@ pub(crate) fn membership(
     state: scryer_domain::ListMembershipState,
 ) -> ListMembership {
     ListMembership {
+        series_movie: None,
         subscription_id: subscription_id.to_string(),
         item_key: key.to_string(),
         rank: None,
@@ -791,6 +794,8 @@ impl ListItemResolver for FixtureResolver {
         Ok(inputs
             .iter()
             .map(|input| ResolveOutput {
+                series_movie: None,
+                resolution_reason: None,
                 resolved: true,
                 smg_title_id: None,
                 external_ids: Vec::new(),

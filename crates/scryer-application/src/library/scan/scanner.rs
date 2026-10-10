@@ -961,6 +961,15 @@ pub trait MetadataGateway: Send + Sync {
         ))
     }
 
+    async fn list_movie_targets(
+        &self,
+        _ids: &[i64],
+    ) -> AppResult<Vec<crate::lists::gateway::ListMovieTarget>> {
+        Err(AppError::Repository(
+            "metadata gateway listMovieTargets is not implemented".into(),
+        ))
+    }
+
     /// The public charts an import list may follow.
     async fn list_chart_catalog(
         &self,

@@ -1,5 +1,6 @@
 
 import * as React from "react";
+import { useSearchParams } from "react-router";
 import { useJobRunToasts } from "@/components/root/job-run-provider";
 import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import { parseSearchSeason } from "@/lib/utils/automatic-search";
@@ -395,6 +396,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   onTitleResolved,
   initialEpisodeId,
 }: SeriesOverviewContainerProps) {
+  const [searchParams] = useSearchParams();
+  const initialSeriesMovieLinkId = searchParams.get("seriesMovie");
   const setGlobalStatus = useGlobalStatus();
   const trackJobRun = useTrackedJobRuns();
   const { registerInteractiveJobRun } = useJobRunToasts();
@@ -2037,6 +2040,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         completedDownloads={completedDownloads}
         manualImport={manualImport}
         initialEpisodeId={initialEpisodeId}
+        initialSeriesMovieLinkId={initialSeriesMovieLinkId}
         seasonSearchResultsByCollection={seasonSearchResultsByCollection}
         seasonSearchLoadingByCollection={Object.fromEntries(collections.map((collection) => {
           const season = parseSearchSeason(collection.collectionIndex);

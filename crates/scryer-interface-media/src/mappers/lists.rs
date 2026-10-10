@@ -516,6 +516,10 @@ pub fn from_list_subscription(subscription: ListSubscription) -> ListSubscriptio
 
 fn from_membership(row: ListMembership) -> ListMembershipPayload {
     ListMembershipPayload {
+        series_movie_link_id: row
+            .series_movie
+            .and_then(|target| target.link_id)
+            .map(Into::into),
         item_key: row.item_key,
         rank: row.rank.map(|rank| i32::try_from(rank).unwrap_or(i32::MAX)),
         season: row.season,
@@ -553,6 +557,11 @@ pub fn from_list_sync_run(run: ListSyncRun) -> ListSyncRunPayload {
 fn from_preview_item(item: ListPreviewItem) -> ListPreviewItemPayload {
     let facts = item.facts.unwrap_or_default();
     ListPreviewItemPayload {
+        canonical_smg_id: item.canonical_smg_id,
+        series_movie_parent_smg_id: item
+            .series_movie
+            .as_ref()
+            .map(|target| target.parent_smg_id),
         external_ratings: facts
             .ratings
             .into_iter()

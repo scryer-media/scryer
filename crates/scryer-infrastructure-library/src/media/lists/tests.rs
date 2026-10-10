@@ -123,6 +123,7 @@ fn membership(
     seen_at: chrono::DateTime<Utc>,
 ) -> ListMembership {
     ListMembership {
+        series_movie: None,
         subscription_id: subscription_id.into(),
         item_key: item_key.into(),
         rank: Some(1),
@@ -142,6 +143,38 @@ fn membership(
         left_at: None,
         left_handled: false,
     }
+}
+
+#[tokio::test]
+async fn series_movie_membership_round_trips_separate_canonical_and_parent_identity() {
+    let store = test_store(None).await;
+    ListSubscriptionRepository::create(
+        &store,
+        subscription("movie-list", ListScope::Public, OWNER),
+    )
+    .await
+    .unwrap();
+    let mut row = membership("movie-list", "selected-movie", Utc::now());
+    row.smg_title_id = Some(3021408);
+    row.kind = MediaFacet::Anime;
+    row.series_movie = Some(scryer_domain::ListSeriesMovieTarget {
+        parent_smg_id: 42,
+        parent_tvdb_id: 43,
+        parent_name: "Synthetic parent".into(),
+        link_id: Some("movie-link".into()),
+    });
+    store.upsert_many(&[row.clone()]).await.unwrap();
+    let stored = store.list_by_subscription("movie-list").await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].smg_title_id, row.smg_title_id);
+    assert_eq!(stored[0].series_movie, row.series_movie);
+    row.series_movie = None;
+    store.upsert_many(&[row]).await.unwrap();
+    assert!(
+        store.list_by_subscription("movie-list").await.unwrap()[0]
+            .series_movie
+            .is_none()
+    );
 }
 
 #[tokio::test]

@@ -13,6 +13,34 @@ use crate::lists::test_support::{
     ScriptedLists, ScriptedProvider, at, keys_of, subscription,
 };
 
+#[test]
+fn bound_series_movie_keeps_parent_but_can_complete_its_link_reference() {
+    use crate::lists::test_support::{membership, resolved_item};
+    let list = subscription("fixture-list");
+    let mut previous = membership(&list.id, "film", ListMembershipState::Added);
+    previous.title_id = Some("original-parent".into());
+    previous.series_movie = Some(scryer_domain::ListSeriesMovieTarget {
+        parent_smg_id: 42,
+        parent_tvdb_id: 43,
+        parent_name: "Parent".into(),
+        link_id: None,
+    });
+    let mut item = resolved_item("film");
+    item.library_title_id = previous.title_id.clone();
+    item.series_movie = previous.series_movie.clone();
+    item.series_movie.as_mut().unwrap().link_id = Some("movie-link".into());
+    let linked = membership_row(&list, &item, Some(&previous), at(1));
+    assert_eq!(
+        linked.series_movie.as_ref().unwrap().link_id.as_deref(),
+        Some("movie-link")
+    );
+    item.library_title_id = Some("different-parent".into());
+    item.series_movie.as_mut().unwrap().parent_smg_id = 99;
+    let preserved = membership_row(&list, &item, Some(&linked), at(2));
+    assert_eq!(preserved.series_movie, linked.series_movie);
+    assert_eq!(preserved.title_id, linked.title_id);
+}
+
 struct Harness {
     store: MemoryListStore,
     lists: std::sync::Arc<ScriptedLists>,
@@ -88,6 +116,20 @@ fn rate_limited(retry_after_seconds: Option<i64>) -> PluginError {
         retry_after_seconds,
         details: None,
     }
+}
+
+#[tokio::test]
+async fn unchanged_source_reconsiders_unresolved_memberships_without_filters() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha"]);
+    assert_eq!(harness.sync_at(at(0)).await.added, 1);
+    let mut row = harness.store.row("list-a", "alpha");
+    row.title_id = None;
+    row.added_by_list = false;
+    row.state = ListMembershipState::Unresolved;
+    harness.store.insert_rows(vec![row]);
+    assert_eq!(harness.sync_at(at(360)).await.added, 1);
+    assert_eq!(harness.lists.fetched.lock().unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -217,14 +259,14 @@ async fn unchanged_membership_does_not_reinterpret_an_unroutable_provider_kind()
     assert_eq!(harness.sync_at(at(0)).await.added, 0);
     assert_eq!(
         harness.store.row("list-a", "alpha").state,
-        ListMembershipState::Unresolved
+        ListMembershipState::Filtered
     );
     assert_eq!(harness.sync_at(at(360)).await.added, 0);
     assert_eq!(
         harness.store.row("list-a", "alpha").state,
-        ListMembershipState::Unresolved
+        ListMembershipState::Filtered
     );
-    assert_eq!(harness.lists.fetched.lock().unwrap().len(), 3);
+    assert_eq!(harness.lists.fetched.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]

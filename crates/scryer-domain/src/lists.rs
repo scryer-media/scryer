@@ -411,9 +411,21 @@ impl ListMembershipState {
     }
 }
 
+/// A movie's series destination; the membership retains the movie's own IDs.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListSeriesMovieTarget {
+    pub parent_smg_id: i64,
+    pub parent_tvdb_id: i64,
+    pub parent_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
+}
+
 /// One row per (subscription, provider-native item).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListMembership {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_movie: Option<ListSeriesMovieTarget>,
     pub subscription_id: String,
     /// The provider's own id for the item, stable across syncs.
     pub item_key: String,
@@ -490,6 +502,14 @@ pub enum MediaRequestOrigin {
     PersonalList {
         subscription_id: String,
     },
+}
+
+impl crate::MediaRequest {
+    /// List movie requests own one movie, never the enclosing series.
+    pub fn is_list_series_movie(&self) -> bool {
+        self.origin.subscription_id().is_some()
+            && self.identity_fingerprint.starts_with("list-movie:")
+    }
 }
 
 impl MediaRequestOrigin {

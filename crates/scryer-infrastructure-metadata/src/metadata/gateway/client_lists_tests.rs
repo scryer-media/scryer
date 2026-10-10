@@ -152,6 +152,57 @@ fn alias_ref(source: &str, value: &str) -> TitleExternalRef {
 }
 
 #[tokio::test]
+async fn list_movie_targets_deduplicate_and_use_bounded_http_batches() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(query_param("operationName", "ListMovieTargets"))
+        .respond_with(|request: &Request| {
+            let variables = query_variables(request);
+            let ids = variables["movieIds"].as_array().unwrap();
+            assert!(ids.len() <= 50);
+            ResponseTemplate::new(200).set_body_json(json!({"data": {"listMovieTargets":
+                ids.iter().map(|id| json!({"movie_id": id, "parents": []})).collect::<Vec<_>>()
+            }}))
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+    let client = unsigned_client(format!("{}/graphql", server.uri()));
+    let ids = (1..=101).chain(1..=101).collect::<Vec<i64>>();
+    assert_eq!(client.list_movie_targets(&ids).await.unwrap().len(), 101);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| query_variables(request)["movieIds"]
+                .as_array()
+                .unwrap()
+                .len())
+            .collect::<Vec<_>>(),
+        [50, 50, 1]
+    );
+}
+
+#[tokio::test]
+async fn list_movie_targets_never_treat_incomplete_or_failed_responses_as_standalone() {
+    for body in [
+        json!({"data": {"listMovieTargets": []}}),
+        json!({"data": {"listMovieTargets": [{"movie_id": 2, "parents": []}]}}),
+        json!({"data": {"listMovieTargets": [{"movie_id": 1, "parents": [{"title_id": 0, "tvdb_id": 4, "name": "Parent"}]}]}}),
+        json!({"errors": [{"message": "relationship service unavailable"}]}),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("operationName", "ListMovieTargets"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let client = unsigned_client(format!("{}/graphql", server.uri()));
+        assert!(client.list_movie_targets(&[1]).await.is_err());
+    }
+}
+
+#[tokio::test]
 async fn resolve_titles_sends_alias_sources_and_rebases_batches() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

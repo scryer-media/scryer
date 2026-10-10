@@ -25,6 +25,7 @@ import { TitlePosterSlot } from "@/components/title-poster-slot";
 import {
   SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID,
   SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID,
+  seriesOverviewSeriesMovieRowId,
 } from "@/lib/utils/dom-ids";
 import {
   queueExistingMutation,
@@ -175,6 +176,7 @@ type Props = {
   completedDownloads?: DownloadQueueItem[];
   manualImport?: ManualImportLauncher;
   initialEpisodeId?: string | null;
+  initialSeriesMovieLinkId?: string | null;
   seasonSearchResultsByCollection?: Record<string, Release[]>;
   seasonSearchLoadingByCollection?: Record<string, boolean>;
   onRunSeasonSearch?: (collection: TitleCollection) => Promise<void> | void;
@@ -250,6 +252,7 @@ function SeriesOverviewViewImpl({
   completedDownloads,
   manualImport,
   initialEpisodeId,
+  initialSeriesMovieLinkId,
   seasonSearchResultsByCollection,
   seasonSearchLoadingByCollection,
   onRunSeasonSearch,
@@ -459,6 +462,30 @@ function SeriesOverviewViewImpl({
 
   const defaultExpandedRef = React.useRef(false);
   const lastDeepLinkedEpisodeIdRef = React.useRef<string | null>(null);
+  const lastDeepLinkedMovieRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    lastDeepLinkedMovieRef.current = null;
+  }, [initialSeriesMovieLinkId, title?.id]);
+
+  React.useEffect(() => {
+    if (!initialSeriesMovieLinkId) return;
+    if (lastDeepLinkedMovieRef.current === initialSeriesMovieLinkId) return;
+    const item = timelineItems.find((entry) => entry.kind === "seriesMovie"
+      && entry.link.id === initialSeriesMovieLinkId);
+    if (!item) return;
+    if (!expandedKeys.has(item.key)) {
+      setExpandedKeys((current) => new Set(current).add(item.key));
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const element = document.getElementById(seriesOverviewSeriesMovieRowId(initialSeriesMovieLinkId));
+      if (!element) return;
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      lastDeepLinkedMovieRef.current = initialSeriesMovieLinkId;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expandedKeys, initialSeriesMovieLinkId, timelineItems]);
 
   React.useEffect(() => {
     defaultExpandedRef.current = false;
@@ -511,7 +538,7 @@ function SeriesOverviewViewImpl({
   }, [expandedKeys, initialEpisodeId, episodesByCollection]);
 
   React.useEffect(() => {
-    if (initialEpisodeId || defaultExpandedRef.current || !latestKey) {
+    if (initialEpisodeId || initialSeriesMovieLinkId || defaultExpandedRef.current || !latestKey) {
       return;
     }
 
@@ -519,7 +546,7 @@ function SeriesOverviewViewImpl({
     const nextExpanded = new Set<string>();
     nextExpanded.add(latestKey);
     setExpandedKeys(nextExpanded);
-  }, [initialEpisodeId, latestKey]);
+  }, [initialEpisodeId, initialSeriesMovieLinkId, latestKey]);
 
   // Seasons hydrate lazily: fetch a collection's episodes once its section is
   // expanded (default latest-season expansion included) and nothing is cached

@@ -126,6 +126,7 @@ impl MediaRequestRepository for MediaRequestStore {
                 "SELECT created_title_id, created_by_user_id
                    FROM media_requests
                   WHERE created_title_id IN ({placeholders})
+                    AND identity_fingerprint NOT LIKE 'list-movie:%'
                   ORDER BY created_at ASC, id ASC"
             ),
             &args,
@@ -145,6 +146,7 @@ impl MediaRequestRepository for MediaRequestStore {
                    FROM media_request_requesters mrr
                    JOIN media_requests mr ON mr.id = mrr.request_id
                   WHERE mr.created_title_id IN ({placeholders})
+                    AND mr.identity_fingerprint NOT LIKE 'list-movie:%'
                   ORDER BY mrr.requested_at ASC, mrr.user_id ASC"
             ),
             &args,
@@ -216,9 +218,23 @@ impl MediaRequestRepository for MediaRequestStore {
                 added_event.clone(),
             );
             Box::pin(async move {
-                let created =
+                let movie_only = request.is_list_series_movie();
+                let created = if movie_only {
+                    let selection =
+                        request
+                            .requested_monitor_selection
+                            .as_ref()
+                            .ok_or_else(|| {
+                                AppError::Validation("list movie selection is missing".into())
+                            })?;
+                    crate::media::titles::store::create_or_get_title_preserving_options_tx(
+                        tx, &title, selection,
+                    )
+                    .await?
+                } else {
                     crate::media::titles::store::create_or_get_title_tx(tx, &title, &options)
-                        .await?;
+                        .await?
+                };
                 // The application guards this identity. A concurrent creation
                 // with another id must retry under the correct title guard.
                 if created.title.id != title.id {
@@ -231,7 +247,7 @@ impl MediaRequestRepository for MediaRequestStore {
                     .tags
                     .iter()
                     .any(|tag| tag == "scryer:monitor-type:advanced");
-                if !advanced || options.monitor_selection.is_some() {
+                if !movie_only && (!advanced || options.monitor_selection.is_some()) {
                     replace_monitor_selection_tx(
                         tx,
                         crate::media::monitor_selections::OWNER_KIND_TITLE,
@@ -773,7 +789,11 @@ async fn resolve_pending_overlapping_tx(
         SqlArg::Timestamp(resolved_at),
     ];
 
-    let where_clause = if request.external_ids.is_empty() {
+    let where_clause = if request.is_list_series_movie() {
+        args.push(SqlArg::Text(request.library_id.clone()));
+        args.push(SqlArg::Text(request.identity_fingerprint.clone()));
+        "status = 'pending' AND library_id = {} AND identity_fingerprint = {}".to_string()
+    } else if request.external_ids.is_empty() {
         args.push(SqlArg::Text(request.id.clone()));
         args.push(SqlArg::Text(
             MediaRequestStatus::Pending.as_str().to_string(),
@@ -800,6 +820,7 @@ async fn resolve_pending_overlapping_tx(
             "status = {{}}
              AND library_id = {{}}
              AND facet = {{}}
+             AND identity_fingerprint NOT LIKE 'list-movie:%'
              AND id IN (
                  SELECT DISTINCT request_id
                    FROM media_request_external_ids
@@ -870,6 +891,9 @@ async fn create_approved_request_claim_tx(
     tx: &mut SqlTx<'_>,
     request: &MediaRequest,
 ) -> AppResult<()> {
+    if request.is_list_series_movie() {
+        return Ok(());
+    }
     let title_id = request.created_title_id.as_ref().ok_or_else(|| {
         AppError::Repository("approved request has no title for its retention claim".into())
     })?;

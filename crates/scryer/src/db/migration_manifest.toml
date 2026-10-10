@@ -3067,6 +3067,23 @@ file = "postgres/migrations/0285_indexer_search_page_cursor.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 286
+description = "list series movie targets"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0286_list_series_movie_targets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0286_list_series_movie_targets.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

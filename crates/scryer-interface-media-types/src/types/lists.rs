@@ -774,6 +774,8 @@ pub struct ListSubscriptionPayload {
 /// One title on a followed list.
 #[derive(SimpleObject, Clone)]
 pub struct ListMembershipPayload {
+    /// Movie entry within the parent library title, when hydrated.
+    pub series_movie_link_id: Option<ID>,
     /// The provider's own key for the title.
     pub item_key: String,
     /// Position on the list, or null.
@@ -831,6 +833,10 @@ pub struct ListSyncRunPayload {
 /// One title the next sync would act on.
 #[derive(SimpleObject, Clone)]
 pub struct ListPreviewItemPayload {
+    /// Canonical identity of the listed title, independent of its destination.
+    pub canonical_smg_id: Option<i64>,
+    /// Parent series for an associated movie, or null for a standalone title.
+    pub series_movie_parent_smg_id: Option<i64>,
     /// Provider-attributed ratings for the preview flyout.
     pub external_ratings: Vec<super::DiscoveryExternalRatingPayload>,
     /// Canonical genre and theme display names.

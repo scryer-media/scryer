@@ -2037,6 +2037,56 @@ impl TitleRepository for TitleStore {
         Ok(existing)
     }
 
+    async fn create_or_get_existing_preserving_options(
+        &self,
+        title: Title,
+        selection: MonitorSelection,
+    ) -> AppResult<CreateTitleOutcome> {
+        let external_ids = normalized_external_ids(&title.external_ids);
+        let library_id = title.library_id.clone();
+        let fallback_selection = selection.clone();
+        let result = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "create_title_preserving_existing",
+            move |tx| {
+                let title = title.clone();
+                let selection = selection.clone();
+                Box::pin(async move {
+                    create_or_get_title_preserving_options_tx(tx, &title, &selection).await
+                })
+            },
+        )
+        .await;
+        match result {
+            Err(error) if is_title_external_id_conflict_error(&error) => {
+                match self
+                    .find_existing_title_after_unique_conflict(&library_id, &external_ids)
+                    .await?
+                {
+                    Some(title) => {
+                        SqlRuntime::run_in_transaction(
+                            &self.datastore,
+                            "merge_selected_movie_after_conflict",
+                            move |tx| {
+                                let title = title.clone();
+                                let selection = fallback_selection.clone();
+                                Box::pin(async move {
+                                    create_or_get_title_preserving_options_tx(
+                                        tx, &title, &selection,
+                                    )
+                                    .await
+                                })
+                            },
+                        )
+                        .await
+                    }
+                    None => Err(error),
+                }
+            }
+            result => result,
+        }
+    }
+
     async fn create_or_get_existing(&self, title: Title) -> AppResult<CreateTitleOutcome> {
         self.create_or_get_existing_with_options_patch(title, TitleOptionsPatch::default())
             .await
@@ -5235,6 +5285,91 @@ async fn find_existing_title_for_create_tx(
     }
 
     Ok(None)
+}
+
+pub(crate) async fn create_or_get_title_preserving_options_tx(
+    tx: &mut SqlTx<'_>,
+    title: &Title,
+    selection: &MonitorSelection,
+) -> AppResult<CreateTitleOutcome> {
+    if let Some(existing) = find_existing_title_for_create_tx(tx, title).await? {
+        // Several movies can be admitted before their shared container hydrates.
+        // Extend only its advanced selection, retaining seasons and siblings.
+        // Existing links (including explicit unmonitored overrides) are untouched.
+        if existing.monitored
+            && existing
+                .tags
+                .iter()
+                .any(|tag| tag == "scryer:monitor-type:advanced")
+        {
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "UPDATE titles SET id = id WHERE id = {}",
+                &[SqlArg::Text(existing.id.clone())],
+            )
+            .await?;
+            let current = load_title_tx_or_not_found(tx, &existing.id, true).await?;
+            if !current.monitored
+                || !current
+                    .tags
+                    .iter()
+                    .any(|tag| tag == "scryer:monitor-type:advanced")
+            {
+                return Ok(CreateTitleOutcome {
+                    title: current,
+                    reused_existing: true,
+                });
+            }
+            let mut merged =
+                load_monitor_selection(SqlExec::Tx(tx), OWNER_KIND_TITLE, &existing.id)
+                    .await?
+                    .unwrap_or_default();
+            let before = merged.clone();
+            for movie in &selection.series_movies {
+                let mut conditions = Vec::new();
+                let mut args = vec![SqlArg::Text(existing.id.clone())];
+                for id in &movie.external_ids {
+                    let column = match id.source.as_str() {
+                        "tvdb" => "tvdb_id",
+                        "tmdb" => "tmdb_id",
+                        "imdb" => "imdb_id",
+                        "mal" => "mal_id",
+                        "anidb" => "anidb_id",
+                        _ => continue,
+                    };
+                    conditions.push(format!("me.{column} = {{}}"));
+                    args.push(SqlArg::Text(id.value.clone()));
+                }
+                if conditions.is_empty() {
+                    return Err(AppError::Validation(
+                        "selected movie has no supported identity".into(),
+                    ));
+                }
+                let present = SqlRuntime::fetch_optional(SqlExec::Tx(tx), &format!(
+                    "SELECT sml.id FROM series_movie_links sml JOIN movie_entities me ON me.id = sml.movie_entity_id WHERE sml.series_title_id = {{}} AND ({}) LIMIT 1",
+                    conditions.join(" OR ")
+                ), &args).await?.is_some();
+                if !present {
+                    merged.series_movies.push(movie.clone());
+                }
+            }
+            let merged = merged.normalized();
+            if merged != before {
+                replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &existing.id, Some(&merged))
+                    .await?;
+            }
+        }
+        return Ok(CreateTitleOutcome {
+            title: existing,
+            reused_existing: true,
+        });
+    }
+    create_title_tx(tx, title).await?;
+    replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &title.id, Some(selection)).await?;
+    Ok(CreateTitleOutcome {
+        title: load_title_tx_or_not_found(tx, &title.id, true).await?,
+        reused_existing: false,
+    })
 }
 
 pub(crate) async fn create_or_get_title_tx(
