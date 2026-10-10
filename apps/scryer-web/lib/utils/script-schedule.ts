@@ -1,7 +1,7 @@
 import type {
-  ScheduleWeekday,
+  ScheduleWeekdayValue,
   ScriptSchedule,
-  ScriptScheduleKind,
+  ScriptScheduleKindValue,
 } from "../types/scripts.ts";
 import { SCHEDULE_WEEKDAYS } from "../types/scripts.ts";
 
@@ -40,14 +40,14 @@ export function splitIntervalSeconds(
 }
 
 /** Days in Monday-first week order without repeats. */
-export function orderWeekdays(days: readonly ScheduleWeekday[]): ScheduleWeekday[] {
+export function orderWeekdays(days: readonly ScheduleWeekdayValue[]): ScheduleWeekdayValue[] {
   return SCHEDULE_WEEKDAYS.filter((day) => days.includes(day));
 }
 
 export function toggleWeekday(
-  days: readonly ScheduleWeekday[],
-  day: ScheduleWeekday,
-): ScheduleWeekday[] {
+  days: readonly ScheduleWeekdayValue[],
+  day: ScheduleWeekdayValue,
+): ScheduleWeekdayValue[] {
   if (days.includes(day)) {
     // A weekly schedule always keeps at least one day.
     if (days.length === 1) return orderWeekdays(days);
@@ -62,7 +62,7 @@ export function toggleWeekday(
  * with defaults. Fields the new kind does not use are cleared.
  */
 export function scheduleForKind(
-  kind: ScriptScheduleKind,
+  kind: ScriptScheduleKindValue,
   previous: ScriptSchedule | null,
 ): ScriptSchedule {
   const empty: ScriptSchedule = {
@@ -121,7 +121,7 @@ export function toScriptScheduleInput(schedule: ScriptSchedule): ScriptSchedule 
   }
 }
 
-const SCHEDULE_KINDS: readonly ScriptScheduleKind[] = ["MANUAL", "INTERVAL", "DAILY", "WEEKLY", "CRON"];
+const SCHEDULE_KINDS: readonly ScriptScheduleKindValue[] = ["MANUAL", "INTERVAL", "DAILY", "WEEKLY", "CRON"];
 
 /** Reads a schedule payload, or null when the value is not one. */
 export function normalizeScriptSchedule(value: unknown): ScriptSchedule | null {
@@ -138,8 +138,8 @@ export function normalizeScriptSchedule(value: unknown): ScriptSchedule | null {
     everySeconds: typeof record.everySeconds === "number" ? record.everySeconds : null,
     timeLocal: typeof record.timeLocal === "string" ? record.timeLocal : null,
     days: Array.isArray(record.days)
-      ? orderWeekdays(record.days.filter((day): day is ScheduleWeekday =>
-          SCHEDULE_WEEKDAYS.includes(day as ScheduleWeekday),
+      ? orderWeekdays(record.days.filter((day): day is ScheduleWeekdayValue =>
+          SCHEDULE_WEEKDAYS.includes(day as ScheduleWeekdayValue),
         ))
       : null,
     expression: typeof record.expression === "string" ? record.expression : null,

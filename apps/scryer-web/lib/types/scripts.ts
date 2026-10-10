@@ -1,6 +1,6 @@
-export type ScriptLanguage = "SHELL" | "PYTHON" | "POWERSHELL" | "BATCH" | "GO";
+export type ScriptLanguageValue = "SHELL" | "PYTHON" | "POWERSHELL" | "BATCH" | "GO";
 
-export const SCRIPT_LANGUAGES: readonly ScriptLanguage[] = [
+export const SCRIPT_LANGUAGES: readonly ScriptLanguageValue[] = [
   "SHELL",
   "PYTHON",
   "POWERSHELL",
@@ -9,11 +9,11 @@ export const SCRIPT_LANGUAGES: readonly ScriptLanguage[] = [
 ];
 
 /** What starts a script: an import finishing, or its own schedule. */
-export type ScriptTrigger = "POST_IMPORT" | "SCHEDULE";
+export type ScriptTriggerValue = "POST_IMPORT" | "SCHEDULE";
 
-export type ScriptScheduleKind = "MANUAL" | "INTERVAL" | "DAILY" | "WEEKLY" | "CRON";
+export type ScriptScheduleKindValue = "MANUAL" | "INTERVAL" | "DAILY" | "WEEKLY" | "CRON";
 
-export type ScheduleWeekday =
+export type ScheduleWeekdayValue =
   | "MONDAY"
   | "TUESDAY"
   | "WEDNESDAY"
@@ -22,7 +22,7 @@ export type ScheduleWeekday =
   | "SATURDAY"
   | "SUNDAY";
 
-export const SCHEDULE_WEEKDAYS: readonly ScheduleWeekday[] = [
+export const SCHEDULE_WEEKDAYS: readonly ScheduleWeekdayValue[] = [
   "MONDAY",
   "TUESDAY",
   "WEDNESDAY",
@@ -37,11 +37,11 @@ export const SCHEDULE_WEEKDAYS: readonly ScheduleWeekday[] = [
  * `ScriptSchedulePayload`. Only the fields the kind uses are meaningful.
  */
 export type ScriptSchedule = {
-  kind: ScriptScheduleKind;
+  kind: ScriptScheduleKindValue;
   everySeconds: number | null;
   /** Local wall-clock time as `HH:MM`. */
   timeLocal: string | null;
-  days: ScheduleWeekday[] | null;
+  days: ScheduleWeekdayValue[] | null;
   expression: string | null;
 };
 
@@ -71,8 +71,8 @@ export type PostProcessingScript = {
   priority: number;
   enabled: boolean;
   debug: boolean;
-  language: ScriptLanguage;
-  trigger: ScriptTrigger;
+  language: ScriptLanguageValue;
+  trigger: ScriptTriggerValue;
   schedule: ScriptSchedule | null;
   runOnStartup: boolean;
   scheduleDescription: string | null;
@@ -108,8 +108,8 @@ export type PostProcessingScriptDraft = {
   priority: number;
   enabled: boolean;
   debug: boolean;
-  language: ScriptLanguage;
-  trigger: ScriptTrigger;
+  language: ScriptLanguageValue;
+  trigger: ScriptTriggerValue;
   schedule: ScriptSchedule | null;
   runOnStartup: boolean;
 };

@@ -10,9 +10,9 @@ import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { validateScriptScheduleQuery } from "@/lib/graphql/queries";
 import {
   SCHEDULE_WEEKDAYS,
-  type ScheduleWeekday,
+  type ScheduleWeekdayValue,
   type ScriptSchedule,
-  type ScriptScheduleKind,
+  type ScriptScheduleKindValue,
   type ScriptScheduleValidation,
 } from "@/lib/types/scripts";
 import { cn } from "@/lib/utils";
@@ -32,7 +32,7 @@ import {
   type IntervalUnit,
 } from "@/lib/utils/script-schedule";
 
-const SCHEDULE_KINDS: readonly ScriptScheduleKind[] = ["MANUAL", "INTERVAL", "DAILY", "WEEKLY", "CRON"];
+const SCHEDULE_KINDS: readonly ScriptScheduleKindValue[] = ["MANUAL", "INTERVAL", "DAILY", "WEEKLY", "CRON"];
 const INTERVAL_UNITS: readonly IntervalUnit[] = ["minutes", "hours", "days"];
 const VALIDATION_DEBOUNCE_MS = 400;
 const NEXT_RUNS_SHOWN = 3;
@@ -266,8 +266,8 @@ function WeekdayToggles({
   onChange,
   disabled,
 }: {
-  days: ScheduleWeekday[];
-  onChange: (days: ScheduleWeekday[]) => void;
+  days: ScheduleWeekdayValue[];
+  onChange: (days: ScheduleWeekdayValue[]) => void;
   disabled?: boolean;
 }) {
   const t = useTranslate();
@@ -329,7 +329,7 @@ export function ScriptScheduleEditor({
           label={t("script.schedule.kind")}
           value={value.kind}
           disabled={disabled}
-          onValueChange={(kind) => onChange(scheduleForKind(kind as ScriptScheduleKind, value))}
+          onValueChange={(kind) => onChange(scheduleForKind(kind as ScriptScheduleKindValue, value))}
           options={SCHEDULE_KINDS.map((kind) => ({
             value: kind,
             label: t(`script.schedule.kind.${kind.toLowerCase()}`),
