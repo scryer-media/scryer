@@ -1,15 +1,16 @@
 //! GraphQL list types, including credential-free personal account projections.
 
 use super::{
-    ExternalIdInput, ExternalIdPayload, MediaFacetValue, PluginConfigFieldOptionPayload,
+    Date, ExternalIdInput, ExternalIdPayload, MediaFacetValue, PluginConfigFieldOptionPayload,
     PluginConfigFieldTypeValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
+use scryer_application::lists::accounts::ListAccountPollStatus;
 use scryer_application::lists::catalog::{ListAuthBadge, ListNoteTone, ListSourceParamType};
 use scryer_domain::{
     ListExclusionScope, ListMembershipState, ListMode, ListOnLeave, ListPolicy, ListScope,
-    ListSyncRunOutcome, ListSyncState,
+    ListSyncRunOutcome, ListSyncState, UserListAccountStatus,
 };
 
 /// Which side of the privacy boundary a list sits on.
@@ -837,7 +838,7 @@ pub struct ListPreviewItemPayload {
     /// Original language, when known.
     pub original_language: Option<String>,
     /// Release or first-air date, when known.
-    pub release_date: Option<String>,
+    pub release_date: Option<Date>,
     /// The provider's own key for the title.
     pub item_key: String,
     /// The title as the list names it, or its key when the list gives no name.
@@ -1046,6 +1047,56 @@ pub struct ListAccountStatusPayload {
     /// Provider parameters to use when following this status.
     pub params: Vec<ListParamPayload>,
 }
+/// Health of a linked list account.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum UserListAccountStatusValue {
+    /// The account works.
+    Active,
+    /// The provider grant expired; the member must reconnect.
+    Expired,
+    /// The provider grant was revoked; the member must reconnect.
+    Revoked,
+}
+
+impl UserListAccountStatusValue {
+    pub fn from_domain(value: UserListAccountStatus) -> Self {
+        match value {
+            UserListAccountStatus::Active => Self::Active,
+            UserListAccountStatus::Expired => Self::Expired,
+            UserListAccountStatus::Revoked => Self::Revoked,
+        }
+    }
+}
+
+/// The answer to one poll of an account-link session.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ListAccountPollStatusValue {
+    /// The member has not finished authorizing yet; poll again.
+    Pending,
+    /// The account is linked and returned with this answer.
+    Linked,
+    /// Another request for the same link is checking the provider; poll again.
+    Busy,
+    /// The provider or this instance could not answer just now; poll again more slowly.
+    Unavailable,
+    /// The provider asked for fewer requests; poll again later.
+    RateLimited,
+}
+
+impl ListAccountPollStatusValue {
+    pub fn from_application(value: ListAccountPollStatus) -> Self {
+        match value {
+            ListAccountPollStatus::Pending => Self::Pending,
+            ListAccountPollStatus::Linked => Self::Linked,
+            ListAccountPollStatus::Busy => Self::Busy,
+            ListAccountPollStatus::Unavailable => Self::Unavailable,
+            ListAccountPollStatus::RateLimited => Self::RateLimited,
+        }
+    }
+}
+
 /// A linked account visible only to its owner, without credentials.
 #[derive(SimpleObject)]
 pub struct ListAccountPayload {
@@ -1059,8 +1110,8 @@ pub struct ListAccountPayload {
     pub username: String,
     /// Optional provider display name.
     pub display_name: Option<String>,
-    /// Account health, including whether reconnect is needed.
-    pub status: String,
+    /// Account health; anything other than ACTIVE needs a reconnect.
+    pub status: UserListAccountStatusValue,
     /// Safe explanation of an account problem.
     pub error_message: Option<String>,
     /// When this account was first linked.
@@ -1154,7 +1205,7 @@ impl ListAccountPayload {
             external_user_id: account.external_user_id,
             username: account.username,
             display_name: account.display_name,
-            status: account.status.as_str().into(),
+            status: UserListAccountStatusValue::from_domain(account.status),
             error_message: account.error_message,
             linked_at: account.linked_at,
             last_used_at: account.last_used_at,
@@ -1194,8 +1245,8 @@ impl From<scryer_application::lists::accounts::ListAccountLink> for ListAccountL
 /// The result of polling a personal account-link session.
 #[derive(SimpleObject)]
 pub struct ListAccountPollPayload {
-    /// Pending or linked state.
-    pub status: String,
+    /// Whether the link completed, is still pending, or should be polled again later.
+    pub status: ListAccountPollStatusValue,
     /// The linked account when authorization completed.
     pub account: Option<ListAccountPayload>,
 }

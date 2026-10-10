@@ -29,7 +29,7 @@ fn reply() -> VocabularyReply {
         unchanged: false,
         entries: vec![VocabularyEntry {
             key: "canonical:genre:action".into(),
-            category: "genre".into(),
+            category: CanonicalTagCategory::Genre,
             name: "Action".into(),
             aliases: vec!["action-adventure".into()],
         }],
@@ -254,9 +254,15 @@ fn validation_rejects_duplicates_categories_and_oversize() {
     let mut bad = reply();
     bad.entries.push(bad.entries[0].clone());
     assert!(validate_vocabulary(&bad).is_err());
+    let mut unknown_category = serde_json::to_value(reply()).unwrap();
+    unknown_category["entries"][0]["category"] = "person".into();
+    assert!(serde_json::from_value::<VocabularyReply>(unknown_category).is_err());
     let mut bad = reply();
-    bad.entries[0].category = "person".into();
-    assert!(validate_vocabulary(&bad).is_err());
+    bad.entries[0].category = CanonicalTagCategory::Theme;
+    assert!(
+        validate_vocabulary(&bad).is_err(),
+        "the key prefix must name the entry's category"
+    );
     let mut bad = reply();
     bad.entries[0].aliases = vec!["x".repeat(257)];
     assert!(validate_vocabulary(&bad).is_err());
@@ -267,7 +273,7 @@ fn validation_rejects_duplicates_categories_and_oversize() {
     bad.entries = (0..100)
         .map(|i| VocabularyEntry {
             key: format!("canonical:genre:fixture-{i}"),
-            category: "genre".into(),
+            category: CanonicalTagCategory::Genre,
             name: "Fixture".into(),
             aliases: vec!["x".repeat(256); 256],
         })

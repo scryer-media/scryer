@@ -4,7 +4,7 @@ import { useClient, type Client } from "urql";
 export type CanonicalVocabularyEntry = {
   key: string;
   name: string;
-  category: string;
+  category: "GENRE" | "THEME";
   aliases: string[];
 };
 type Vocabulary = { version: string; entries: CanonicalVocabularyEntry[] };

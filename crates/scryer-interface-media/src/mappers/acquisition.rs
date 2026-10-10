@@ -318,7 +318,7 @@ pub fn from_download_queue_item(item: DownloadQueueItem) -> DownloadQueueItemPay
     DownloadQueueItemPayload {
         password_failure_code: item
             .password_failure()
-            .map(|failure| failure.code().to_owned()),
+            .map(DownloadPasswordFailureCodeValue::from_domain),
         import_actions: DownloadImportActionsPayload {
             manual_import_interactive: actions.manual_import_interactive,
             manual_import_direct: actions.manual_import_direct,

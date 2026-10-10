@@ -856,9 +856,12 @@ pub enum AppError {
     LocationRootRefused { message: String, code: &'static str },
 
     /// A public URL change was refused. The code comes from
-    /// `public_url::error_codes` so clients can explain it in their language.
+    /// `public_url::PublicUrlErrorCode` so clients can explain it in their language.
     #[error("validation: {message}")]
-    PublicUrlRejected { message: String, code: &'static str },
+    PublicUrlRejected {
+        message: String,
+        code: crate::public_url::PublicUrlErrorCode,
+    },
 
     /// A direct `rootFolderId` write on a title that already has tracked files.
     /// Retired by FR-077: relocating a title with content on disk is the move

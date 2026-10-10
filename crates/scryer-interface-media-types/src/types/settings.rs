@@ -909,30 +909,30 @@ pub struct ServiceSettingsPayload {
     pub trusted_proxy_source: String,
     /// Effective public URL; null when unset or invalid.
     pub public_url: Option<String>,
-    /// Where the public URL comes from: environment, settings, or default.
-    pub public_url_source: String,
+    /// Where the public URL comes from.
+    pub public_url_source: ConfigValueSourceValue,
     /// Saved public URL, shown even while the environment overrides it.
     pub public_url_saved: Option<String>,
     /// Why the configured public URL is not in effect, when it is invalid.
     pub public_url_error: Option<String>,
-    /// Stable reason code for public_url_error, for localized messages.
-    pub public_url_error_code: Option<String>,
+    /// Stable reason for public_url_error, for localized messages.
+    pub public_url_error_code: Option<PublicUrlErrorCodeValue>,
     /// False while SCRYER_PUBLIC_URL is set, because the environment wins.
     pub public_url_editable: bool,
     /// Base path the instance serves under; empty at the root.
     pub base_path: String,
-    /// Where the base path comes from: environment or default.
-    pub base_path_source: String,
+    /// Where the base path comes from; never the saved settings.
+    pub base_path_source: ConfigValueSourceValue,
     /// Listening address and port.
     pub bind_address: String,
-    /// Where the listening address comes from: environment or default.
-    pub bind_source: String,
+    /// Where the listening address comes from; never the saved settings.
+    pub bind_source: ConfigValueSourceValue,
     /// Passkey relying-party ID in effect since startup.
     pub passkey_rp_id: Option<String>,
     /// Passkey relying-party origin in effect since startup.
     pub passkey_rp_origin: Option<String>,
-    /// Where the passkey relying party comes from: environment, public_url, or none.
-    pub passkey_rp_source: String,
+    /// Where the passkey relying party comes from.
+    pub passkey_rp_source: PasskeyRelyingPartySourceValue,
     /// Users with at least one passkey; null when the count could not be read.
     pub passkey_user_count: Option<i64>,
     /// Users whose only second factor is a passkey; null when unknown.
@@ -946,10 +946,10 @@ pub struct PublicUrlChangePreviewPayload {
     pub normalized_public_url: Option<String>,
     /// Why the value would be refused.
     pub error: Option<String>,
-    /// Stable reason code for error, for localized messages.
-    pub error_code: Option<String>,
-    /// Effect on passkeys after the next restart: unaffected, unchanged, changed, or disabled.
-    pub passkey_impact: String,
+    /// Stable reason for error, for localized messages.
+    pub error_code: Option<PublicUrlErrorCodeValue>,
+    /// Effect on passkeys after the next restart.
+    pub passkey_impact: PasskeyImpactValue,
     /// Passkey relying-party ID in effect now.
     pub current_passkey_rp_id: Option<String>,
     /// Passkey relying-party ID after the next restart; null when passkeys would be off.
@@ -960,6 +960,123 @@ pub struct PublicUrlChangePreviewPayload {
     pub passkey_only_user_count: Option<i64>,
     /// Whether the save must set acknowledgePasskeyImpact.
     pub acknowledgement_required: bool,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Where an effective addressing value comes from.
+pub enum ConfigValueSourceValue {
+    /// An environment variable.
+    Environment,
+    /// The saved setting.
+    Settings,
+    /// The built-in default.
+    Default,
+}
+
+impl ConfigValueSourceValue {
+    pub fn from_application(value: scryer_application::public_url::ConfigValueSource) -> Self {
+        use scryer_application::public_url::ConfigValueSource;
+        match value {
+            ConfigValueSource::Environment => Self::Environment,
+            ConfigValueSource::Settings => Self::Settings,
+            ConfigValueSource::Default => Self::Default,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Where the running passkey relying party comes from.
+pub enum PasskeyRelyingPartySourceValue {
+    /// The SCRYER_WEBAUTHN_RP_ID and SCRYER_WEBAUTHN_RP_ORIGIN variables.
+    Environment,
+    /// Derived from the public URL because both variables were unset.
+    PublicUrl,
+    /// Passkeys are not configured.
+    None,
+}
+
+impl PasskeyRelyingPartySourceValue {
+    pub fn from_application(
+        value: scryer_application::public_url::PasskeyRelyingPartySource,
+    ) -> Self {
+        use scryer_application::public_url::PasskeyRelyingPartySource;
+        match value {
+            PasskeyRelyingPartySource::Environment => Self::Environment,
+            PasskeyRelyingPartySource::PublicUrl => Self::PublicUrl,
+            PasskeyRelyingPartySource::None => Self::None,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What saving a public URL would do to passkeys after the next restart.
+pub enum PasskeyImpactValue {
+    /// Passkeys do not come from the public URL, so the change cannot affect them.
+    Unaffected,
+    /// The relying party stays the same.
+    Unchanged,
+    /// Passkeys move to a different domain; existing passkeys stop working.
+    Changed,
+    /// The new value cannot carry passkeys; passkeys turn off.
+    Disabled,
+}
+
+impl PasskeyImpactValue {
+    pub fn from_application(value: scryer_application::public_url::PasskeyImpact) -> Self {
+        use scryer_application::public_url::PasskeyImpact;
+        match value {
+            PasskeyImpact::Unaffected => Self::Unaffected,
+            PasskeyImpact::Unchanged => Self::Unchanged,
+            PasskeyImpact::Changed => Self::Changed,
+            PasskeyImpact::Disabled => Self::Disabled,
+        }
+    }
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Stable reason a public URL is rejected, for localized messages.
+pub enum PublicUrlErrorCodeValue {
+    /// Not an absolute http or https URL with a host.
+    InvalidUrl,
+    /// The host contains a wildcard.
+    WildcardHost,
+    /// The URL carries a username or password.
+    Credentials,
+    /// The URL carries a query or fragment.
+    QueryOrFragment,
+    /// A path was given while the instance is served at the root.
+    PathNotAllowed,
+    /// The path differs from the base path the instance serves under.
+    PathMismatch,
+    /// SCRYER_PUBLIC_URL sets the public URL, so it cannot be changed here.
+    EnvironmentLocked,
+    /// A save and a reset were requested together.
+    SaveAndReset,
+    /// The change breaks registered passkeys and was not acknowledged.
+    PasskeyAcknowledgementRequired,
+}
+
+impl PublicUrlErrorCodeValue {
+    pub fn from_application(value: scryer_application::public_url::PublicUrlErrorCode) -> Self {
+        use scryer_application::public_url::PublicUrlErrorCode;
+        match value {
+            PublicUrlErrorCode::InvalidUrl => Self::InvalidUrl,
+            PublicUrlErrorCode::WildcardHost => Self::WildcardHost,
+            PublicUrlErrorCode::Credentials => Self::Credentials,
+            PublicUrlErrorCode::QueryOrFragment => Self::QueryOrFragment,
+            PublicUrlErrorCode::PathNotAllowed => Self::PathNotAllowed,
+            PublicUrlErrorCode::PathMismatch => Self::PathMismatch,
+            PublicUrlErrorCode::EnvironmentLocked => Self::EnvironmentLocked,
+            PublicUrlErrorCode::SaveAndReset => Self::SaveAndReset,
+            PublicUrlErrorCode::PasskeyAcknowledgementRequired => {
+                Self::PasskeyAcknowledgementRequired
+            }
+        }
+    }
 }
 
 #[derive(InputObject, Clone)]

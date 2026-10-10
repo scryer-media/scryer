@@ -146,14 +146,16 @@ fn membership(
 
 #[tokio::test]
 async fn vocabulary_cache_round_trip_timestamp_only_and_primary_key_plan() {
-    use scryer_application::lists::vocabulary::{VocabularyEntry, VocabularySnapshot};
+    use scryer_application::lists::vocabulary::{
+        CanonicalTagCategory, VocabularyEntry, VocabularySnapshot,
+    };
     let store = test_store(None).await;
     assert!(store.vocabulary_cache().await.unwrap().is_none());
     let mut snapshot = VocabularySnapshot {
         version: "v1".into(),
         entries: vec![VocabularyEntry {
             key: "canonical:genre:action".into(),
-            category: "genre".into(),
+            category: CanonicalTagCategory::Genre,
             name: "Action".into(),
             aliases: vec![],
         }],

@@ -23,13 +23,35 @@ struct CanonicalTagVocabularyPayload {
     entries: Vec<CanonicalTagVocabularyEntryPayload>,
 }
 
+/// Registry category of a canonical tag.
+#[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+enum CanonicalTagCategoryValue {
+    /// A genre.
+    Genre,
+    /// A theme.
+    Theme,
+}
+
+impl CanonicalTagCategoryValue {
+    fn from_application(
+        value: scryer_application::lists::vocabulary::CanonicalTagCategory,
+    ) -> Self {
+        use scryer_application::lists::vocabulary::CanonicalTagCategory;
+        match value {
+            CanonicalTagCategory::Genre => Self::Genre,
+            CanonicalTagCategory::Theme => Self::Theme,
+        }
+    }
+}
+
 /// A registered canonical genre or theme available to list filters.
 #[derive(async_graphql::SimpleObject)]
 struct CanonicalTagVocabularyEntryPayload {
     /// Stable canonical key stored in saved filters.
     key: String,
-    /// Registry category: genre or theme.
-    category: String,
+    /// Registry category.
+    category: CanonicalTagCategoryValue,
     /// Display name of the canonical entry.
     name: String,
     /// Registered aliases usable for search and unambiguous legacy-label conversion.
@@ -72,7 +94,7 @@ impl ListQueries {
                 .into_iter()
                 .map(|entry| CanonicalTagVocabularyEntryPayload {
                     key: entry.key,
-                    category: entry.category,
+                    category: CanonicalTagCategoryValue::from_application(entry.category),
                     name: entry.name,
                     aliases: entry.aliases,
                 })

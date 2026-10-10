@@ -149,7 +149,7 @@ test("queue reconciliation refreshes password failure and retry attempt changes"
   for (const patch of [
     { passwordRetryImportId: "attempt-new" },
     { passwordRetryImportId: null },
-    { passwordFailureCode: "archive_password_required" as const },
+    { passwordFailureCode: "ARCHIVE_PASSWORD_REQUIRED" as const },
   ]) {
     const next = { ...current, ...patch };
     assert.equal(downloadQueue.sameDownloadQueueItem(current, next), false);

@@ -301,7 +301,7 @@ export type ListAccount = {
   externalUserId: string;
   username: string | null;
   displayName: string | null;
-  status: string;
+  status: "ACTIVE" | "EXPIRED" | "REVOKED";
   errorMessage: string | null;
   linkedAt: string;
   lastUsedAt: string | null;

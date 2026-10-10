@@ -1077,6 +1077,27 @@ impl ImportErrorCodeValue {
     }
 }
 
+/// Password-related reason a download failed; never contains credentials.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum DownloadPasswordFailureCodeValue {
+    /// The archive needs a new password.
+    ArchivePasswordRequired,
+    /// The password may be incorrect or the archive may be damaged.
+    ArchivePasswordOrCorruption,
+}
+
+impl DownloadPasswordFailureCodeValue {
+    pub fn from_domain(value: scryer_domain::DownloadPasswordFailure) -> Self {
+        match value {
+            scryer_domain::DownloadPasswordFailure::Required => Self::ArchivePasswordRequired,
+            scryer_domain::DownloadPasswordFailure::PasswordOrCorruption => {
+                Self::ArchivePasswordOrCorruption
+            }
+        }
+    }
+}
+
 /// State of a queued download deletion request.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]

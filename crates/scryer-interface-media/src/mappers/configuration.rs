@@ -278,18 +278,22 @@ pub fn from_service_settings(settings: ServiceSettings) -> ServiceSettingsPayloa
     let addressing = public_url.addressing;
     ServiceSettingsPayload {
         public_url: public_url.effective,
-        public_url_source: public_url.source.as_str().to_string(),
+        public_url_source: ConfigValueSourceValue::from_application(public_url.source),
         public_url_saved: public_url.saved,
         public_url_error: public_url.error.as_ref().map(|error| error.message.clone()),
-        public_url_error_code: public_url.error.map(|error| error.code.to_string()),
+        public_url_error_code: public_url
+            .error
+            .map(|error| PublicUrlErrorCodeValue::from_application(error.code)),
         public_url_editable: public_url.editable,
         base_path: addressing.base_path,
-        base_path_source: addressing.base_path_source.as_str().to_string(),
+        base_path_source: ConfigValueSourceValue::from_application(addressing.base_path_source),
         bind_address: addressing.bind_address,
-        bind_source: addressing.bind_source.as_str().to_string(),
+        bind_source: ConfigValueSourceValue::from_application(addressing.bind_source),
         passkey_rp_id: addressing.passkey_rp_id,
         passkey_rp_origin: addressing.passkey_rp_origin,
-        passkey_rp_source: addressing.passkey_rp_source.as_str().to_string(),
+        passkey_rp_source: PasskeyRelyingPartySourceValue::from_application(
+            addressing.passkey_rp_source,
+        ),
         passkey_user_count: public_url
             .passkey_enrollment
             .map(|counts| counts.users_with_passkeys),
@@ -310,8 +314,10 @@ pub fn from_public_url_change_preview(
     PublicUrlChangePreviewPayload {
         normalized_public_url: preview.normalized,
         error: preview.error.as_ref().map(|error| error.message.clone()),
-        error_code: preview.error.map(|error| error.code.to_string()),
-        passkey_impact: preview.passkey_impact.as_str().to_string(),
+        error_code: preview
+            .error
+            .map(|error| PublicUrlErrorCodeValue::from_application(error.code)),
+        passkey_impact: PasskeyImpactValue::from_application(preview.passkey_impact),
         current_passkey_rp_id: preview.current_passkey_rp_id,
         next_passkey_rp_id: preview.next_passkey_rp_id,
         passkey_user_count: preview

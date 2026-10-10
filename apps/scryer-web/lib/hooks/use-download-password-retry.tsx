@@ -14,8 +14,8 @@ export function canRetryDownloadPassword(item: DownloadQueueItem): boolean {
   if (item.passwordRetryImportId) return true;
   return item.state === "FAILED" && Boolean(item.downloadId) &&
     ["sabnzbd", "nzbget", "weaver"].includes(item.clientType) &&
-    (item.passwordFailureCode === "archive_password_required" ||
-     item.passwordFailureCode === "archive_password_or_corruption" ||
+    (item.passwordFailureCode === "ARCHIVE_PASSWORD_REQUIRED" ||
+     item.passwordFailureCode === "ARCHIVE_PASSWORD_OR_CORRUPTION" ||
      Boolean(item.attentionReason?.startsWith("ARCHIVE_PASSWORD_REQUIRED:") ||
        item.attentionReason?.startsWith("ARCHIVE_PASSWORD_OR_CORRUPTION:")));
 }
@@ -28,7 +28,7 @@ type Pending = { item: DownloadPasswordRetryTarget; resolve: (outcome: PasswordR
 export function useDownloadPasswordRetry() {
   const t = useTranslate();
   const setStatus = useGlobalStatus();
-  const [, execute] = useMutation<{ retryDownloadPassword: { status: string } }>(retryMutation);
+  const [, execute] = useMutation<{ retryDownloadPassword: { status: "ACCEPTED" | "REFUSED" | "AWAITING_RECONCILIATION" } }>(retryMutation);
   const [, retryImport] = useMutation(`mutation RetryImportPassword($input: RetryImportInput!) {
     retryImport(input: $input) { importId decision skipReason }
   }`);

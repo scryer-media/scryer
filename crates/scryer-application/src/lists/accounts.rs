@@ -389,18 +389,23 @@ enum LinkPhase {
 fn prune_expired(sessions: &mut HashMap<String, LinkSession>, now: DateTime<Utc>) {
     sessions.retain(|_, session| session.expires_at > now);
 }
-/// Poll statuses besides the account-bearing `linked` answer.
-pub const LIST_ACCOUNT_POLL_PENDING: &str = "pending";
-pub const LIST_ACCOUNT_POLL_LINKED: &str = "linked";
-/// Another request for the same link is talking to the provider right now.
-pub const LIST_ACCOUNT_POLL_BUSY: &str = "busy";
-/// The provider or this instance could not answer just now; poll again.
-pub const LIST_ACCOUNT_POLL_UNAVAILABLE: &str = "unavailable";
-/// The provider asked for fewer requests; poll again later.
-pub const LIST_ACCOUNT_POLL_RATE_LIMITED: &str = "rate_limited";
+/// The answer to one poll of an account-link session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListAccountPollStatus {
+    /// The member has not finished authorizing yet.
+    Pending,
+    /// The account is linked; the only answer that carries one.
+    Linked,
+    /// Another request for the same link is talking to the provider right now.
+    Busy,
+    /// The provider or this instance could not answer just now; poll again.
+    Unavailable,
+    /// The provider asked for fewer requests; poll again later.
+    RateLimited,
+}
 enum PollClaim {
     Check(LinkSession),
-    Answer(&'static str),
+    Answer(ListAccountPollStatus),
     Linked(String),
 }
 /// Ends one poll's claim on a session. Dropping it unsettled (the request was
@@ -495,17 +500,17 @@ impl Drop for PollClaimGuard<'_> {
 /// failure code; only transport, availability, relay-enrollment and
 /// rate-limit codes are transient. Denials, bad app credentials and malformed
 /// poll tokens end the link.
-fn transient_poll_status(error: &AppError) -> Option<&'static str> {
+fn transient_poll_status(error: &AppError) -> Option<ListAccountPollStatus> {
     let code = auth_failure_code(error)?;
     match auth_failure_class(code) {
-        AuthFailureClass::Transient => Some(LIST_ACCOUNT_POLL_UNAVAILABLE),
-        AuthFailureClass::RateLimited => Some(LIST_ACCOUNT_POLL_RATE_LIMITED),
+        AuthFailureClass::Transient => Some(ListAccountPollStatus::Unavailable),
+        AuthFailureClass::RateLimited => Some(ListAccountPollStatus::RateLimited),
         // This instance's own enrollment with the relay is in flux; the
         // provider has said nothing about the link.
         AuthFailureClass::Final
             if matches!(code, "instance_auth_unavailable" | "instance_auth_required") =>
         {
-            Some(LIST_ACCOUNT_POLL_UNAVAILABLE)
+            Some(ListAccountPollStatus::Unavailable)
         }
         AuthFailureClass::Final => None,
     }
@@ -522,9 +527,9 @@ fn link_write_failure_is_transient(error: &AppError) -> bool {
         AppError::Repository(_) | AppError::TemporaryUnavailable { .. }
     ) || transient_poll_status(error).is_some()
 }
-fn poll_answer(status: &str) -> ListAccountPoll {
+fn poll_answer(status: ListAccountPollStatus) -> ListAccountPoll {
     ListAccountPoll {
-        status: status.into(),
+        status,
         account: None,
     }
 }
@@ -543,7 +548,7 @@ pub struct ListAccountView {
     pub sources: ListPluginAccountResponse,
 }
 pub struct ListAccountPoll {
-    pub status: String,
+    pub status: ListAccountPollStatus,
     pub account: Option<ListAccountView>,
 }
 fn missing() -> AppError {
@@ -623,13 +628,13 @@ impl ListAccountRuntime {
             .filter(|session| session.owner == owner)
             .ok_or_else(missing)?;
         Ok(match &session.phase {
-            LinkPhase::Checking => PollClaim::Answer(LIST_ACCOUNT_POLL_BUSY),
+            LinkPhase::Checking => PollClaim::Answer(ListAccountPollStatus::Busy),
             LinkPhase::Linked { account_id, .. } => PollClaim::Linked(account_id.clone()),
             LinkPhase::Waiting
                 if session.credential.is_none()
                     && session.paused_until.is_some_and(|until| until > now) =>
             {
-                PollClaim::Answer(LIST_ACCOUNT_POLL_RATE_LIMITED)
+                PollClaim::Answer(ListAccountPollStatus::RateLimited)
             }
             LinkPhase::Waiting => {
                 session.phase = LinkPhase::Checking;
@@ -907,7 +912,7 @@ impl AppUseCase {
                 // the same way again instead of reporting the link gone.
                 let account = self.owned_list_account(actor, &account_id).await?;
                 return Ok(ListAccountPoll {
-                    status: LIST_ACCOUNT_POLL_LINKED.into(),
+                    status: ListAccountPollStatus::Linked,
                     account: Some(ListAccountView {
                         account,
                         sources: ListPluginAccountResponse::default(),
@@ -943,20 +948,20 @@ impl AppUseCase {
                     }
                     Ok(None) if session.expires_at > Utc::now() => {
                         claim.release();
-                        return Ok(poll_answer(LIST_ACCOUNT_POLL_PENDING));
+                        return Ok(poll_answer(ListAccountPollStatus::Pending));
                     }
                     Ok(None) => {
                         claim.end();
                         return Err(missing());
                     }
                     Err(error) => match transient_poll_status(&error) {
-                        Some(LIST_ACCOUNT_POLL_RATE_LIMITED) => {
+                        Some(ListAccountPollStatus::RateLimited) => {
                             tracing::info!(
                                 provider = %session.provider,
                                 "list account provider rate-limited a link check; pausing it"
                             );
                             claim.pause(now + Duration::seconds(RATE_LIMITED_PAUSE_SECONDS));
-                            return Ok(poll_answer(LIST_ACCOUNT_POLL_RATE_LIMITED));
+                            return Ok(poll_answer(ListAccountPollStatus::RateLimited));
                         }
                         Some(status) => {
                             tracing::info!(
@@ -992,7 +997,7 @@ impl AppUseCase {
             Ok(view) => {
                 claim.linked(view.account.id.clone());
                 Ok(ListAccountPoll {
-                    status: LIST_ACCOUNT_POLL_LINKED.into(),
+                    status: ListAccountPollStatus::Linked,
                     account: Some(view),
                 })
             }
@@ -1003,7 +1008,7 @@ impl AppUseCase {
                     "could not record an approved list account link; the member can poll again"
                 );
                 claim.release();
-                Ok(poll_answer(LIST_ACCOUNT_POLL_UNAVAILABLE))
+                Ok(poll_answer(ListAccountPollStatus::Unavailable))
             }
             Err(error) => {
                 claim.end();

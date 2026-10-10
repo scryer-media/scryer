@@ -10,26 +10,39 @@ use scryer_interface_media::{mappers, types::*};
 #[derive(Default)]
 pub struct DownloadMutations;
 
+/// Replacement archive password for one failed download client job.
 #[derive(async_graphql::InputObject)]
 pub struct RetryDownloadPasswordInput {
+    /// Canonical Scryer download ID of the submission whose job is retried.
     pub download_id: async_graphql::ID,
+    /// Download client ID that owns the failed job; required for a retry.
     pub client_id: async_graphql::ID,
+    /// Download client type; only `sabnzbd`, `nzbget`, and `weaver` support password retries.
     pub client_type: String,
+    /// Client-side item ID of the failed job.
     pub download_client_item_id: String,
+    /// New archive password to try; must not be empty. Write-only: it is never returned or logged.
     #[graphql(secret)]
     pub password: String,
 }
 
+/// Outcome of a single password retry dispatch to the download client.
 #[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq)]
-pub enum DownloadPasswordRetryStatus {
+pub enum DownloadPasswordRetryStatusValue {
+    /// The download client accepted the retry.
     Accepted,
+    /// The download client refused the retry.
     Refused,
+    /// The outcome is unknown; the retry stays claimed until reconciliation resolves it.
     AwaitingReconciliation,
 }
 
+/// Result of a download password retry.
 #[derive(async_graphql::SimpleObject)]
 pub struct DownloadPasswordRetryPayload {
-    pub status: DownloadPasswordRetryStatus,
+    /// Whether the download client accepted, refused, or has not confirmed the retry.
+    pub status: DownloadPasswordRetryStatusValue,
+    /// Client-side item ID of the retried job when the client accepted it; null otherwise.
     pub download_client_item_id: Option<String>,
 }
 
@@ -107,9 +120,11 @@ pub(crate) fn queue_download_conflict_payload(
 
 #[Object]
 impl DownloadMutations {
+    /// Retry a failed download client job once with a new archive password; requires import-resolution permission on the download's library.
     async fn retry_download_password(
         &self,
         ctx: &Context<'_>,
+        #[graphql(desc = "Download and client job to retry, with the replacement password.")]
         input: RetryDownloadPasswordInput,
     ) -> GqlResult<DownloadPasswordRetryPayload> {
         let app = app_from_ctx(ctx)?;
@@ -131,19 +146,19 @@ impl DownloadMutations {
         Ok(match outcome {
             scryer_application::DownloadClientRetryOutcome::Accepted { item_id } => {
                 DownloadPasswordRetryPayload {
-                    status: DownloadPasswordRetryStatus::Accepted,
+                    status: DownloadPasswordRetryStatusValue::Accepted,
                     download_client_item_id: Some(item_id),
                 }
             }
             scryer_application::DownloadClientRetryOutcome::Refused => {
                 DownloadPasswordRetryPayload {
-                    status: DownloadPasswordRetryStatus::Refused,
+                    status: DownloadPasswordRetryStatusValue::Refused,
                     download_client_item_id: None,
                 }
             }
             scryer_application::DownloadClientRetryOutcome::Uncertain => {
                 DownloadPasswordRetryPayload {
-                    status: DownloadPasswordRetryStatus::AwaitingReconciliation,
+                    status: DownloadPasswordRetryStatusValue::AwaitingReconciliation,
                     download_client_item_id: None,
                 }
             }

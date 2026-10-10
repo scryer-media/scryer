@@ -1431,6 +1431,20 @@ type CanonicalMediaTagPayload {
 }
 
 """
+Registry category of a canonical tag.
+"""
+enum CanonicalTagCategoryValue {
+	"""
+	A genre.
+	"""
+	GENRE
+	"""
+	A theme.
+	"""
+	THEME
+}
+
+"""
 Canonical tag key and display name used by discovery filters.
 """
 type CanonicalTagFilterOptionPayload {
@@ -1453,9 +1467,9 @@ type CanonicalTagVocabularyEntryPayload {
 	"""
 	key: String!
 	"""
-	Registry category: genre or theme.
+	Registry category.
 	"""
-	category: String!
+	category: CanonicalTagCategoryValue!
 	"""
 	Display name of the canonical entry.
 	"""
@@ -1897,6 +1911,24 @@ type CompleteSetupPayload {
 	Whether setup is now complete.
 	"""
 	completed: Boolean!
+}
+
+"""
+Where an effective addressing value comes from.
+"""
+enum ConfigValueSourceValue {
+	"""
+	An environment variable.
+	"""
+	ENVIRONMENT
+	"""
+	The saved setting.
+	"""
+	SETTINGS
+	"""
+	The built-in default.
+	"""
+	DEFAULT
 }
 
 """
@@ -5274,14 +5306,49 @@ type DownloadImportPagePayload {
 	totalCount: Int!
 }
 
+"""
+Password-related reason a download failed; never contains credentials.
+"""
+enum DownloadPasswordFailureCodeValue {
+	"""
+	The archive needs a new password.
+	"""
+	ARCHIVE_PASSWORD_REQUIRED
+	"""
+	The password may be incorrect or the archive may be damaged.
+	"""
+	ARCHIVE_PASSWORD_OR_CORRUPTION
+}
+
+"""
+Result of a download password retry.
+"""
 type DownloadPasswordRetryPayload {
-	status: DownloadPasswordRetryStatus!
+	"""
+	Whether the download client accepted, refused, or has not confirmed the retry.
+	"""
+	status: DownloadPasswordRetryStatusValue!
+	"""
+	Client-side item ID of the retried job when the client accepted it; null otherwise.
+	"""
 	downloadClientItemId: String
 }
 
-enum DownloadPasswordRetryStatus {
+"""
+Outcome of a single password retry dispatch to the download client.
+"""
+enum DownloadPasswordRetryStatusValue {
+	"""
+	The download client accepted the retry.
+	"""
 	ACCEPTED
+	"""
+	The download client refused the retry.
+	"""
 	REFUSED
+	"""
+	The outcome is unknown; the retry stays claimed until reconciliation resolves it.
+	"""
 	AWAITING_RECONCILIATION
 }
 
@@ -5486,7 +5553,7 @@ type DownloadQueueItemPayload {
 	"""
 	Stable password-related download failure classification; never contains credentials.
 	"""
-	passwordFailureCode: String
+	passwordFailureCode: DownloadPasswordFailureCodeValue
 	"""
 	Client-local item identifier; together with `client_id` it identifies the remote item.
 	"""
@@ -10166,9 +10233,9 @@ type ListAccountPayload {
 	"""
 	displayName: String
 	"""
-	Account health, including whether reconnect is needed.
+	Account health; anything other than ACTIVE needs a reconnect.
 	"""
-	status: String!
+	status: UserListAccountStatusValue!
 	"""
 	Safe explanation of an account problem.
 	"""
@@ -10196,13 +10263,39 @@ The result of polling a personal account-link session.
 """
 type ListAccountPollPayload {
 	"""
-	Pending or linked state.
+	Whether the link completed, is still pending, or should be polled again later.
 	"""
-	status: String!
+	status: ListAccountPollStatusValue!
 	"""
 	The linked account when authorization completed.
 	"""
 	account: ListAccountPayload
+}
+
+"""
+The answer to one poll of an account-link session.
+"""
+enum ListAccountPollStatusValue {
+	"""
+	The member has not finished authorizing yet; poll again.
+	"""
+	PENDING
+	"""
+	The account is linked and returned with this answer.
+	"""
+	LINKED
+	"""
+	Another request for the same link is checking the provider; poll again.
+	"""
+	BUSY
+	"""
+	The provider or this instance could not answer just now; poll again more slowly.
+	"""
+	UNAVAILABLE
+	"""
+	The provider asked for fewer requests; poll again later.
+	"""
+	RATE_LIMITED
 }
 
 """
@@ -10783,7 +10876,7 @@ type ListPreviewItemPayload {
 	"""
 	Release or first-air date, when known.
 	"""
-	releaseDate: String
+	releaseDate: Date
 	"""
 	The provider's own key for the title.
 	"""
@@ -18025,7 +18118,15 @@ type MutationRoot {
 		"""
 		input: UpdateSeriesMovieTagsInput!
 	): [SeriesMovieLinkPayload!]!
-	retryDownloadPassword(input: RetryDownloadPasswordInput!): DownloadPasswordRetryPayload!
+	"""
+	Retry a failed download client job once with a new archive password; requires import-resolution permission on the download's library.
+	"""
+	retryDownloadPassword(
+		"""
+		Download and client job to retry, with the replacement password.
+		"""
+		input: RetryDownloadPasswordInput!
+	): DownloadPasswordRetryPayload!
 	"""
 	Evaluate an external announcement using normal automatic acquisition rules.
 	"""
@@ -19892,7 +19993,16 @@ type MutationRoot {
 	"""
 	Replace or clear explicitly supplied installation-wide settings.
 	"""
-	updateInstalledPluginSettings(pluginId: ID!, changes: JSON!): JSON!
+	updateInstalledPluginSettings(
+		"""
+		Installed plugin ID whose settings are changed.
+		"""
+		pluginId: ID!,
+		"""
+		Object mapping declared setting keys to a new value, or null to clear the stored value; omitted keys are unchanged and unknown keys are rejected.
+		"""
+		changes: JSON!
+	): JSON!
 	"""
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
@@ -20920,6 +21030,46 @@ type ParsedStereoscopyPayload {
 	Optional stereoscopic encoding, independent of packing layout.
 	"""
 	encoding: StereoEncodingValue
+}
+
+"""
+What saving a public URL would do to passkeys after the next restart.
+"""
+enum PasskeyImpactValue {
+	"""
+	Passkeys do not come from the public URL, so the change cannot affect them.
+	"""
+	UNAFFECTED
+	"""
+	The relying party stays the same.
+	"""
+	UNCHANGED
+	"""
+	Passkeys move to a different domain; existing passkeys stop working.
+	"""
+	CHANGED
+	"""
+	The new value cannot carry passkeys; passkeys turn off.
+	"""
+	DISABLED
+}
+
+"""
+Where the running passkey relying party comes from.
+"""
+enum PasskeyRelyingPartySourceValue {
+	"""
+	The SCRYER_WEBAUTHN_RP_ID and SCRYER_WEBAUTHN_RP_ORIGIN variables.
+	"""
+	ENVIRONMENT
+	"""
+	Derived from the public URL because both variables were unset.
+	"""
+	PUBLIC_URL
+	"""
+	Passkeys are not configured.
+	"""
+	NONE
 }
 
 """
@@ -22402,13 +22552,13 @@ type PublicUrlChangePreviewPayload {
 	"""
 	error: String
 	"""
-	Stable reason code for error, for localized messages.
+	Stable reason for error, for localized messages.
 	"""
-	errorCode: String
+	errorCode: PublicUrlErrorCodeValue
 	"""
-	Effect on passkeys after the next restart: unaffected, unchanged, changed, or disabled.
+	Effect on passkeys after the next restart.
 	"""
-	passkeyImpact: String!
+	passkeyImpact: PasskeyImpactValue!
 	"""
 	Passkey relying-party ID in effect now.
 	"""
@@ -22429,6 +22579,48 @@ type PublicUrlChangePreviewPayload {
 	Whether the save must set acknowledgePasskeyImpact.
 	"""
 	acknowledgementRequired: Boolean!
+}
+
+"""
+Stable reason a public URL is rejected, for localized messages.
+"""
+enum PublicUrlErrorCodeValue {
+	"""
+	Not an absolute http or https URL with a host.
+	"""
+	INVALID_URL
+	"""
+	The host contains a wildcard.
+	"""
+	WILDCARD_HOST
+	"""
+	The URL carries a username or password.
+	"""
+	CREDENTIALS
+	"""
+	The URL carries a query or fragment.
+	"""
+	QUERY_OR_FRAGMENT
+	"""
+	A path was given while the instance is served at the root.
+	"""
+	PATH_NOT_ALLOWED
+	"""
+	The path differs from the base path the instance serves under.
+	"""
+	PATH_MISMATCH
+	"""
+	SCRYER_PUBLIC_URL sets the public URL, so it cannot be changed here.
+	"""
+	ENVIRONMENT_LOCKED
+	"""
+	A save and a reset were requested together.
+	"""
+	SAVE_AND_RESET
+	"""
+	The change breaks registered passkeys and was not acknowledged.
+	"""
+	PASSKEY_ACKNOWLEDGEMENT_REQUIRED
 }
 
 """
@@ -24198,7 +24390,12 @@ type QueryRoot {
 	"""
 	Read the installed plugin's settings declaration and redacted values.
 	"""
-	installedPluginSettings(pluginId: ID!): JSON!
+	installedPluginSettings(
+		"""
+		Installed plugin ID whose settings are returned.
+		"""
+		pluginId: ID!
+	): JSON!
 	"""
 	List available registry plugins visible to the caller.
 	"""
@@ -26025,11 +26222,29 @@ type ResumeWantedItemPayload {
 	id: ID!
 }
 
+"""
+Replacement archive password for one failed download client job.
+"""
 input RetryDownloadPasswordInput {
+	"""
+	Canonical Scryer download ID of the submission whose job is retried.
+	"""
 	downloadId: ID!
+	"""
+	Download client ID that owns the failed job; required for a retry.
+	"""
 	clientId: ID!
+	"""
+	Download client type; only `sabnzbd`, `nzbget`, and `weaver` support password retries.
+	"""
 	clientType: String!
+	"""
+	Client-side item ID of the failed job.
+	"""
 	downloadClientItemId: String!
+	"""
+	New archive password to try; must not be empty. Write-only: it is never returned or logged.
+	"""
 	password: String!
 }
 
@@ -27109,9 +27324,9 @@ type ServiceSettingsPayload {
 	"""
 	publicUrl: String
 	"""
-	Where the public URL comes from: environment, settings, or default.
+	Where the public URL comes from.
 	"""
-	publicUrlSource: String!
+	publicUrlSource: ConfigValueSourceValue!
 	"""
 	Saved public URL, shown even while the environment overrides it.
 	"""
@@ -27121,9 +27336,9 @@ type ServiceSettingsPayload {
 	"""
 	publicUrlError: String
 	"""
-	Stable reason code for public_url_error, for localized messages.
+	Stable reason for public_url_error, for localized messages.
 	"""
-	publicUrlErrorCode: String
+	publicUrlErrorCode: PublicUrlErrorCodeValue
 	"""
 	False while SCRYER_PUBLIC_URL is set, because the environment wins.
 	"""
@@ -27133,17 +27348,17 @@ type ServiceSettingsPayload {
 	"""
 	basePath: String!
 	"""
-	Where the base path comes from: environment or default.
+	Where the base path comes from; never the saved settings.
 	"""
-	basePathSource: String!
+	basePathSource: ConfigValueSourceValue!
 	"""
 	Listening address and port.
 	"""
 	bindAddress: String!
 	"""
-	Where the listening address comes from: environment or default.
+	Where the listening address comes from; never the saved settings.
 	"""
-	bindSource: String!
+	bindSource: ConfigValueSourceValue!
 	"""
 	Passkey relying-party ID in effect since startup.
 	"""
@@ -27153,9 +27368,9 @@ type ServiceSettingsPayload {
 	"""
 	passkeyRpOrigin: String
 	"""
-	Where the passkey relying party comes from: environment, public_url, or none.
+	Where the passkey relying party comes from.
 	"""
-	passkeyRpSource: String!
+	passkeyRpSource: PasskeyRelyingPartySourceValue!
 	"""
 	Users with at least one passkey; null when the count could not be read.
 	"""
@@ -32289,6 +32504,24 @@ type UserLibraryPermissionGrantPayload {
 	Permissions granted within that library.
 	"""
 	permissions: [LibraryPermissionValue!]!
+}
+
+"""
+Health of a linked list account.
+"""
+enum UserListAccountStatusValue {
+	"""
+	The account works.
+	"""
+	ACTIVE
+	"""
+	The provider grant expired; the member must reconnect.
+	"""
+	EXPIRED
+	"""
+	The provider grant was revoked; the member must reconnect.
+	"""
+	REVOKED
 }
 
 """
