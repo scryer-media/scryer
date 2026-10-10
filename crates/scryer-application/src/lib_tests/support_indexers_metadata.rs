@@ -31,6 +31,7 @@ impl IndexerClient for MockIndexerClient {
             tracing::info!(imdb_id = %imdb, category = ?category, "mock nzbgeek search");
         }
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),
@@ -368,6 +369,7 @@ impl IndexerClient for TrackingIndexerClient {
         };
 
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes,
@@ -641,6 +643,7 @@ impl IndexerClient for FixedReleaseIndexerClient {
             .collect();
         if self.empty_response {
             return Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: crate::IndexerSearchCompletion::Complete,
 
                 indexer_outcomes,
@@ -652,6 +655,7 @@ impl IndexerClient for FixedReleaseIndexerClient {
             });
         }
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes,
@@ -713,6 +717,7 @@ impl IndexerClient for SharedUrlMovieIndexerClient {
         };
 
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),
@@ -823,6 +828,7 @@ impl IndexerClient for RecordingCategoriesIndexerClient {
         });
 
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),
@@ -893,6 +899,7 @@ impl IndexerClient for RecordingStructuredQueryIndexerClient {
         });
 
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),
@@ -947,6 +954,7 @@ impl IndexerClient for MultiReleaseIndexerClient {
         _cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),

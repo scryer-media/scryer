@@ -5054,6 +5054,11 @@ pub struct IndexerSearchRunWrite {
     /// [`SEARCH_STRATEGY_OPEN`]). `None` for operator and interactive runs,
     /// which neither reset nor advance the background state.
     pub strategy_state: Option<String>,
+    /// Where a paged background strategy resumes on the next pass. `None`
+    /// once the provider ran out of pages, and for unpaged indexers.
+    pub page_cursor: Option<String>,
+    /// Shared by the runs that read one background strategy page by page.
+    pub cursor_chain_id: Option<String>,
 }
 
 /// The provider answered the strategy completely.
@@ -5072,6 +5077,15 @@ pub struct BackgroundIndexerSearchStrategyState {
     pub strategy_state: String,
     pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Where the next pass resumes a paged read of this strategy.
+    pub page_cursor: Option<String>,
+    /// The page chain the latest run belongs to.
+    pub cursor_chain_id: Option<String>,
+    /// Every run of that chain, newest first, so a later pass replays all
+    /// the pages read so far.
+    pub chain_run_ids: Vec<String>,
+    /// The strategy labels the latest run searched under.
+    pub branch: String,
 }
 
 #[derive(Debug, Clone)]
@@ -9456,6 +9470,7 @@ pub trait IndexerClient: Send + Sync {
             }
         }
         Ok(combined.unwrap_or(IndexerSearchResponse {
+            next_cursor: None,
             results: Vec::new(),
             completion: IndexerSearchCompletion::Complete,
             api_current: None,

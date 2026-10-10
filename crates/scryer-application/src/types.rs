@@ -2618,6 +2618,10 @@ pub struct IndexerSearchResponse {
     /// (empty or not), were skipped/deferred, or errored. Empty for synthetic or
     /// no-eligible-indexer responses.
     pub indexer_outcomes: Vec<IndexerQueryOutcome>,
+    /// Where a paged indexer strategy resumes: set when the provider has more
+    /// pages than this response read. `None` once the provider is exhausted,
+    /// and always `None` from an indexer that does not page by cursor.
+    pub next_cursor: Option<String>,
 }
 
 /// An operator's raw text search (Prowlarr's manual search): the query as
@@ -2654,6 +2658,14 @@ pub struct IndexerSearchStrategyRequest {
     /// Where the previous successful RSS poll of this indexer stopped. Set only
     /// on an RSS strategy the scheduler holds a marker for.
     pub rss_catch_up: Option<IndexerRssCatchUp>,
+    /// Where a paged indexer resumes this strategy: the `next_cursor` of an
+    /// earlier response to the same strategy. `None` starts from the first
+    /// page.
+    pub page_cursor: Option<String>,
+    /// The most provider pages a paged indexer reads for this strategy in one
+    /// call. `None` reads on until the request's result limit or the end of
+    /// the provider's results.
+    pub page_budget: Option<u32>,
 }
 
 /// The newest release the scheduler recorded on an indexer's previous

@@ -1245,6 +1245,7 @@ fn plugin_search_request_from_strategy(
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 last_seen_identity: marker.last_seen_identity,
             }),
+        page_cursor: None,
     }
 }
 
@@ -1597,6 +1598,7 @@ fn host_search_response(
         .collect();
 
     IndexerSearchResponse {
+        next_cursor: response.next_cursor,
         results,
         indexer_outcomes: Vec::new(),
         completion,
@@ -1633,17 +1635,245 @@ async fn forward_component_strategy_event(
     .map_err(|_| AppError::canceled("indexer strategy result channel closed"))
 }
 
+/// Longest page cursor the host carries between pages. A cursor is a short
+/// provider position; anything longer is treated as malformed.
+const MAX_PAGE_CURSOR_BYTES: usize = 4096;
+
+/// One paged search in progress: the pages read so far and where the next
+/// one starts.
+struct PagedRead {
+    limit: usize,
+    page_budget: Option<u32>,
+    cursor: Option<String>,
+    pages: u32,
+    unattested: bool,
+    merged: Option<PluginSearchResponse>,
+}
+
+/// What a paged search does after a page.
+enum PagedStep {
+    /// Read the next page from this cursor.
+    Next(String),
+    /// Stop; the read is answered.
+    Done(PluginSearchCallResponse),
+}
+
+impl PagedRead {
+    fn new(request: &PluginSearchRequest, page_budget: Option<u32>) -> Self {
+        Self {
+            limit: request.limit,
+            page_budget,
+            cursor: request.page_cursor.clone(),
+            pages: 0,
+            unattested: false,
+            merged: None,
+        }
+    }
+
+    fn finish(
+        &mut self,
+        completion: IndexerSearchCompletion,
+        next_cursor: Option<String>,
+    ) -> PluginSearchCallResponse {
+        let mut response = self.merged.take().unwrap_or_default();
+        response.next_cursor = next_cursor;
+        if self.limit > 0 {
+            response.results.truncate(self.limit);
+        }
+        PluginSearchCallResponse {
+            response,
+            completion,
+        }
+    }
+
+    fn stopped(&self, reason: Option<HostIncompleteReason>) -> IndexerSearchCompletion {
+        IndexerSearchCompletion::Partial {
+            reason: reason.or(self.unattested.then_some(HostIncompleteReason::Unattested)),
+            retry_after: None,
+        }
+    }
+
+    /// Takes in one page and decides whether to read on.
+    fn absorb(&mut self, page: PluginSearchCallResponse) -> PagedStep {
+        self.pages = self.pages.saturating_add(1);
+        let PluginSearchCallResponse {
+            response: mut page_response,
+            completion: page_completion,
+        } = page;
+        let returned_cursor = page_response.next_cursor.take();
+        match self.merged.as_mut() {
+            Some(merged) => {
+                merged.results.append(&mut page_response.results);
+                merged.api_current = page_response.api_current.or(merged.api_current);
+                merged.api_max = page_response.api_max.or(merged.api_max);
+                merged.grab_current = page_response.grab_current.or(merged.grab_current);
+                merged.grab_max = page_response.grab_max.or(merged.grab_max);
+            }
+            None => self.merged = Some(page_response),
+        }
+        match page_completion {
+            IndexerSearchCompletion::Complete => {}
+            IndexerSearchCompletion::Partial {
+                reason: Some(HostIncompleteReason::Unattested),
+                ..
+            } => self.unattested = true,
+            // The provider refused to go further; there is nothing to resume.
+            IndexerSearchCompletion::Partial {
+                reason:
+                    Some(
+                        HostIncompleteReason::PageCeilingReached
+                        | HostIncompleteReason::SaturatedPartition,
+                    ),
+                ..
+            } => {
+                return PagedStep::Done(self.finish(page_completion, None));
+            }
+            // A page that ended partial is read again from its cursor.
+            IndexerSearchCompletion::Partial { .. } => {
+                let cursor = self.cursor.clone();
+                return PagedStep::Done(self.finish(page_completion, cursor));
+            }
+        }
+        let Some(next) = returned_cursor else {
+            let completion = if self.unattested {
+                self.stopped(None)
+            } else {
+                IndexerSearchCompletion::Complete
+            };
+            return PagedStep::Done(self.finish(completion, None));
+        };
+        if next.is_empty()
+            || next.len() > MAX_PAGE_CURSOR_BYTES
+            || self.cursor.as_deref() == Some(next.as_str())
+        {
+            // A cursor that does not move the read forward cannot be
+            // followed: the search is as complete as the provider lets it be.
+            let completion = self.stopped(Some(HostIncompleteReason::PageCeilingReached));
+            return PagedStep::Done(self.finish(completion, None));
+        }
+        let read = self
+            .merged
+            .as_ref()
+            .map_or(0, |merged| merged.results.len());
+        if self.limit > 0 && read >= self.limit {
+            let completion = self.stopped(Some(HostIncompleteReason::PageCeilingReached));
+            return PagedStep::Done(self.finish(completion, Some(next)));
+        }
+        if self.page_budget.is_some_and(|budget| self.pages >= budget) {
+            let completion = self.stopped(None);
+            return PagedStep::Done(self.finish(completion, Some(next)));
+        }
+        self.cursor = Some(next.clone());
+        PagedStep::Next(next)
+    }
+
+    /// A page failed. With nothing read yet the error stands; otherwise the
+    /// pages already read are kept and the failed one is asked again from the
+    /// cursor that reached it.
+    fn fail(mut self, error: AppError) -> AppResult<PluginSearchCallResponse> {
+        if self.merged.is_none() || error.is_canceled() {
+            return Err(error);
+        }
+        let cursor = self.cursor.clone();
+        Ok(self.finish(
+            IndexerSearchCompletion::Partial {
+                reason: Some(HostIncompleteReason::UpstreamFailure),
+                retry_after: None,
+            },
+            cursor,
+        ))
+    }
+}
+
 impl WasmIndexerClient {
+    /// Whether the plugin answers searches one provider page at a time and
+    /// resumes from a cursor it returns.
+    fn paged_search(&self) -> bool {
+        matches!(
+            &self.descriptor.provider,
+            ProviderDescriptor::Indexer(descriptor)
+                if descriptor
+                    .capabilities
+                    .limits
+                    .as_ref()
+                    .is_some_and(|limits| limits.paged_search)
+        )
+    }
+
+    /// The strategy-plan capability the plugin declares, whether or not the
+    /// host routes searches through it.
+    fn declared_search_plan_capability(&self) -> Option<IndexerSearchPlanCapability> {
+        let component = &self.component;
+        if component.runtime.contract_version() != ComponentContractVersion::V1_1 {
+            return None;
+        }
+        let ProviderDescriptor::Indexer(descriptor) = &self.descriptor.provider else {
+            return None;
+        };
+        let capability = descriptor.strategy_plan?;
+        (capability.version == 1).then_some(IndexerSearchPlanCapability {
+            version: capability.version,
+            max_parallel_strategies: capability.max_parallel_strategies,
+        })
+    }
+
+    /// Reads a paged plugin's results one provider page per invocation,
+    /// following its cursor until the provider is exhausted, the request's
+    /// result limit is met, or `page_budget` pages were read. The response
+    /// carries the cursor to resume from whenever the provider has more.
+    async fn follow_paged_search(
+        &self,
+        request: PluginSearchRequest,
+        operation: IndexerErrorOperation,
+        cancel_token: CancellationToken,
+        page_budget: Option<u32>,
+    ) -> AppResult<PluginSearchCallResponse> {
+        let mut read = PagedRead::new(&request, page_budget);
+        let mut page_request = request;
+        loop {
+            if cancel_token.is_cancelled() {
+                return Err(AppError::canceled("plugin indexer search canceled"));
+            }
+            let page = match self
+                .call_search_request(&page_request, operation, cancel_token.child_token())
+                .await
+            {
+                Ok(page) => page,
+                Err(error) => {
+                    tracing::debug!(
+                        plugin = %self.descriptor.name,
+                        pages = read.pages,
+                        %error,
+                        "paged indexer search page failed"
+                    );
+                    return read.fail(error);
+                }
+            };
+            match read.absorb(page) {
+                PagedStep::Next(cursor) => page_request.page_cursor = Some(cursor),
+                PagedStep::Done(response) => return Ok(response),
+            }
+        }
+    }
+
     /// Sends one search request, retrying a legacy adapter's empty or failed
-    /// identifier search once as a plain title search.
+    /// identifier search once as a plain title search. A paged plugin is read
+    /// page by page instead (see [`Self::follow_paged_search`]).
     async fn search_with_request(
         &self,
         request: PluginSearchRequest,
         mode: SearchMode,
         operation: IndexerErrorOperation,
         cancel_token: CancellationToken,
+        page_budget: Option<u32>,
     ) -> AppResult<IndexerSearchResponse> {
-        let legacy_adapter_fallback = self.search_plan_capability().is_none();
+        if self.paged_search() && (!request.query.trim().is_empty() || !request.ids.is_empty()) {
+            let response = self
+                .follow_paged_search(request, operation, cancel_token, page_budget)
+                .await?;
+            return Ok(host_search_response(self, response));
+        }
+        let legacy_adapter_fallback = self.declared_search_plan_capability().is_none();
         let response = match self
             .call_search_request(&request, operation, cancel_token.child_token())
             .await
@@ -1675,6 +1905,9 @@ impl WasmIndexerClient {
             }
             Err(error) => return Err(error),
         };
+        let mut response = response;
+        // Only a paged plugin's cursor is followed.
+        response.response.next_cursor = None;
         Ok(host_search_response(self, response))
     }
 }
@@ -1721,18 +1954,13 @@ impl IndexerClient for WasmIndexerClient {
     }
 
     fn search_plan_capability(&self) -> Option<IndexerSearchPlanCapability> {
-        let component = &self.component;
-        if component.runtime.contract_version() != ComponentContractVersion::V1_1 {
+        // A plan answers each strategy with one event, so it cannot follow a
+        // paged plugin's cursor; such a plugin is searched strategy by
+        // strategy.
+        if self.paged_search() {
             return None;
         }
-        let ProviderDescriptor::Indexer(descriptor) = &self.descriptor.provider else {
-            return None;
-        };
-        let capability = descriptor.strategy_plan?;
-        (capability.version == 1).then_some(IndexerSearchPlanCapability {
-            version: capability.version,
-            max_parallel_strategies: capability.max_parallel_strategies,
-        })
+        self.declared_search_plan_capability()
     }
 
     async fn search_plan(
@@ -1820,8 +2048,9 @@ impl IndexerClient for WasmIndexerClient {
                 .collect(),
             context: Some(context),
             rss_catch_up: None,
+            page_cursor: None,
         };
-        self.search_with_request(request, mode, operation, cancel_token)
+        self.search_with_request(request, mode, operation, cancel_token, None)
             .await
     }
 
@@ -1835,8 +2064,12 @@ impl IndexerClient for WasmIndexerClient {
         if cancel_token.is_cancelled() {
             return Err(AppError::canceled("plugin indexer search canceled"));
         }
-        let request = plugin_search_request_from_strategy(request, mode);
-        self.search_with_request(request, mode, operation, cancel_token)
+        let mut request = request;
+        let page_cursor = request.page_cursor.take();
+        let page_budget = request.page_budget;
+        let mut request = plugin_search_request_from_strategy(request, mode);
+        request.page_cursor = page_cursor;
+        self.search_with_request(request, mode, operation, cancel_token, page_budget)
             .await
     }
 
@@ -1871,6 +2104,7 @@ impl IndexerClient for WasmIndexerClient {
             mode,
             IndexerErrorOperation::InteractiveSearch,
             cancel_token,
+            None,
         )
         .await
     }
@@ -1949,10 +2183,178 @@ impl IndexerClient for WasmIndexerClient {
 mod tests {
     use super::*;
 
+    fn page(titles: &[&str], next_cursor: Option<&str>) -> PluginSearchCallResponse {
+        PluginSearchCallResponse {
+            response: PluginSearchResponse {
+                results: titles
+                    .iter()
+                    .map(|title| scryer_plugin_sdk::PluginSearchResult {
+                        title: (*title).to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                next_cursor: next_cursor.map(str::to_string),
+                ..Default::default()
+            },
+            completion: IndexerSearchCompletion::Complete,
+        }
+    }
+
+    fn paged_read(limit: usize, cursor: Option<&str>, page_budget: Option<u32>) -> PagedRead {
+        PagedRead::new(
+            &PluginSearchRequest {
+                query: "Synthetic Paged Title".into(),
+                limit,
+                page_cursor: cursor.map(str::to_string),
+                ..PluginSearchRequest::default()
+            },
+            page_budget,
+        )
+    }
+
+    fn done(step: PagedStep) -> PluginSearchCallResponse {
+        match step {
+            PagedStep::Done(response) => response,
+            PagedStep::Next(cursor) => panic!("expected the read to stop, got cursor {cursor}"),
+        }
+    }
+
+    fn next(step: PagedStep) -> String {
+        match step {
+            PagedStep::Next(cursor) => cursor,
+            PagedStep::Done(_) => panic!("expected the read to continue"),
+        }
+    }
+
+    fn titles(response: &PluginSearchCallResponse) -> Vec<&str> {
+        response
+            .response
+            .results
+            .iter()
+            .map(|result| result.title.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_paged_read_follows_the_cursor_until_the_provider_runs_out() {
+        let mut read = paged_read(1000, None, None);
+        assert_eq!(next(read.absorb(page(&["A", "B"], Some("p2")))), "p2");
+        assert_eq!(next(read.absorb(page(&["C"], Some("p3")))), "p3");
+        let response = done(read.absorb(page(&["D"], None)));
+        assert_eq!(titles(&response), vec!["A", "B", "C", "D"]);
+        assert_eq!(response.completion, IndexerSearchCompletion::Complete);
+        assert_eq!(response.response.next_cursor, None);
+    }
+
+    #[test]
+    fn a_paged_read_stops_at_the_limit_and_keeps_the_cursor() {
+        let mut read = paged_read(3, None, None);
+        assert_eq!(next(read.absorb(page(&["A", "B"], Some("p2")))), "p2");
+        let response = done(read.absorb(page(&["C", "D"], Some("p3"))));
+        assert_eq!(titles(&response), vec!["A", "B", "C"]);
+        assert_eq!(response.response.next_cursor.as_deref(), Some("p3"));
+        assert_eq!(
+            response.completion,
+            IndexerSearchCompletion::Partial {
+                reason: Some(HostIncompleteReason::PageCeilingReached),
+                retry_after: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_paged_read_stops_at_its_page_budget_with_the_resume_cursor() {
+        let mut read = paged_read(1000, Some("p4"), Some(2));
+        assert_eq!(next(read.absorb(page(&["A"], Some("p5")))), "p5");
+        let response = done(read.absorb(page(&["B"], Some("p6"))));
+        assert_eq!(titles(&response), vec!["A", "B"]);
+        assert_eq!(response.response.next_cursor.as_deref(), Some("p6"));
+        assert_eq!(
+            response.completion,
+            IndexerSearchCompletion::Partial {
+                reason: None,
+                retry_after: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_cursor_that_does_not_advance_or_is_malformed_ends_the_read_at_the_ceiling() {
+        let ceiling = IndexerSearchCompletion::Partial {
+            reason: Some(HostIncompleteReason::PageCeilingReached),
+            retry_after: None,
+        };
+        for returned in [
+            "p2".to_string(),
+            String::new(),
+            "x".repeat(MAX_PAGE_CURSOR_BYTES + 1),
+        ] {
+            let mut read = paged_read(1000, Some("p2"), None);
+            let response = done(read.absorb(page(&["A"], Some(&returned))));
+            assert_eq!(titles(&response), vec!["A"]);
+            assert_eq!(response.completion, ceiling);
+            assert_eq!(response.response.next_cursor, None);
+        }
+    }
+
+    #[test]
+    fn a_failed_page_keeps_earlier_pages_and_resumes_from_its_own_cursor() {
+        let mut read = paged_read(1000, None, None);
+        assert_eq!(next(read.absorb(page(&["A"], Some("p2")))), "p2");
+        let response = read
+            .fail(AppError::Repository("upstream reset".into()))
+            .expect("earlier pages stand");
+        assert_eq!(titles(&response), vec!["A"]);
+        assert_eq!(response.response.next_cursor.as_deref(), Some("p2"));
+        assert!(matches!(
+            response.completion,
+            IndexerSearchCompletion::Partial {
+                reason: Some(HostIncompleteReason::UpstreamFailure),
+                ..
+            }
+        ));
+
+        // A first page that fails, or a cancelled read, is the error itself.
+        assert!(
+            paged_read(1000, None, None)
+                .fail(AppError::Repository("upstream reset".into()))
+                .is_err()
+        );
+        let mut read = paged_read(1000, None, None);
+        next(read.absorb(page(&["A"], Some("p2"))));
+        assert!(read.fail(AppError::canceled("canceled")).is_err());
+    }
+
+    #[test]
+    fn a_provider_ceiling_page_ends_the_read_without_a_cursor_and_a_partial_page_is_reread() {
+        let mut read = paged_read(1000, None, None);
+        next(read.absorb(page(&["A"], Some("p2"))));
+        let mut capped = page(&["B"], Some("p3"));
+        capped.completion = IndexerSearchCompletion::Partial {
+            reason: Some(HostIncompleteReason::PageCeilingReached),
+            retry_after: None,
+        };
+        let response = done(read.absorb(capped));
+        assert_eq!(titles(&response), vec!["A", "B"]);
+        assert_eq!(response.response.next_cursor, None);
+
+        let mut read = paged_read(1000, None, None);
+        next(read.absorb(page(&["A"], Some("p2"))));
+        let mut broken = page(&["B"], None);
+        broken.completion = IndexerSearchCompletion::Partial {
+            reason: Some(HostIncompleteReason::UpstreamFailure),
+            retry_after: None,
+        };
+        let response = done(read.absorb(broken));
+        assert_eq!(response.response.next_cursor.as_deref(), Some("p2"));
+    }
+
     fn rss_strategy(
         rss_catch_up: Option<scryer_application::IndexerRssCatchUp>,
     ) -> IndexerSearchStrategyRequest {
         IndexerSearchStrategyRequest {
+            page_cursor: None,
+            page_budget: None,
             strategy_id: "rss-strategy".to_string(),
             labels: vec!["rss".to_string()],
             query: String::new(),

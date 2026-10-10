@@ -383,8 +383,8 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                             id, indexer_id, provider_type, search_session_id, scope_key, query_signature,
                             branch, page, range_min_size, range_max_size, result_count,
                             completion_state, retry_at, error_summary, indexer_fingerprint,
-                            created_at, strategy_state
-                         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                            created_at, strategy_state, page_cursor, cursor_chain_id
+                         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                         &[
                             SqlArg::Text(run.id.clone()),
                             SqlArg::Text(run.indexer_id.clone()),
@@ -403,6 +403,8 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                             SqlArg::Text(run.indexer_fingerprint.clone()),
                             SqlArg::Timestamp(run.created_at),
                             SqlArg::OptText(run.strategy_state.clone()),
+                            SqlArg::OptText(run.page_cursor.clone()),
+                            SqlArg::OptText(run.cursor_chain_id.clone()),
                         ],
                     )
                     .await?;
@@ -920,7 +922,8 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
     ) -> AppResult<Vec<BackgroundIndexerSearchStrategyState>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT r.query_signature, r.strategy_state, r.retry_at, r.created_at
+            "SELECT r.id, r.query_signature, r.branch, r.strategy_state, r.retry_at,
+                    r.created_at, r.page_cursor, r.cursor_chain_id
              FROM indexer_search_runs r
              WHERE r.indexer_id = {}
                AND r.scope_key = {}
@@ -936,18 +939,33 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             ],
         )
         .await?;
-        let mut seen = std::collections::HashSet::new();
-        let mut states = Vec::new();
+        let mut positions = std::collections::HashMap::new();
+        let mut states: Vec<BackgroundIndexerSearchStrategyState> = Vec::new();
         for row in rows {
             let query_signature = row.text("query_signature")?;
-            if !seen.insert(query_signature.clone()) {
+            let cursor_chain_id = row.opt_text("cursor_chain_id")?;
+            if let Some(position) = positions.get(&query_signature).copied() {
+                // Older runs only add the pages of the latest run's chain.
+                let state: &mut BackgroundIndexerSearchStrategyState = &mut states[position];
+                if cursor_chain_id.is_some() && state.cursor_chain_id == cursor_chain_id {
+                    state.chain_run_ids.push(row.text("id")?);
+                }
                 continue;
             }
+            positions.insert(query_signature.clone(), states.len());
             states.push(BackgroundIndexerSearchStrategyState {
                 query_signature,
                 strategy_state: row.text("strategy_state")?,
                 retry_at: row.opt_timestamp("retry_at")?,
                 created_at: row.timestamp("created_at")?,
+                page_cursor: row.opt_text("page_cursor")?,
+                branch: row.text("branch")?,
+                chain_run_ids: if cursor_chain_id.is_some() {
+                    vec![row.text("id")?]
+                } else {
+                    Vec::new()
+                },
+                cursor_chain_id,
             });
         }
         Ok(states)
@@ -1309,7 +1327,9 @@ mod tests {
                 indexer_fingerprint TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 strategy_state TEXT,
-                coverage_scope_key TEXT
+                coverage_scope_key TEXT,
+                page_cursor TEXT,
+                cursor_chain_id TEXT
             )",
         )
         .execute(&pool)
@@ -1698,7 +1718,58 @@ mod tests {
             indexer_fingerprint: "fingerprint-1".into(),
             created_at,
             strategy_state: state.map(str::to_string),
+            page_cursor: None,
+            cursor_chain_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_reads_a_paged_strategy_chain_and_its_resume_cursor() {
+        let (store, _pool) = sqlite_store().await;
+        let now = Utc::now();
+        let minutes = chrono::Duration::minutes;
+        let paged = |id: &str, chain: &str, cursor: Option<&str>, created_at| {
+            let mut run = background_run(
+                id,
+                &format!("session-{id}"),
+                "ids",
+                Some(SEARCH_STRATEGY_OPEN),
+                None,
+                created_at,
+            );
+            run.cursor_chain_id = Some(chain.to_string());
+            run.page_cursor = cursor.map(str::to_string);
+            run
+        };
+        for run in [
+            // An earlier chain that ran to its end.
+            paged("run-1", "chain-old", None, now - minutes(40)),
+            paged("run-2", "chain-new", Some("offset:500"), now - minutes(15)),
+            paged("run-3", "chain-new", Some("offset:1000"), now - minutes(10)),
+            // An operator search in between moves nothing.
+            background_run("run-4", "operator", "ids", None, None, now - minutes(5)),
+        ] {
+            store
+                .record_search_diagnostics(&run, &[])
+                .await
+                .expect("run should persist");
+        }
+
+        let states = store
+            .list_background_strategy_states(
+                "idx-1",
+                "title-1:series:episode:1:2:-",
+                "fingerprint-1",
+                now - chrono::Duration::hours(72),
+            )
+            .await
+            .expect("background states should load");
+        assert_eq!(states.len(), 1);
+        let ids = &states[0];
+        assert_eq!(ids.page_cursor.as_deref(), Some("offset:1000"));
+        assert_eq!(ids.cursor_chain_id.as_deref(), Some("chain-new"));
+        assert_eq!(ids.chain_run_ids, vec!["run-3", "run-2"]);
+        assert_eq!(ids.branch, "ids");
     }
 
     #[tokio::test]
@@ -1956,6 +2027,8 @@ mod tests {
             indexer_fingerprint: "fingerprint-1".into(),
             created_at: now,
             strategy_state: None,
+            page_cursor: None,
+            cursor_chain_id: None,
         };
         let candidate = IndexerSearchCandidateWrite {
             id: "candidate-1".into(),

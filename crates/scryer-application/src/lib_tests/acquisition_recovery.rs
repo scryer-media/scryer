@@ -4017,6 +4017,7 @@ async fn acquisition_cycle_submits_one_hundred_episode_fallbacks_after_empty_pac
             });
             if episode.is_none() {
                 return Ok(IndexerSearchResponse {
+                    next_cursor: None,
                     completion: crate::IndexerSearchCompletion::Complete,
 
                     indexer_outcomes: Vec::new(),
@@ -4052,6 +4053,7 @@ async fn acquisition_cycle_submits_one_hundred_episode_fallbacks_after_empty_pac
             let release_slug = release_title.replace([' ', '/'], ".");
 
             Ok(IndexerSearchResponse {
+                next_cursor: None,
                 completion: crate::IndexerSearchCompletion::Complete,
 
                 indexer_outcomes: Vec::new(),
@@ -7419,6 +7421,7 @@ impl IndexerClient for RssRoutingRecordingIndexerClient {
             .await
             .push(indexer_routing.expect("RSS routing"));
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             results: Vec::new(),
             completion: crate::IndexerSearchCompletion::Complete,
             indexer_outcomes: Vec::new(),
@@ -7649,6 +7652,7 @@ impl IndexerClient for PendingStatusAssertingIndexerClient {
         self.searches.lock().await.push(query.clone());
 
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),
@@ -7726,6 +7730,7 @@ impl IndexerClient for DeferredRssIndexerClient {
     ) -> AppResult<IndexerSearchResponse> {
         self.searches.lock().await.push(query);
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
             indexer_outcomes: Vec::new(),
             results: Vec::new(),
@@ -11970,6 +11975,7 @@ impl IndexerClient for AmbiguousIdentityIndexerClient {
         _cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
         Ok(IndexerSearchResponse {
+            next_cursor: None,
             completion: crate::IndexerSearchCompletion::Complete,
 
             indexer_outcomes: Vec::new(),

@@ -1198,7 +1198,7 @@ impl AppUseCase {
                 // A temporary feed failure must not suppress already-held
                 // releases. They are re-evaluated through this same pass.
                 warn!(error = %err, "RSS sync: failed to fetch RSS feed from indexers; evaluating active pending releases");
-                IndexerSearchResponse {
+                IndexerSearchResponse { next_cursor: None,
                     results: Vec::new(),
 
                     completion: IndexerSearchCompletion::Partial {
