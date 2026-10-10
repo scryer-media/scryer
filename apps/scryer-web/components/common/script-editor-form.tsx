@@ -7,6 +7,7 @@ import { ScriptScheduleEditor } from "@/components/common/script-schedule-editor
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
 import { ScriptChoiceGroup } from "@/components/common/script-choice-group";
+import { ScriptLanguageIcon } from "@/components/common/script-language-icon";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -154,6 +155,7 @@ export function ScriptEditorForm({
         options={SCRIPT_LANGUAGES.map((language) => ({
           value: language,
           label: t(`script.language.${language.toLowerCase()}`),
+          icon: <ScriptLanguageIcon language={language} />,
         }))}
       />
 

@@ -1,10 +1,15 @@
+import type * as React from "react";
+import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
+
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 
 export type ScriptChoiceOption = {
   value: string;
   label: string;
+  /** A mark shown ahead of the label, such as a language logo. */
+  icon?: React.ReactNode;
   /** The value exposed on the option element when it differs from `value`. */
   dataValue?: string;
   /** The element id of the option, when a page or test addresses it directly. */
@@ -41,13 +46,12 @@ export function ScriptChoiceGroup({
       <Label id={labelId} className="block">
         {label}
       </Label>
-      <ToggleGroup
+      <ToggleGroupPrimitive.Root
         id={id}
         type="single"
-        variant="outline"
-        size="sm"
         aria-labelledby={labelId}
-        className="flex h-auto flex-wrap gap-1 p-1"
+        // Wraps instead of overflowing when the options outgrow a narrow form.
+        className="inline-flex max-w-full flex-wrap rounded-md border border-border p-1"
         value={value}
         disabled={disabled}
         onValueChange={(next) => {
@@ -57,18 +61,24 @@ export function ScriptChoiceGroup({
         }}
       >
         {options.map((option) => (
-          <ToggleGroupItem
+          <ToggleGroupPrimitive.Item
             key={option.value}
             id={option.id}
             value={option.value}
             data-value={option.dataValue ?? option.value}
-            size="sm"
-            variant="outline"
+            asChild
           >
-            {option.label}
-          </ToggleGroupItem>
+            <Button
+              type="button"
+              size="sm"
+              variant={option.value === value ? "default" : "ghost"}
+            >
+              {option.icon}
+              {option.label}
+            </Button>
+          </ToggleGroupPrimitive.Item>
         ))}
-      </ToggleGroup>
+      </ToggleGroupPrimitive.Root>
       {description ? (
         <p className="text-xs leading-5 text-[var(--scry-muted3)]">{description}</p>
       ) : null}
