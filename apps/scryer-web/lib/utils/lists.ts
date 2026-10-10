@@ -114,9 +114,9 @@ export function listMembershipStateLabelKey(state: ListMembershipState): string 
 export function listMembershipStateTone(state: ListMembershipState): ListTone {
   switch (state) {
     case "IN_LIBRARY":
-      return "positive";
-    case "ADDED":
       return "accent";
+    case "ADDED":
+      return "positive";
     case "REQUESTED":
     case "HELD":
     case "PENDING":
