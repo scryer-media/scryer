@@ -13549,6 +13549,84 @@ async fn an_interactive_walk_re_queries_a_scope_the_cycle_considers_converged() 
     );
 }
 
+/// An indexer that answers at the provider's own result ceiling is contained:
+/// it is never covered, the next cycle does not ask it again before its
+/// backoff runs out, and holding it neither defers the scope nor re-arms the
+/// poller. An operator's walk still asks it, and once due the cycle asks again.
+#[tokio::test]
+async fn a_contained_indexer_is_held_until_due_without_coverage_or_deferral() {
+    let indexer_client = Arc::new(
+        TrackingIndexerClient::default()
+            .returning_no_results()
+            .reporting_routed_indexers_contained(),
+    );
+    let (app, title, indexer_client, _) =
+        seed_recent_failed_season_pack_fixture_with_indexer(indexer_client).await;
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+
+    app.run_background_acquisition_cycle_once().await;
+    let contained_after = indexer_client.searches.lock().await.len();
+    assert!(contained_after > 0, "the first cycle asks the indexer");
+    assert!(
+        coverage.recorded().await.is_empty(),
+        "a contained indexer is never recorded as coverage"
+    );
+    assert!(
+        !indexer_client
+            .containment
+            .lock()
+            .await
+            .linked_scopes
+            .is_empty(),
+        "background sessions are tied to their convergence scope"
+    );
+
+    let held = app.run_background_acquisition_cycle_once().await;
+    assert_eq!(
+        indexer_client.searches.lock().await.len(),
+        contained_after,
+        "a contained indexer is not asked again before it is due"
+    );
+    assert_eq!(
+        held.deferred_scopes, 0,
+        "a contained hold is not a deferral"
+    );
+    assert!(
+        held.deferred_retry_delay(std::time::Duration::from_secs(300))
+            .is_none(),
+        "a contained hold must not re-arm the poller"
+    );
+
+    crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        None,
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("interactive title walk");
+    let after_operator = indexer_client.searches.lock().await.len();
+    assert!(
+        after_operator > contained_after,
+        "an operator's walk still asks a contained indexer"
+    );
+
+    indexer_client.expire_contained_holds().await;
+    app.run_background_acquisition_cycle_once().await;
+    assert!(
+        indexer_client.searches.lock().await.len() > after_operator,
+        "once due, the cycle asks the contained indexer again"
+    );
+    assert!(
+        coverage.recorded().await.is_empty(),
+        "a re-asked contained indexer is still not coverage"
+    );
+}
+
 /// Both walkers arbitrate over the same title, so exactly one may hold it at a
 /// time. The cycle *skips* a held title rather than blocking on it — and counts
 /// the skip for telemetry only: the job wakes the poller when it releases the

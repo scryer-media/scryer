@@ -764,6 +764,23 @@ fn a_rate_limited_indexer_reads_as_a_cooldown_with_its_retry_time() {
 }
 
 #[test]
+fn a_contained_indexer_reads_as_contained_with_its_retry_time() {
+    let reason = incomplete_indexer_reason(IndexerSearchOutcome::Partial {
+        empty: false,
+        reason: Some(IndexerSearchIncompleteReason::PageCeilingReached),
+        retry_after: Some(std::time::Duration::from_secs(3_600)),
+    })
+    .expect("a contained indexer is an incomplete outcome");
+
+    assert_eq!(
+        reason,
+        "indexer search contained at the provider's result limit; retry after 3600s"
+    );
+    // Containment is the provider's own limit, not a cooldown it asked for.
+    assert!(!reason_is_rate_limit(&reason));
+}
+
+#[test]
 fn an_indexer_over_its_query_budget_reads_as_a_wait_with_its_next_slot() {
     let reason = incomplete_indexer_reason(IndexerSearchOutcome::Partial {
         empty: true,

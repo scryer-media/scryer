@@ -192,9 +192,39 @@ pub(super) struct TrackingIndexerClient {
     /// provider response is attributed. Off by default: most tests do not care,
     /// and coverage-scoped filters key on this field.
     pub(super) stamp_indexer_ids: bool,
+    /// Report every routed indexer contained at the provider's ceiling and
+    /// hold it, the way the search client does, once the session is linked
+    /// to its convergence scope (see [`reporting_routed_indexers_contained`]).
+    pub(super) contain_routed_indexers: bool,
+    pub(super) containment: Arc<Mutex<TrackedContainment>>,
+}
+
+/// What a containing [`TrackingIndexerClient`] remembers between cycles.
+#[derive(Default)]
+pub(super) struct TrackedContainment {
+    /// Routed indexers each background session ended contained on.
+    session_indexers: std::collections::HashMap<String, Vec<String>>,
+    /// Contained indexers per convergence scope, with the instant they are due.
+    holds: std::collections::HashMap<String, Vec<(String, chrono::DateTime<chrono::Utc>)>>,
+    pub(super) linked_scopes: Vec<String>,
 }
 
 impl TrackingIndexerClient {
+    pub(super) fn reporting_routed_indexers_contained(mut self) -> Self {
+        self.contain_routed_indexers = true;
+        self
+    }
+
+    /// Every hold falls due now, as if its backoff had run out.
+    pub(super) async fn expire_contained_holds(&self) {
+        let past = chrono::Utc::now() - chrono::Duration::seconds(1);
+        for holds in self.containment.lock().await.holds.values_mut() {
+            for (_, until) in holds.iter_mut() {
+                *until = past;
+            }
+        }
+    }
+
     pub(super) fn with_season_pack_titles(
         mut self,
         titles: impl IntoIterator<Item = String>,
@@ -278,7 +308,28 @@ impl IndexerClient for TrackingIndexerClient {
             .stamp_indexer_ids
             .then(|| routed_indexer_ids.first().cloned())
             .flatten();
-        let indexer_outcomes = if self.report_routed_indexers_fired {
+        if self.contain_routed_indexers
+            && let Some(context) = learning_context_for_containment(&self.learning_contexts).await
+        {
+            self.containment
+                .lock()
+                .await
+                .session_indexers
+                .insert(context, routed_indexer_ids.clone());
+        }
+        let indexer_outcomes = if self.contain_routed_indexers {
+            routed_indexer_ids
+                .iter()
+                .map(|indexer_id| crate::IndexerQueryOutcome {
+                    indexer_id: indexer_id.clone(),
+                    outcome: crate::IndexerSearchOutcome::Partial {
+                        empty: self.empty_results,
+                        reason: Some(crate::IndexerSearchIncompleteReason::PageCeilingReached),
+                        retry_after: Some(std::time::Duration::from_secs(3_600)),
+                    },
+                })
+                .collect()
+        } else if self.report_routed_indexers_fired {
             indexer_routing
                 .into_iter()
                 .flat_map(|plan| plan.entries)
@@ -370,6 +421,59 @@ impl IndexerClient for TrackingIndexerClient {
             grab_max: None,
         })
     }
+
+    async fn link_search_session_coverage_scope(
+        &self,
+        search_session_id: &str,
+        coverage_scope_key: &str,
+    ) -> AppResult<()> {
+        let mut containment = self.containment.lock().await;
+        containment
+            .linked_scopes
+            .push(coverage_scope_key.to_string());
+        if let Some(indexers) = containment.session_indexers.remove(search_session_id) {
+            let until = chrono::Utc::now() + chrono::Duration::hours(1);
+            containment.holds.insert(
+                coverage_scope_key.to_string(),
+                indexers.into_iter().map(|id| (id, until)).collect(),
+            );
+        }
+        Ok(())
+    }
+
+    async fn contained_search_holds(
+        &self,
+        coverage_scope_key: &str,
+        indexer_ids: &[String],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>> {
+        Ok(self
+            .containment
+            .lock()
+            .await
+            .holds
+            .get(coverage_scope_key)
+            .into_iter()
+            .flatten()
+            .filter(|(id, until)| *until > now && indexer_ids.contains(id))
+            .cloned()
+            .collect())
+    }
+}
+
+/// The session id of the search just recorded, when it ran in the background
+/// lane — the only lane that contains.
+async fn learning_context_for_containment(
+    contexts: &Arc<Mutex<Vec<Option<crate::IndexerSearchLearningContext>>>>,
+) -> Option<String> {
+    contexts
+        .lock()
+        .await
+        .last()
+        .cloned()
+        .flatten()
+        .filter(|context| context.background_value.is_some())
+        .map(|context| context.search_session_id)
 }
 
 #[derive(Clone)]

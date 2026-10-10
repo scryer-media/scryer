@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use scryer_application::{
-    AppError, AppResult, HashDomain, IndexerSearchCandidateWrite, IndexerSearchLearningKey,
-    IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerSearchRunWrite,
-    NormalizedIndexerSearchCandidate, ReusableIndexerSearchCandidate,
-    ReusableIndexerSearchStrategy, blake3_identity_hex,
+    AppError, AppResult, BackgroundIndexerSearchStrategyState, HashDomain,
+    IndexerSearchCandidateWrite, IndexerSearchLearningKey, IndexerSearchLearningRecord,
+    IndexerSearchLearningRepository, IndexerSearchRunWrite, NormalizedIndexerSearchCandidate,
+    ReusableIndexerSearchCandidate, ReusableIndexerSearchStrategy, SEARCH_STRATEGY_CONTAINED,
+    SEARCH_STRATEGY_CONVERGED, blake3_identity_hex,
 };
 use scryer_infrastructure_crypto::{
     EncryptionKey,
@@ -382,8 +383,8 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                             id, indexer_id, provider_type, search_session_id, scope_key, query_signature,
                             branch, page, range_min_size, range_max_size, result_count,
                             completion_state, retry_at, error_summary, indexer_fingerprint,
-                            created_at
-                         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                            created_at, strategy_state
+                         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                         &[
                             SqlArg::Text(run.id.clone()),
                             SqlArg::Text(run.indexer_id.clone()),
@@ -401,6 +402,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                             SqlArg::OptText(run.error_summary.clone()),
                             SqlArg::Text(run.indexer_fingerprint.clone()),
                             SqlArg::Timestamp(run.created_at),
+                            SqlArg::OptText(run.strategy_state.clone()),
                         ],
                     )
                     .await?;
@@ -909,6 +911,123 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         Ok(states)
     }
 
+    async fn list_background_strategy_states(
+        &self,
+        indexer_id: &str,
+        scope_key: &str,
+        indexer_fingerprint: &str,
+        created_after: DateTime<Utc>,
+    ) -> AppResult<Vec<BackgroundIndexerSearchStrategyState>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT r.query_signature, r.strategy_state, r.retry_at, r.created_at
+             FROM indexer_search_runs r
+             WHERE r.indexer_id = {}
+               AND r.scope_key = {}
+               AND r.indexer_fingerprint = {}
+               AND r.strategy_state IS NOT NULL
+               AND r.created_at >= {}
+             ORDER BY r.created_at DESC, r.id DESC",
+            &[
+                SqlArg::Text(indexer_id.to_string()),
+                SqlArg::Text(scope_key.to_string()),
+                SqlArg::Text(indexer_fingerprint.to_string()),
+                SqlArg::Timestamp(created_after),
+            ],
+        )
+        .await?;
+        let mut seen = std::collections::HashSet::new();
+        let mut states = Vec::new();
+        for row in rows {
+            let query_signature = row.text("query_signature")?;
+            if !seen.insert(query_signature.clone()) {
+                continue;
+            }
+            states.push(BackgroundIndexerSearchStrategyState {
+                query_signature,
+                strategy_state: row.text("strategy_state")?,
+                retry_at: row.opt_timestamp("retry_at")?,
+                created_at: row.timestamp("created_at")?,
+            });
+        }
+        Ok(states)
+    }
+
+    async fn link_search_session_coverage_scope(
+        &self,
+        search_session_id: &str,
+        coverage_scope_key: &str,
+    ) -> AppResult<()> {
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "link_indexer_search_session_coverage_scope",
+            "UPDATE indexer_search_runs
+                SET coverage_scope_key = {}
+              WHERE search_session_id = {}
+                AND strategy_state IS NOT NULL",
+            vec![
+                SqlArg::Text(coverage_scope_key.to_string()),
+                SqlArg::Text(search_session_id.to_string()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn contained_search_hold(
+        &self,
+        coverage_scope_key: &str,
+        indexer_id: &str,
+        indexer_fingerprint: &str,
+        created_after: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> AppResult<Option<DateTime<Utc>>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT r.search_session_id, r.strategy_state, r.retry_at
+             FROM indexer_search_runs r
+             WHERE r.coverage_scope_key = {}
+               AND r.indexer_id = {}
+               AND r.indexer_fingerprint = {}
+               AND r.strategy_state IS NOT NULL
+               AND r.created_at >= {}
+             ORDER BY r.created_at DESC, r.id DESC",
+            &[
+                SqlArg::Text(coverage_scope_key.to_string()),
+                SqlArg::Text(indexer_id.to_string()),
+                SqlArg::Text(indexer_fingerprint.to_string()),
+                SqlArg::Timestamp(created_after),
+            ],
+        )
+        .await?;
+        let mut latest_session: Option<String> = None;
+        let mut hold_until: Option<DateTime<Utc>> = None;
+        for row in rows {
+            let session = row.text("search_session_id")?;
+            match latest_session.as_deref() {
+                None => latest_session = Some(session),
+                Some(latest) if latest == session => {}
+                // Rows are newest first, so the latest session's rows are all
+                // read once another session appears.
+                Some(_) => break,
+            }
+            let state = row.text("strategy_state")?;
+            if state == SEARCH_STRATEGY_CONVERGED {
+                continue;
+            }
+            if state != SEARCH_STRATEGY_CONTAINED {
+                return Ok(None);
+            }
+            match row.opt_timestamp("retry_at")? {
+                Some(retry_at) if retry_at > now => {
+                    hold_until = Some(hold_until.map_or(retry_at, |held| held.min(retry_at)));
+                }
+                _ => return Ok(None),
+            }
+        }
+        Ok(hold_until)
+    }
+
     async fn cleanup_search_diagnostics(
         &self,
         candidate_cutoff: DateTime<Utc>,
@@ -1141,6 +1260,7 @@ fn i64_to_u32(value: i64, column: &str) -> AppResult<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scryer_application::SEARCH_STRATEGY_OPEN;
 
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -1187,7 +1307,9 @@ mod tests {
                 retry_at TEXT,
                 error_summary TEXT,
                 indexer_fingerprint TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                strategy_state TEXT,
+                coverage_scope_key TEXT
             )",
         )
         .execute(&pool)
@@ -1550,6 +1672,164 @@ mod tests {
         );
     }
 
+    fn background_run(
+        id: &str,
+        session: &str,
+        query_signature: &str,
+        state: Option<&str>,
+        retry_at: Option<DateTime<Utc>>,
+        created_at: DateTime<Utc>,
+    ) -> IndexerSearchRunWrite {
+        IndexerSearchRunWrite {
+            id: id.into(),
+            indexer_id: "idx-1".into(),
+            provider_type: "newznab".into(),
+            search_session_id: session.into(),
+            scope_key: "title-1:series:episode:1:2:-".into(),
+            query_signature: query_signature.into(),
+            branch: "ids".into(),
+            page: None,
+            range_min_size: None,
+            range_max_size: None,
+            result_count: 0,
+            completion_state: "received_partial".into(),
+            retry_at,
+            error_summary: None,
+            indexer_fingerprint: "fingerprint-1".into(),
+            created_at,
+            strategy_state: state.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_reads_background_strategy_state_and_contained_holds() {
+        let (store, _pool) = sqlite_store().await;
+        let now = Utc::now();
+        let hour = chrono::Duration::hours(1);
+        let lookback = now - chrono::Duration::hours(72);
+        let scope = "episode:synthetic-episode-1";
+
+        // Session one: the id strategy was contained, the text one converged.
+        for run in [
+            background_run(
+                "run-1",
+                "session-1",
+                "ids",
+                Some(SEARCH_STRATEGY_CONTAINED),
+                Some(now + hour),
+                now - chrono::Duration::minutes(10),
+            ),
+            background_run(
+                "run-2",
+                "session-1",
+                "text",
+                Some(SEARCH_STRATEGY_CONVERGED),
+                None,
+                now - chrono::Duration::minutes(10),
+            ),
+            // An operator run afterwards writes no background state.
+            background_run(
+                "run-3",
+                "operator-session",
+                "ids",
+                None,
+                None,
+                now - chrono::Duration::minutes(5),
+            ),
+        ] {
+            store
+                .record_search_diagnostics(&run, &[])
+                .await
+                .expect("run should persist");
+        }
+
+        let states = store
+            .list_background_strategy_states(
+                "idx-1",
+                "title-1:series:episode:1:2:-",
+                "fingerprint-1",
+                lookback,
+            )
+            .await
+            .expect("background states should load");
+        let ids = states
+            .iter()
+            .find(|state| state.query_signature == "ids")
+            .expect("the id strategy keeps its background state");
+        assert_eq!(ids.strategy_state, SEARCH_STRATEGY_CONTAINED);
+        assert_eq!(
+            ids.retry_at.map(|at| at.timestamp()),
+            Some((now + hour).timestamp())
+        );
+        assert_eq!(states.len(), 2);
+
+        // Until the session is linked to its convergence scope, nothing holds.
+        assert_eq!(
+            store
+                .contained_search_hold(scope, "idx-1", "fingerprint-1", lookback, now)
+                .await
+                .expect("hold should read"),
+            None
+        );
+        store
+            .link_search_session_coverage_scope("session-1", scope)
+            .await
+            .expect("link should write");
+        store
+            .link_search_session_coverage_scope("operator-session", scope)
+            .await
+            .expect("link should write");
+        let held = store
+            .contained_search_hold(scope, "idx-1", "fingerprint-1", lookback, now)
+            .await
+            .expect("hold should read")
+            .expect("a contained, converged session holds the indexer");
+        assert_eq!(held.timestamp(), (now + hour).timestamp());
+
+        // A changed indexer identity is not held, and neither is a due one.
+        assert_eq!(
+            store
+                .contained_search_hold(scope, "idx-1", "fingerprint-2", lookback, now)
+                .await
+                .expect("hold should read"),
+            None
+        );
+        assert_eq!(
+            store
+                .contained_search_hold(scope, "idx-1", "fingerprint-1", lookback, now + hour * 2)
+                .await
+                .expect("hold should read"),
+            None
+        );
+
+        // A later session with open work releases the hold.
+        store
+            .record_search_diagnostics(
+                &background_run(
+                    "run-4",
+                    "session-2",
+                    "ids",
+                    Some(SEARCH_STRATEGY_OPEN),
+                    None,
+                    now - chrono::Duration::minutes(1),
+                ),
+                &[],
+            )
+            .await
+            .expect("run should persist");
+        store
+            .link_search_session_coverage_scope("session-2", scope)
+            .await
+            .expect("link should write");
+        assert_eq!(
+            store
+                .contained_search_hold(scope, "idx-1", "fingerprint-1", lookback, now)
+                .await
+                .expect("hold should read"),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn sqlite_store_caps_text_learning_rows_per_title() {
         let (store, _) = sqlite_store().await;
@@ -1675,6 +1955,7 @@ mod tests {
             error_summary: None,
             indexer_fingerprint: "fingerprint-1".into(),
             created_at: now,
+            strategy_state: None,
         };
         let candidate = IndexerSearchCandidateWrite {
             id: "candidate-1".into(),

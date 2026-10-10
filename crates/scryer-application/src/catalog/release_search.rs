@@ -553,6 +553,12 @@ pub(crate) const RATE_LIMITED_INDEXER_REASON: &str = "indexer is cooling down af
 /// gets when its configured query budget has no slot soon enough.
 pub(crate) const QUERY_BUDGET_INDEXER_REASON: &str = "indexer is over its query budget";
 
+/// Opening words of the reason a contained indexer gets: the provider stopped
+/// at a limit of its own (a result ceiling, a saturated partition), so the
+/// indexer stays uncovered and waits out a backoff before it is asked again.
+pub(crate) const CONTAINED_INDEXER_REASON: &str =
+    "indexer search contained at the provider's result limit";
+
 /// Whether an incomplete-indexer reason describes a wait on the indexer's
 /// pacing (a cooldown it asked for, or its own query budget), as opposed to
 /// something that went wrong.
@@ -580,6 +586,15 @@ pub(crate) fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option
             reason: Some(IndexerSearchIncompleteReason::Unattested),
             ..
         } => return None,
+        IndexerSearchOutcome::Partial {
+            reason:
+                Some(
+                    IndexerSearchIncompleteReason::PageCeilingReached
+                    | IndexerSearchIncompleteReason::SaturatedPartition,
+                ),
+            retry_after,
+            ..
+        } => (CONTAINED_INDEXER_REASON, retry_after),
         IndexerSearchOutcome::Partial {
             reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
             retry_after,
@@ -1888,6 +1903,17 @@ impl AppUseCase {
                 scoring_now,
             )
             .await?;
+        // A background search ties its session to the convergence scope, so
+        // an indexer that ended contained is held there until it is due.
+        if background_value.is_some()
+            && let Some(convergence) = self.resolve_scope_convergence(title, subject).await
+        {
+            self.link_search_session_coverage_scope(
+                &outcome.search_session_id,
+                &convergence.scope_key,
+            )
+            .await;
+        }
         outcome.results = self
             .evaluate_search_results_for_subject(
                 title,

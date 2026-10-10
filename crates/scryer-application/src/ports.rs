@@ -5049,6 +5049,29 @@ pub struct IndexerSearchRunWrite {
     pub error_summary: Option<String>,
     pub indexer_fingerprint: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Where a background strategy stands after this run
+    /// ([`SEARCH_STRATEGY_CONVERGED`], [`SEARCH_STRATEGY_CONTAINED`] or
+    /// [`SEARCH_STRATEGY_OPEN`]). `None` for operator and interactive runs,
+    /// which neither reset nor advance the background state.
+    pub strategy_state: Option<String>,
+}
+
+/// The provider answered the strategy completely.
+pub const SEARCH_STRATEGY_CONVERGED: &str = "converged";
+/// The provider cannot finish the strategy as asked (a result ceiling, a
+/// saturated partition): it waits out a backoff and is never converged.
+pub const SEARCH_STRATEGY_CONTAINED: &str = "contained";
+/// The strategy is incomplete for a reason a later pass can fix on its own
+/// schedule (an upstream failure, a rate limit).
+pub const SEARCH_STRATEGY_OPEN: &str = "open";
+
+/// The latest background state of one strategy for one indexer and scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundIndexerSearchStrategyState {
+    pub query_signature: String,
+    pub strategy_state: String,
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -5188,6 +5211,44 @@ pub trait IndexerSearchLearningRepository: Send + Sync {
         _now: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<Vec<ReusableIndexerSearchStrategy>> {
         Ok(Vec::new())
+    }
+
+    /// The latest background state per strategy for one indexer and scope,
+    /// read across a window wider than the reuse window so a backoff keeps
+    /// growing past it.
+    async fn list_background_strategy_states(
+        &self,
+        _indexer_id: &str,
+        _scope_key: &str,
+        _indexer_fingerprint: &str,
+        _created_after: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Vec<BackgroundIndexerSearchStrategyState>> {
+        Ok(Vec::new())
+    }
+
+    /// Tags every run of one background search session with the convergence
+    /// scope it searched for.
+    async fn link_search_session_coverage_scope(
+        &self,
+        _search_session_id: &str,
+        _coverage_scope_key: &str,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// When the indexer's latest background session for this convergence
+    /// scope ended with every strategy either converged or contained, and at
+    /// least one contained strategy is not yet due, the instant the earliest
+    /// contained strategy becomes due. `None` means the indexer is not held.
+    async fn contained_search_hold(
+        &self,
+        _coverage_scope_key: &str,
+        _indexer_id: &str,
+        _indexer_fingerprint: &str,
+        _created_after: chrono::DateTime<chrono::Utc>,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<chrono::DateTime<chrono::Utc>>> {
+        Ok(None)
     }
 
     async fn cleanup_search_diagnostics(
@@ -9135,6 +9196,30 @@ pub trait IndexerClient: Send + Sync {
         _admissible_fingerprints: &[String],
     ) -> AppResult<()> {
         Ok(())
+    }
+
+    /// Ties one background search session's runs to the convergence scope it
+    /// searched for, so [`IndexerClient::contained_search_holds`] can answer
+    /// for that scope later.
+    async fn link_search_session_coverage_scope(
+        &self,
+        _search_session_id: &str,
+        _coverage_scope_key: &str,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Indexers among `indexer_ids` whose latest background search for this
+    /// convergence scope is contained and not yet due, with the instant each
+    /// becomes due. A held indexer is neither covered nor worth asking again
+    /// before then.
+    async fn contained_search_holds(
+        &self,
+        _coverage_scope_key: &str,
+        _indexer_ids: &[String],
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>> {
+        Ok(std::collections::HashMap::new())
     }
 
     /// Which RSS-capable indexers are due for a background RSS poll now.

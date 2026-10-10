@@ -1800,6 +1800,16 @@ async fn plan_series_pack_for_title(
     let searchable = if intent.is_interactive() {
         convergence.routed_indexer_ids.clone()
     } else {
+        let holds = if uncovered.is_empty() {
+            HashMap::new()
+        } else {
+            app.contained_indexer_holds(&convergence.scope_key, &uncovered, now)
+                .await
+        };
+        let uncovered = uncovered
+            .into_iter()
+            .filter(|indexer_id| !holds.contains_key(indexer_id))
+            .collect::<Vec<_>>();
         if uncovered.is_empty()
             || !uncovered.iter().any(|indexer_id| {
                 availability.indexer_available(
@@ -1828,6 +1838,8 @@ async fn plan_series_pack_for_title(
             now,
         )
         .await?;
+    app.link_search_session_coverage_scope(&search_outcome.search_session_id, &convergence.scope_key)
+        .await;
 
     let (evaluated_candidates, qualifying_collection_ids) = evaluate_series_pack_candidates(
         app,
@@ -3699,6 +3711,27 @@ async fn process_single_target(
                 );
                 return Ok(());
             }
+            // Contained pre-skip: an uncovered indexer whose last background
+            // search here hit the provider's own limit waits out its backoff.
+            // It stays uncovered, but asking it sooner repeats the same capped
+            // answer. This is not a deferral: the poller must not re-arm for
+            // it, and the cycle keeps selecting other scopes.
+            let holds = app
+                .contained_indexer_holds(&convergence.scope_key, &uncovered, *now)
+                .await;
+            let uncovered = uncovered
+                .into_iter()
+                .filter(|indexer_id| !holds.contains_key(indexer_id))
+                .collect::<Vec<_>>();
+            if uncovered.is_empty() {
+                debug!(
+                    title_id = title.id.as_str(),
+                    scope_key = target.scope_key.as_str(),
+                    held_until = ?holds.values().min(),
+                    "background acquisition: every uncovered indexer is contained and not yet due, skipping scope"
+                );
+                return Ok(());
+            }
             // Scheduler pre-skip: every uncovered indexer is cooling down or quota
             // exhausted — spend nothing; the scope stays a target and the cursor
             // returns to it once the scheduler frees capacity. The cycle counts it
@@ -3801,13 +3834,36 @@ async fn process_single_target(
                     )
                     .await
                 {
-                    Some(pack_convergence) => app
-                        .uncovered_indexers_for_scope_memoized(
-                            &pack_convergence,
-                            &context.convergence_inputs,
-                        )
-                        .await
-                        .ok(),
+                    Some(pack_convergence) => {
+                        match app
+                            .uncovered_indexers_for_scope_memoized(
+                                &pack_convergence,
+                                &context.convergence_inputs,
+                            )
+                            .await
+                        {
+                            // A contained indexer waits out its backoff here
+                            // too; it is left out of the pack question until
+                            // it is due.
+                            Ok(uncovered) if !intent.is_interactive() && !uncovered.is_empty() => {
+                                let holds = app
+                                    .contained_indexer_holds(
+                                        &pack_convergence.scope_key,
+                                        &uncovered,
+                                        *now,
+                                    )
+                                    .await;
+                                Some(
+                                    uncovered
+                                        .into_iter()
+                                        .filter(|indexer_id| !holds.contains_key(indexer_id))
+                                        .collect::<Vec<_>>(),
+                                )
+                            }
+                            Ok(uncovered) => Some(uncovered),
+                            Err(_) => None,
+                        }
+                    }
                     None => None,
                 };
                 // An interactive walk does not read the pack scope's coverage:
@@ -4039,6 +4095,10 @@ async fn process_single_target(
             return Ok(());
         }
     };
+    if let Some(scope_key) = convergence_scope_key.as_deref() {
+        app.link_search_session_coverage_scope(&search_outcome.search_session_id, scope_key)
+            .await;
+    }
     let mut scored = search_outcome.results;
     for candidate in season_extras {
         if !scored
