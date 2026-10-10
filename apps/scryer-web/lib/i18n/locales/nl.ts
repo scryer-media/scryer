@@ -3647,7 +3647,6 @@ const nl: LocaleDictionary = {
   "lists.followed.emptyManager": "Nog geen openbare lijsten. Plak hierboven een URL of kies er een uit de catalogus hieronder.",
   "lists.table.list": "Lijst",
   "lists.table.coverage": "Dekking",
-  "lists.table.coverageSummary": "{{inLibrary}} van {{total}} in bibliotheek",
   "lists.table.mode": "Modus",
   "lists.table.lastSync": "Laatste synchronisatie",
   "lists.table.neverSynced": "Nog niet gesynchroniseerd",

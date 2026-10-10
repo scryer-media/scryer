@@ -5623,7 +5623,6 @@ const en: LocaleDictionary = {
   "lists.followed.emptyManager": "No public lists yet. Paste a list URL above or pick one from the catalog below.",
   "lists.table.list": "List",
   "lists.table.coverage": "Coverage",
-  "lists.table.coverageSummary": "{{inLibrary}} of {{total}} in library",
   "lists.table.mode": "Mode",
   "lists.table.lastSync": "Last sync",
   "lists.table.neverSynced": "Not synced yet",

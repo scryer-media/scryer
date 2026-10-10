@@ -6298,7 +6298,6 @@ const ru: LocaleDictionary = {
   "lists.followed.emptyManager": "Публичных списков пока нет. Вставьте URL выше или выберите список в каталоге ниже.",
   "lists.table.list": "Список",
   "lists.table.coverage": "Покрытие",
-  "lists.table.coverageSummary": "{{inLibrary}} из {{total}} в библиотеке",
   "lists.table.mode": "Режим",
   "lists.table.lastSync": "Последняя синхронизация",
   "lists.table.neverSynced": "Ещё не синхронизирован",

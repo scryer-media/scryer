@@ -2764,7 +2764,6 @@ const zh_CN: LocaleDictionary = {
   "lists.followed.emptyManager": "还没有公开列表。在上方粘贴 URL，或从下方目录中选择。",
   "lists.table.list": "列表",
   "lists.table.coverage": "覆盖率",
-  "lists.table.coverageSummary": "{{total}} 个中 {{inLibrary}} 个已在媒体库",
   "lists.table.mode": "模式",
   "lists.table.lastSync": "上次同步",
   "lists.table.neverSynced": "尚未同步",

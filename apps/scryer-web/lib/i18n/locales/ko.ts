@@ -2845,7 +2845,6 @@ const ko: LocaleDictionary = {
   "lists.followed.emptyManager": "아직 공개 목록이 없습니다. 위에 URL을 붙여넣거나 아래 카탈로그에서 고르세요.",
   "lists.table.list": "목록",
   "lists.table.coverage": "보유율",
-  "lists.table.coverageSummary": "{{total}}개 중 {{inLibrary}}개 보유",
   "lists.table.mode": "모드",
   "lists.table.lastSync": "마지막 동기화",
   "lists.table.neverSynced": "아직 동기화 안 됨",

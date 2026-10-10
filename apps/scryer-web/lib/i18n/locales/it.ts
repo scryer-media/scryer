@@ -2934,7 +2934,6 @@ const it: LocaleDictionary = {
   "lists.followed.emptyManager": "Ancora nessuna lista pubblica. Incolla un URL qui sopra o scegline una dal catalogo qui sotto.",
   "lists.table.list": "Lista",
   "lists.table.coverage": "Copertura",
-  "lists.table.coverageSummary": "{{inLibrary}} di {{total}} in libreria",
   "lists.table.mode": "Modalità",
   "lists.table.lastSync": "Ultima sincronizzazione",
   "lists.table.neverSynced": "Non ancora sincronizzata",

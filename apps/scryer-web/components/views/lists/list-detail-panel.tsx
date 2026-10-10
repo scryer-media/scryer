@@ -205,7 +205,7 @@ export function ListDetailPanel({
             ) : null}
 
             <LabeledFieldset label={t("lists.detail.coverage")}>
-              <ListCoverageBar counts={subscription.counts} showLegend />
+              <ListCoverageBar counts={subscription.counts} legend="inline" />
             </LabeledFieldset>
 
             <LabeledFieldset label={t("lists.detail.settings")}>

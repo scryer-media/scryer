@@ -99,13 +99,7 @@ export function ListTable({
                 </div>
               </TableCell>
               <TableCell className="hidden w-36 md:table-cell">
-                <ListCoverageBar counts={subscription.counts} />
-                <p className="mt-1 text-[11.5px] text-[var(--scry-muted)]">
-                  {t("lists.table.coverageSummary", {
-                    inLibrary: subscription.counts.inLibrary,
-                    total: subscription.counts.total,
-                  })}
-                </p>
+                <ListCoverageBar counts={subscription.counts} legend="hover" />
               </TableCell>
               <TableCell className="hidden sm:table-cell">
                 <span className="text-[13px] text-[var(--scry-ink2)]">{t(listModeLabelKey(subscription.mode))}</span>

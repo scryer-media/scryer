@@ -194,6 +194,24 @@ export function listCoverageSegments(counts: ListCounts): ListCoverageSegment[] 
     .map((entry) => ({ ...entry, fraction: entry.count / denominator }));
 }
 
+const COVERAGE_MEMBERSHIP_STATE: Record<ListCoverageSegmentKey, ListMembershipState> = {
+  inLibrary: "IN_LIBRARY",
+  added: "ADDED",
+  requested: "REQUESTED",
+  held: "HELD",
+  filtered: "FILTERED",
+  excluded: "EXCLUDED",
+  unresolved: "UNRESOLVED",
+};
+
+/**
+ * A coverage segment takes the tone of the pill a title in that state wears,
+ * so the bar and the rows under it cannot drift apart.
+ */
+export function listCoverageSegmentTone(key: ListCoverageSegmentKey): ListTone {
+  return listMembershipStateTone(COVERAGE_MEMBERSHIP_STATE[key]);
+}
+
 export function listCoverageSegmentLabelKey(key: ListCoverageSegmentKey): string {
   return `lists.counts.${key}`;
 }

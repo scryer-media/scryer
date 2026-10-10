@@ -2928,7 +2928,6 @@ const de: LocaleDictionary = {
   "lists.followed.emptyManager": "Noch keine öffentlichen Listen. Füge oben eine Listen-URL ein oder wähle eine aus dem Katalog unten.",
   "lists.table.list": "Liste",
   "lists.table.coverage": "Abdeckung",
-  "lists.table.coverageSummary": "{{inLibrary}} von {{total}} in der Bibliothek",
   "lists.table.mode": "Modus",
   "lists.table.lastSync": "Letzte Synchronisierung",
   "lists.table.neverSynced": "Noch nicht synchronisiert",

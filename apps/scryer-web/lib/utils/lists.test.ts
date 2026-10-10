@@ -46,6 +46,7 @@ import {
   listMembershipStateLabelKey,
   listMembershipStateTone,
   listModeLabelKey,
+  listCoverageSegmentTone,
   listSyncStateLabelKey,
   listSyncStateTone,
   listMembershipRowId,
@@ -248,6 +249,8 @@ test("state labels and tones cover every sync and membership state", () => {
   assert.equal(listMembershipStateLabelKey("IN_LIBRARY"), "lists.membershipState.inLibrary");
   assert.equal(listMembershipStateTone("REJECTED"), "negative");
   assert.equal(listMembershipStateTone("UNRESOLVED"), "warning");
+  assert.equal(listCoverageSegmentTone("added"), listMembershipStateTone("ADDED"));
+  assert.equal(listCoverageSegmentTone("unresolved"), listMembershipStateTone("UNRESOLVED"));
 });
 
 test("a source counts as followed only on the same provider, source type and parameters", () => {

@@ -2889,7 +2889,6 @@ const ja: LocaleDictionary = {
   "lists.followed.emptyManager": "公開リストはまだありません。上に URL を貼り付けるか、下のカタログから選んでください。",
   "lists.table.list": "リスト",
   "lists.table.coverage": "カバー率",
-  "lists.table.coverageSummary": "{{total}} 件中 {{inLibrary}} 件がライブラリにあり",
   "lists.table.mode": "モード",
   "lists.table.lastSync": "最終同期",
   "lists.table.neverSynced": "未同期",
