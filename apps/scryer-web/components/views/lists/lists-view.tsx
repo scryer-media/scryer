@@ -1,10 +1,11 @@
 import * as React from "react";
-import { ListPlus, RefreshCw } from "lucide-react";
+import { ListPlus, Puzzle, RefreshCw } from "lucide-react";
 
 import { LoadingMark } from "@/components/common/loading-mark";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import type { ListsSection } from "@/components/root/types";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { FilteredPluginList } from "@/components/views/settings/filtered-plugin-list";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
@@ -151,10 +152,37 @@ export function ListsView(props: ListsViewProps) {
 
   const detailFallback = detail ? (subscriptions.find((entry) => entry.id === detail.id) ?? null) : null;
   const detailSubscription = detail?.subscription ?? detailFallback;
+  const showPlugins = props.canManageProviderApps && (section === "public" || (section === "personal" && props.experimentalFeaturesEnabled));
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const [pluginsDocked, setPluginsDocked] = React.useState(false);
+  const [pluginsOpen, setPluginsOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    const content = contentRef.current;
+    if (!content || !showPlugins) return;
+    // Match the settings pages' minimum main width, plugin rail width and gap.
+    const update = () => setPluginsDocked(content.clientWidth >= 1080 + 288 + 20);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [showPlugins]);
+
+  React.useEffect(() => setPluginsOpen(false), [pluginsDocked, section]);
+
+  const plugins = showPlugins ? (
+    <FilteredPluginList
+      family="LIST"
+      title={t("lists.plugins.heading")}
+      refreshProviderOptions={props.onRefreshProviders}
+    />
+  ) : null;
 
   return (
     <section id="lists-view" className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-[var(--scry-surfE)]">
-      <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="w-full px-4 py-6 sm:px-6 lg:px-8">
+      <div ref={contentRef} className="flex items-start justify-center gap-5">
+      <div className="flex min-w-0 max-w-[1280px] flex-[1_1_1280px] flex-col gap-4">
         <div className="flex items-start gap-4">
           <div className="flex h-11 w-11 flex-none items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-accent-text)]">
             <ListPlus className="h-5 w-5" />
@@ -169,6 +197,12 @@ export function ListsView(props: ListsViewProps) {
             <Button id="lists-sync-all" type="button" variant="outline" size="sm" onClick={props.onSyncAll}>
               <RefreshCw className="h-4 w-4" />
               {t("lists.action.syncAll")}
+            </Button>
+          ) : null}
+          {showPlugins && !pluginsDocked ? (
+            <Button type="button" variant="outline" size="sm" aria-expanded={pluginsOpen} aria-controls="lists-plugins-panel" onClick={() => setPluginsOpen(true)}>
+              <Puzzle className="h-4 w-4" />
+              {t("settings.plugins")}
             </Button>
           ) : null}
         </div>
@@ -272,14 +306,22 @@ export function ListsView(props: ListsViewProps) {
             ) : null}
           </div>
         )}
-        {props.canManageProviderApps && (section === "public" || (section === "personal" && props.experimentalFeaturesEnabled)) ? (
-          <FilteredPluginList
-            family="LIST"
-            title={t("lists.plugins.heading")}
-            refreshProviderOptions={props.onRefreshProviders}
-          />
-        ) : null}
       </div>
+      {showPlugins && pluginsDocked ? (
+        <aside aria-label={t("settings.plugins")} className="sticky top-[26px] min-w-[288px] max-w-[720px] flex-[1_1_720px]">
+          {plugins}
+        </aside>
+      ) : null}
+      </div>
+      </div>
+      {showPlugins && !pluginsDocked ? (
+        <Sheet open={pluginsOpen} onOpenChange={setPluginsOpen}>
+          <SheetContent id="lists-plugins-panel" side="right" className="w-[min(420px,calc(100vw-2rem))] overflow-y-auto">
+            <SheetHeader><SheetTitle>{t("settings.plugins")}</SheetTitle></SheetHeader>
+            <div className="px-3 pb-3">{plugins}</div>
+          </SheetContent>
+        </Sheet>
+      ) : null}
 
       <ListDetailPanel
         detail={detail}
