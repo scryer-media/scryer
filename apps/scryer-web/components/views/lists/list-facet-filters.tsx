@@ -1,10 +1,10 @@
 import * as React from "react";
+import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 import { Input, decimalInputProps } from "@/components/ui/input";
 import { CheckboxField } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { MultiSelectOptionList } from "@/components/ui/multi-select-dropdown";
 import { selectContentClassName, selectTriggerClassName } from "@/components/ui/select";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ChevronDown } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -154,19 +154,26 @@ export function ListFacetFilters({
         name.toLowerCase().includes(search.toLowerCase()),
       ),
     ) ?? [];
+  const ratingMatch = ratings[0]?.matchAny ? "any" : "all";
   return (
     <div className="grid gap-3 border-t border-[var(--scry-border3)] pt-4 sm:grid-cols-2">
       <div className="min-w-0 space-y-1.5">
       <span id={`${idPrefix}-rating-match-label`} className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.filter.match")}</span>
-      <ToggleGroup type="single" variant="outline" className="h-9 w-full"
+      <ToggleGroupPrimitive.Root type="single"
+        className="inline-flex max-w-full flex-wrap rounded-md border border-border p-1"
         aria-labelledby={`${idPrefix}-rating-match-label`}
-        value={ratings[0]?.matchAny ? "any" : "all"}
+        value={ratingMatch}
         disabled={disabled}
         onValueChange={(value) => { if (value) setFacet("RATINGS", { matchAny: value === "any", minimums }); }}
       >
-        <ToggleGroupItem variant="outline" className="h-full flex-1" value="all">{t("lists.filter.all")}</ToggleGroupItem>
-        <ToggleGroupItem variant="outline" className="h-full flex-1" value="any">{t("lists.filter.any")}</ToggleGroupItem>
-      </ToggleGroup>
+        {(["all", "any"] as const).map((value) => (
+          <ToggleGroupPrimitive.Item key={value} value={value} asChild>
+            <Button type="button" size="sm" variant={value === ratingMatch ? "default" : "ghost"}>
+              {t(`lists.filter.${value}`)}
+            </Button>
+          </ToggleGroupPrimitive.Item>
+        ))}
+      </ToggleGroupPrimitive.Root>
       </div>
       <div className="min-w-0 space-y-1.5">
       <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
@@ -228,7 +235,8 @@ export function ListFacetFilters({
               id={`${idPrefix}-canonical-picker`}
               aria-label={t("lists.filter.canonical")}
               disabled={disabled}
-              className={selectTriggerClassName({ className: "w-full" })}
+              // As tall as the rating match group beside it.
+              className={selectTriggerClassName({ className: "h-10.5 w-full" })}
             >
               <span className={`min-w-0 truncate text-left ${keys.length ? "" : "text-muted-foreground"}`}>
                 {keys.length
