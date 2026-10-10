@@ -1179,6 +1179,7 @@ async fn acquisition_failure_fallback_skips_failed_submission_for_another_episod
             release_title: "Scoped.Failure.Recovery.S02E01.1080p.WEB-DL".to_string(),
             reason: "old download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: true,
         },
     )
@@ -1218,6 +1219,158 @@ async fn acquisition_failure_fallback_skips_failed_submission_for_another_episod
             .as_deref(),
         Some("failed")
     );
+}
+
+/// A grab that came back holding nothing but an executable is routed to
+/// failure handling by the import gate. Processing it blocklists the release
+/// under the gate's own reason, reopens the scope, and leaves the download
+/// marked as the gate's so terminal cleanup removes its files as well.
+#[tokio::test]
+async fn import_gate_rejection_blocklists_under_its_own_reason_and_reopens_the_scope() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases.clone(),
+        wanted_items.clone(),
+    );
+
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Executable Only Grab".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+
+    let wanted = AcquisitionScopeState {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        title_name: Some(title.name.clone()),
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".to_string(),
+        last_search_at: Some((Utc::now() - chrono::Duration::minutes(5)).to_rfc3339()),
+        status: AcquisitionScopeStatus::Grabbed,
+        grabbed_release: Some(
+            serde_json::json!({
+                "title": "Fixture.Release.2020.1080p-GROUP",
+                "score": 100,
+                "grabbed_at": Utc::now().to_rfc3339(),
+            })
+            .to_string(),
+        ),
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: Utc::now().to_rfc3339(),
+        updated_at: Utc::now().to_rfc3339(),
+    };
+    wanted_items
+        .upsert_acquisition_scope_state(&wanted)
+        .await
+        .expect("seed wanted item");
+
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("primary".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "exe-only-job".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Fixture.Release.2020.1080p-GROUP".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .expect("record submission");
+
+    let verdict = "unwanted executable 'Fixture.Release.2020.1080p-GROUP.exe' — no video files";
+    let mut client_item = failed_history_item("exe-only-job", "Fixture.Release.2020.1080p-GROUP");
+    client_item.attention_reason = Some(verdict.to_string());
+    let mut tracked_download = crate::tracked_downloads::TrackedDownload {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
+        id: "nzbget:exe-only-job".to_string(),
+        client_id: "primary".to_string(),
+        client_type: "nzbget".to_string(),
+        client_item,
+        completed_source: None,
+        state: scryer_domain::TrackedDownloadState::FailedPending,
+        status: scryer_domain::TrackedDownloadStatus::Error,
+        status_messages: vec![verdict.to_string()],
+        title_id: Some(title.id.clone()),
+        facet: Some("movie".to_string()),
+        source_title: Some("Fixture.Release.2020.1080p-GROUP".to_string()),
+        indexer: None,
+        added_at: None,
+        notified_manual_interaction: false,
+        match_type: scryer_domain::TitleMatchType::Submission,
+        is_trackable: true,
+        import_attempted: true,
+        waiting_for_completed_history: false,
+        path_missing_since: None,
+        no_video_import_retry: None,
+        import_execution_retry: None,
+        import_hold: None,
+        skip_reacquire_on_failure: false,
+        burned_by_import_gate: true,
+        snapshot_missing_since: None,
+        retained_in_client_after_cleanup: false,
+    };
+
+    crate::failed_download_handler::process_failed(&app, &mut tracked_download).await;
+
+    assert_eq!(
+        tracked_download.state,
+        scryer_domain::TrackedDownloadState::Failed
+    );
+    assert!(
+        tracked_download.burned_by_import_gate,
+        "the gate's mark survives failure handling so cleanup removes the files"
+    );
+
+    let blocklist = title_blocklist_entries(&app, &title.id).await;
+    assert_eq!(blocklist.len(), 1, "{blocklist:?}");
+    assert_eq!(
+        blocklist[0].reason.as_deref(),
+        Some(format!("import rejected: {verdict}").as_str()),
+        "the blocklist names the import's verdict, not a client failure"
+    );
+
+    let reopened = wanted_items
+        .get_acquisition_scope_state_by_id(&wanted.id)
+        .await
+        .expect("load wanted")
+        .expect("wanted exists");
+    assert_eq!(reopened.status, AcquisitionScopeStatus::Wanted);
 }
 
 #[tokio::test]
@@ -1584,6 +1737,7 @@ async fn tracked_download_failure_keeps_standby_when_submit_unavailable() {
             release_title: "Failed.Release.1080p.WEB-DL".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )
@@ -1749,6 +1903,7 @@ async fn process_download_failure_returns_already_handled_for_duplicate_failed_d
             release_title: "Duplicate.Failed.Release.1080p.WEB-DL".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )
@@ -1791,6 +1946,7 @@ async fn process_download_failure_returns_already_handled_for_duplicate_failed_d
             release_title: "Duplicate.Failed.Release.1080p.WEB-DL".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )
@@ -1961,6 +2117,7 @@ async fn operator_client_failure_is_recorded_without_reopening_scope() {
             release_title: "Manual.Failed.Only.1080p.WEB-DL".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )
@@ -2071,6 +2228,7 @@ async fn process_download_failure_dedupes_same_release_title_across_client_item_
             release_title: "Pals".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )
@@ -2092,6 +2250,7 @@ async fn process_download_failure_dedupes_same_release_title_across_client_item_
             release_title: "Pals".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )
@@ -2666,6 +2825,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
             release_title: "Season.Pack.Failure.Recovery.S07.1080p.WEB-DL".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )
@@ -2947,6 +3107,7 @@ async fn episode_set_pack_failure_reopens_only_its_covered_wanted_items() {
             release_title: "Episode.Set.Pack.Failure.S01.1080p.WEB-DL".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )
@@ -5363,6 +5524,7 @@ async fn failed_season_pack_walks_the_saved_runner_up_without_an_indexer_query()
                 release_title: first_pack.clone(),
                 reason: "download failed".to_string(),
                 remove_from_client_if_configured: false,
+                blocklist_reason: None,
                 skip_reacquire: false,
             },
         )
@@ -5446,6 +5608,7 @@ async fn failed_season_pack_walks_the_saved_runner_up_without_an_indexer_query()
                 release_title: second_pack.clone(),
                 reason: "download failed".to_string(),
                 remove_from_client_if_configured: false,
+                blocklist_reason: None,
                 skip_reacquire: false,
             },
         )
@@ -5773,6 +5936,7 @@ async fn acquisition_cycle_skips_recently_failed_season_pack_from_submission_rel
             release_title: "Pals".to_string(),
             reason: "download failed".to_string(),
             remove_from_client_if_configured: false,
+            blocklist_reason: None,
             skip_reacquire: false,
         },
     )

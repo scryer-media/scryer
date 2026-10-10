@@ -2958,6 +2958,85 @@ pub fn is_image_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Extensions of files a media download has no business delivering: programs,
+/// installers, scripts and shortcuts for any desktop platform. A completed
+/// download whose only payload is one of these is not media, and is failed as
+/// a bad grab rather than parked for manual review. Compared ASCII
+/// case-insensitively against the final extension.
+pub const EXECUTABLE_EXTENSIONS: &[&str] = &[
+    "exe", "bat", "cmd", "com", "scr", "msi", "vbs", "ps1", "lnk", "js", "jar", "dll", "pif",
+    "app", "dmg", "pkg", "sh",
+];
+
+/// Extensions of the plain companion files a release carries next to its
+/// payload (info, checks, artwork, subtitles, the NZB itself and recovery
+/// sets). They never make a download's contents ambiguous on their own.
+pub const DOWNLOAD_HELPER_EXTENSIONS: &[&str] = &[
+    "nfo", "sfv", "srr", "txt", "jpg", "jpeg", "png", "srt", "sub", "idx", "nzb", "par2", "md5",
+];
+
+fn has_extension_in(path: &std::path::Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            extensions
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(ext))
+        })
+}
+
+pub fn is_executable_file(path: &std::path::Path) -> bool {
+    has_extension_in(path, EXECUTABLE_EXTENSIONS)
+}
+
+pub fn is_download_helper_file(path: &std::path::Path) -> bool {
+    has_extension_in(path, DOWNLOAD_HELPER_EXTENSIONS)
+}
+
+/// What a completed download that yielded no importable video holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoVideoDownloadContents<'a> {
+    /// No files at all.
+    Empty,
+    /// Executables and nothing else but plain helper files: an unwanted
+    /// grab. Holds every executable, in the order given.
+    UnwantedExecutables(Vec<&'a std::path::Path>),
+    /// Anything else: a (sample) video, an extensionless or unknown file, an
+    /// archive or archive volume, or helpers alone. Needs a human.
+    Other,
+}
+
+/// Classify the files of a completed download that produced no importable
+/// video. Only a set made of executables plus plain helpers, with at least
+/// one executable, is [`NoVideoDownloadContents::UnwantedExecutables`]; a
+/// single file that is neither video, executable nor helper makes the whole
+/// set [`NoVideoDownloadContents::Other`].
+pub fn classify_no_video_download<'a, I>(files: I) -> NoVideoDownloadContents<'a>
+where
+    I: IntoIterator<Item = &'a std::path::Path>,
+{
+    let mut executables = Vec::new();
+    let mut saw_any = false;
+    for file in files {
+        saw_any = true;
+        if is_video_file(file) {
+            return NoVideoDownloadContents::Other;
+        }
+        if is_executable_file(file) {
+            executables.push(file);
+        } else if !is_download_helper_file(file) {
+            return NoVideoDownloadContents::Other;
+        }
+    }
+    if !saw_any {
+        NoVideoDownloadContents::Empty
+    } else if executables.is_empty() {
+        NoVideoDownloadContents::Other
+    } else {
+        NoVideoDownloadContents::UnwantedExecutables(executables)
+    }
+}
+
 pub const ARCHIVE_EXTENSIONS: &[&str] = &["rar", "7z", "zip"];
 
 /// Check if a path is a RAR volume file (.rar, .r00, .r01, etc.)
@@ -3227,6 +3306,9 @@ pub enum ImportSkipReason {
     UnresolvedIdentity,
     UnparseableEpisode,
     NoVideoFiles,
+    /// No video, and the only payload is executables (helpers aside): the
+    /// grab delivered a program, not media.
+    UnwantedExecutables,
     DownloadInProgress,
     DiskFull,
     PermissionDenied,
@@ -3245,6 +3327,7 @@ impl ImportSkipReason {
             Self::UnresolvedIdentity => "unresolved_identity",
             Self::UnparseableEpisode => "unparseable_episode",
             Self::NoVideoFiles => "no_video_files",
+            Self::UnwantedExecutables => "unwanted_executables",
             Self::DownloadInProgress => "download_in_progress",
             Self::DiskFull => "disk_full",
             Self::PermissionDenied => "permission_denied",

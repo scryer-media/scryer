@@ -1127,14 +1127,28 @@ async fn resolve_completed_import_target(
         .await;
 
     if video_files.is_empty() {
+        // A download whose only payload is executables is a bad grab, not a
+        // download awaiting review; everything else keeps the no-video path.
+        let unwanted_executable =
+            unwanted_executable_in_download(dest_dir, extracted_dir.as_deref());
         if let Some(ref dir) = extracted_dir {
             crate::archive_extractor::abandon_extracted_dir(dir).await;
         }
+        let (skip_reason, error_message) = match unwanted_executable {
+            Some(executable) => (
+                ImportSkipReason::UnwantedExecutables,
+                unwanted_executable_message(&executable),
+            ),
+            None => (
+                ImportSkipReason::NoVideoFiles,
+                format!("no video files found in {}", completed.dest_dir),
+            ),
+        };
         let result = ImportResult {
             decision: ImportDecision::Skipped,
-            skip_reason: Some(ImportSkipReason::NoVideoFiles),
+            skip_reason: Some(skip_reason),
             title_id: Some(title.id.clone()),
-            error_message: Some(format!("no video files found in {}", completed.dest_dir)),
+            error_message: Some(error_message),
             release_burned: false,
             ..base_completed_import_result(import_id, completed, release_evidence, started_at)
         };

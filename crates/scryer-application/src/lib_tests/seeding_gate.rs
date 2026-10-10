@@ -5626,6 +5626,7 @@ async fn nzbget_script_failure_defers_history_until_verified_payload_cleanup() {
             release_title: tracked.source_title.clone().unwrap(),
             reason: "post-processing script failed".into(),
             remove_from_client_if_configured: true,
+            blocklist_reason: None,
             skip_reacquire: true,
         },
     )

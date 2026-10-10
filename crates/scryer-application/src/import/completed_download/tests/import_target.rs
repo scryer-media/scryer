@@ -161,6 +161,116 @@ async fn assert_lands_in(import_repo: &TestImportRepo, expected_title_id: &str) 
     result
 }
 
+const UNWANTED_EXECUTABLE: &str = "Fixture.Release.2020.1080p-GROUP.exe";
+
+/// A completed download with no video holding `files` (written empty).
+fn completed_holding(files: &[&str]) -> (tempfile::TempDir, CompletedDownload) {
+    let (dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
+    for file in files {
+        std::fs::write(dir.path().join(file), b"fixture").expect("write fixture file");
+    }
+    (dir, completed)
+}
+
+#[tokio::test]
+async fn download_of_only_an_executable_ends_as_unwanted_executables() {
+    let import_repo = Arc::new(TestImportRepo::default());
+    let app = app_for_import(
+        Arc::new(TestDownloadSubmissionRepo::default()),
+        import_repo.clone(),
+    );
+    let (_dir, completed) =
+        completed_holding(&[UNWANTED_EXECUTABLE, "Fixture.Release.2020.1080p-GROUP.nfo"]);
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
+
+    import_with_lookup(&app, &import_actor(), &mut td, &lookup).await;
+
+    let expected = format!("unwanted executable '{UNWANTED_EXECUTABLE}' — no video files");
+    let result = import_repo
+        .last_import_result()
+        .await
+        .expect("import must record a result");
+    assert_eq!(
+        result.skip_reason,
+        Some(ImportSkipReason::UnwantedExecutables),
+        "{result:?}"
+    );
+    assert_eq!(result.error_message.as_deref(), Some(expected.as_str()));
+    assert_eq!(td.status_messages, vec![expected]);
+    assert_eq!(
+        td.no_video_import_retry, None,
+        "no no-video retry is scheduled"
+    );
+    let statuses = import_repo.status_updates.lock().await;
+    assert!(
+        statuses
+            .iter()
+            .all(|(_, status, _)| *status != ImportStatus::Pending),
+        "an unwanted executable never waits in the review queue: {statuses:?}"
+    );
+}
+
+#[tokio::test]
+async fn scryer_grab_of_only_an_executable_is_routed_to_failure_handling() {
+    let import_repo = Arc::new(TestImportRepo::default());
+    let app = app_for_import(
+        Arc::new(TestDownloadSubmissionRepo::default()),
+        import_repo.clone(),
+    );
+    let (dir, completed) =
+        completed_holding(&[UNWANTED_EXECUTABLE, "Fixture.Release.2020.1080p-GROUP.nfo"]);
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
+    td.client_item.is_scryer_origin = true;
+
+    import_with_lookup(&app, &import_actor(), &mut td, &lookup).await;
+
+    let expected = format!("unwanted executable '{UNWANTED_EXECUTABLE}' — no video files");
+    assert_eq!(td.state, TrackedDownloadState::FailedPending);
+    assert_eq!(td.status, TrackedDownloadStatus::Error);
+    assert_eq!(
+        td.client_item.attention_reason.as_deref(),
+        Some(expected.as_str())
+    );
+    assert_eq!(td.status_messages, vec![expected]);
+    assert!(
+        td.burned_by_import_gate,
+        "the failure is the import gate's, so terminal cleanup removes the files too"
+    );
+    assert_eq!(td.no_video_import_retry, None);
+    // Routing alone deletes nothing: the download's files are still on disk
+    // until terminal cleanup runs under the remove-failed setting.
+    assert!(dir.path().join(UNWANTED_EXECUTABLE).is_file());
+    let statuses = import_repo.status_updates.lock().await;
+    assert!(
+        statuses
+            .iter()
+            .all(|(_, status, _)| *status != ImportStatus::Pending),
+        "{statuses:?}"
+    );
+}
+
+#[tokio::test]
+async fn executable_beside_an_extensionless_file_keeps_the_no_video_review() {
+    let import_repo = Arc::new(TestImportRepo::default());
+    let app = app_for_import(
+        Arc::new(TestDownloadSubmissionRepo::default()),
+        import_repo.clone(),
+    );
+    let (_dir, completed) = completed_holding(&[UNWANTED_EXECUTABLE, "abcdef0123456789"]);
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
+
+    import_with_lookup(&app, &import_actor(), &mut td, &lookup).await;
+
+    assert_lands_in(&import_repo, "title-a").await;
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+}
+
 // ── A2: the tracked download's validated title is the import target ──
 
 #[tokio::test]

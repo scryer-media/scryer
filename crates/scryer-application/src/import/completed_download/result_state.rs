@@ -561,6 +561,33 @@ pub(crate) async fn apply_import_result_with_completed(
         return false;
     }
 
+    if result.skip_reason == Some(ImportSkipReason::UnwantedExecutables) {
+        // A download that holds nothing but executables is a bad posting, not
+        // a download to review. A grab of Scryer's own goes to failure
+        // handling, which blocklists the release, reopens the scope and lets
+        // terminal cleanup remove the download and its files from the client.
+        // A download Scryer did not grab stays blocked for the operator.
+        td.clear_no_video_import_retry();
+        td.clear_import_execution_retry();
+        if td.client_item.is_scryer_origin {
+            let message = result
+                .error_message
+                .clone()
+                .unwrap_or_else(|| import_result_message(&result, ImportStatus::Failed));
+            tracing::warn!(
+                id = %td.id,
+                reason = %message,
+                "import: download holds only unwanted executables; routing to failure handling"
+            );
+            td.state = TrackedDownloadState::FailedPending;
+            td.status = TrackedDownloadStatus::Error;
+            td.client_item.attention_reason = Some(message.clone());
+            td.status_messages = vec![message];
+            td.burned_by_import_gate = true;
+            return false;
+        }
+    }
+
     if result.skip_reason == Some(ImportSkipReason::NoVideoFiles) {
         match import_artifacts_for_completed_download(app, td, completed).await {
             Err(error) => {
