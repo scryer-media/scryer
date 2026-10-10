@@ -1088,6 +1088,10 @@
         "grab_quota_supported": {
           "type": "boolean",
           "default": false
+        },
+        "paged_search": {
+          "description": "The plugin answers searches one provider page at a time.\n\nA plugin that sets this promises, for every request that names a query\nor ids, that one invocation fetches at most one provider page, never\nloops over pages internally, returns at most\n[`Self::paged_response_bound`] results, honours\n[`PluginSearchRequest::page_cursor`](crate::PluginSearchRequest::page_cursor)\nand reports [`PluginSearchResponse::next_cursor`](crate::PluginSearchResponse::next_cursor).\n`PageCeilingReached` then only means the provider itself refused to page\nfurther. Requests for recent releases (no query, no ids) are outside\nthis promise: a plugin may still page its feed internally to reach\n`rss_catch_up`, and never sets a cursor on those responses.\n\nAbsent or `false` keeps the unpaged contract, and the host treats the\nplugin's responses as before SDK 3.14.",
+          "type": "boolean"
         }
       }
     },
@@ -2786,6 +2790,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "page_cursor": {
+          "description": "Where a paged search resumes: the `next_cursor` of the previous\nresponse for the same request, sent back verbatim. Opaque to the host;\nthe plugin defines its contents. Absent asks for the first page. Only\nmeaningful to a plugin that declares `paged_search` in its limit\ncapabilities; every other plugin ignores it.",
+          "type": [
+            "string",
+            "null"
           ]
         }
       },
@@ -6200,6 +6211,13 @@
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "next_cursor": {
+          "description": "From a plugin that declares `paged_search`: `Some` when the provider\nhas more pages for this request, to be passed back as\n`page_cursor` to read the next one; `None` on a successful response\nwhen the provider is exhausted for this query. A paged response holds\nat most `IndexerLimitCapabilities::paged_response_bound` results. A\npaged plugin that fails mid-page returns the partial page through\n`IndexerSearchPluginError::PartialResults` with this unset, and the\nhost replays that page. Plugins without `paged_search` never set it.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

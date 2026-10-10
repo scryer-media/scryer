@@ -7145,6 +7145,10 @@ pub struct IndexerLimitCapabilities {
     pub api_quota_supported: bool,
     #[serde(default)]
     pub grab_quota_supported: bool,
+    /// The plugin answers searches one provider page at a time and resumes
+    /// from a cursor it returns.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paged_search: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
