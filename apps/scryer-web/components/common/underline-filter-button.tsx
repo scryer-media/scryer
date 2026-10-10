@@ -15,6 +15,8 @@ type UnderlineFilterButtonProps = Omit<
   icon?: React.ReactNode;
   label: string;
   count?: number;
+  /** A short tag after the label, such as one marking the tab as advanced. */
+  badge?: string;
   tone?: UnderlineFilterButtonTone;
 };
 
@@ -27,13 +29,14 @@ export const UnderlineFilterButton = React.forwardRef<
     icon,
     label,
     count,
+    badge,
     tone = "neutral",
     className,
     ...buttonProps
   },
   ref,
 ) {
-  const ariaLabel = buttonProps["aria-label"] ?? label;
+  const ariaLabel = buttonProps["aria-label"] ?? (badge ? `${label} (${badge})` : label);
   const ariaPressed = buttonProps["aria-pressed"] ?? selected;
 
   return (
@@ -70,6 +73,11 @@ export const UnderlineFilterButton = React.forwardRef<
         </span>
       ) : null}
       <span className="whitespace-nowrap">{label}</span>
+      {badge ? (
+        <span className="rounded-[6px] border border-[var(--scry-border2)] px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-[0.06em] text-[var(--scry-muted2)]">
+          {badge}
+        </span>
+      ) : null}
       {typeof count === "number" ? (
         <span
           className={cn(

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useClient } from "urql";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -27,7 +28,10 @@ export function ProviderAppsPanel() {
   }, [client, retry, t]);
   return (
     <section id="lists-provider-apps" className="space-y-4">
-      <h2 className="text-lg font-semibold">{t("lists.providerApps.heading")}</h2>
+      <div className="flex items-center gap-2.5">
+        <h2 className="text-lg font-semibold">{t("lists.providerApps.heading")}</h2>
+        <Badge tone="outline">{t("label.advanced")}</Badge>
+      </div>
       <p className="text-sm text-muted-foreground">{t("lists.providerApps.copy")}</p>
       <p className="text-sm text-muted-foreground">{t("lists.providerApps.simklDefault")}</p>
       {error ? <div role="alert"><p>{error}</p><Button onClick={() => setRetry((value) => value + 1)}>{t("lists.action.retry")}</Button></div> : null}

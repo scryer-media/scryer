@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 const TONE_CLASS: Record<ListTone, string> = {
   positive: "bg-[var(--scry-success-solid)]",
   info: "bg-[var(--scry-info-solid)]",
+  accent: "bg-[var(--scry-accent)]",
   warning: "bg-[var(--scry-warning-solid)]",
   negative: "bg-[var(--scry-danger-solid)]",
   neutral: "bg-[var(--scry-muted2)]",
@@ -22,7 +23,7 @@ const TONE_CLASS: Record<ListTone, string> = {
 };
 
 /** The second state of a tone is drawn lighter so neighbours in the bar stay apart. */
-const LIGHTER: ReadonlySet<ListCoverageSegmentKey> = new Set(["added", "held", "filtered"]);
+const LIGHTER: ReadonlySet<ListCoverageSegmentKey> = new Set(["held", "filtered"]);
 
 function segmentClass(key: ListCoverageSegmentKey): string {
   return cn(TONE_CLASS[listCoverageSegmentTone(key)], LIGHTER.has(key) && "opacity-60");

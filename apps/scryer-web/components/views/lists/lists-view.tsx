@@ -218,7 +218,7 @@ export function ListsView(props: ListsViewProps) {
               <UnderlineFilterButton id="lists-tab-personal" role="tab" aria-selected={section === "personal"} selected={section === "personal"} label={t("lists.tab.personal")} count={section === "personal" ? subscriptions.length : undefined} onClick={() => onSectionChange("personal")} />
             ) : null}
             {props.experimentalFeaturesEnabled && props.canManageProviderApps ? (
-              <UnderlineFilterButton id="lists-tab-provider-apps" role="tab" aria-selected={section === "providerApps"} selected={section === "providerApps"} label={t("lists.providerApps.heading")} onClick={() => onSectionChange("providerApps")} />
+              <UnderlineFilterButton id="lists-tab-provider-apps" role="tab" aria-selected={section === "providerApps"} selected={section === "providerApps"} label={t("lists.providerApps.heading")} badge={t("label.advanced")} onClick={() => onSectionChange("providerApps")} />
             ) : null}
             {canManageLists ? (
               <UnderlineFilterButton

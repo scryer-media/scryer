@@ -18,6 +18,8 @@ const badgeVariants = cva(
           "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
         info:
           "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+        accent:
+          "border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-accent-text)]",
         outline: "border-border text-foreground",
       },
     },

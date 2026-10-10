@@ -29,7 +29,7 @@ import { facetById } from "../facets/registry.ts";
 import { getPluginLogoSources } from "./plugin-logos.ts";
 import { ratingSourceInfo } from "./title-ratings.ts";
 
-export type ListTone = "neutral" | "positive" | "warning" | "negative" | "info" | "outline";
+export type ListTone = "neutral" | "positive" | "warning" | "negative" | "info" | "accent" | "outline";
 
 export function listMembershipTitleHref(kind: Facet, titleId: string | null, seriesMovieLinkId?: string | null): string | null {
   const facet = facetById(kind);
@@ -114,8 +114,9 @@ export function listMembershipStateLabelKey(state: ListMembershipState): string 
 export function listMembershipStateTone(state: ListMembershipState): ListTone {
   switch (state) {
     case "IN_LIBRARY":
-    case "ADDED":
       return "positive";
+    case "ADDED":
+      return "accent";
     case "REQUESTED":
     case "HELD":
     case "PENDING":
