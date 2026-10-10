@@ -3,6 +3,8 @@
  * `public/`. Kept free of React so plain `.ts` code and node tests can use it.
  */
 
+import { normalizedRatingSource, ratingSourceInfo } from "./title-ratings.ts";
+
 const PLUGIN_LOGO_BASE_PATH = "/plugin-logos";
 
 const PLUGIN_LOGO_SVG_SLUGS = [
@@ -183,6 +185,14 @@ export function getPluginLogoSources(
 ): PluginLogoSources | null {
   const slug = resolvePluginLogoSlug(identity);
   if (!slug) {
+    for (const value of [identity.providerType, identity.id, identity.name]) {
+      if (!value?.trim()) continue;
+      for (const candidate of candidateVariants(value)) {
+        const provider = candidate.replace(/-list$/, "");
+        const src = ratingSourceInfo(provider).logoSrc;
+        if (src) return { slug: normalizedRatingSource(provider), src };
+      }
+    }
     return null;
   }
 
