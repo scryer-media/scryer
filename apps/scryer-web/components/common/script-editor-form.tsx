@@ -3,6 +3,7 @@ import { FolderOpen } from "lucide-react";
 
 import { FacetSelect } from "@/components/common/facet-select";
 import { InfoHelp } from "@/components/common/info-help";
+import { LabeledFieldset } from "@/components/common/labeled-fieldset";
 import { LazyCodeEditor, type CodeEditorLanguage } from "@/components/common/lazy-code-editor";
 import { ScriptScheduleEditor } from "@/components/common/script-schedule-editor";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
@@ -22,11 +23,6 @@ import {
   type ScriptTriggerValue,
 } from "@/lib/types/scripts";
 import { defaultScriptSchedule } from "@/lib/utils/script-schedule";
-
-// A bordered group whose label names everything inside it.
-const SCRIPT_EDITOR_BOX_CLASS = "min-w-0 space-y-3 rounded-lg border border-border px-3 pb-3";
-// Sits in the box's top border, its text level with the fields below.
-const SCRIPT_EDITOR_BOX_LEGEND_CLASS = "-ml-1.5 px-1.5 text-sm leading-none font-medium";
 
 function editorLanguageFor(language: ScriptLanguageValue): CodeEditorLanguage {
   return language === "SHELL" ? "shell" : "plain";
@@ -224,8 +220,7 @@ export function ScriptEditorForm({
       </div>
 
       {isScheduled ? (
-        <fieldset id="script-editor-schedule" className={SCRIPT_EDITOR_BOX_CLASS}>
-          <legend className={SCRIPT_EDITOR_BOX_LEGEND_CLASS}>{t("script.editor.schedule")}</legend>
+        <LabeledFieldset id="script-editor-schedule" label={t("script.editor.schedule")}>
           <ScriptScheduleEditor
             value={draft.schedule ?? defaultScriptSchedule()}
             onChange={(schedule) => setDraft((prev) => ({ ...prev, schedule }))}
@@ -234,7 +229,7 @@ export function ScriptEditorForm({
               setDraft((prev) => ({ ...prev, runOnStartup }))
             }
           />
-        </fieldset>
+        </LabeledFieldset>
       ) : (
         /* Facets */
         <div>
@@ -251,8 +246,7 @@ export function ScriptEditorForm({
       )}
 
       {/* Execution Mode */}
-      <fieldset className={SCRIPT_EDITOR_BOX_CLASS}>
-        <legend className={SCRIPT_EDITOR_BOX_LEGEND_CLASS}>{t("settings.pp.executionMode")}</legend>
+      <LabeledFieldset label={t("settings.pp.executionMode")}>
         <RadioGroup
           id="script-editor-execution-mode"
           value={draft.executionMode}
@@ -318,7 +312,7 @@ export function ScriptEditorForm({
             )}
           </div>
         ) : null}
-      </fieldset>
+      </LabeledFieldset>
 
       <div className="flex flex-wrap gap-x-6 gap-y-2">
         {/* Enabled (scheduled jobs; post-processing scripts toggle from their table) */}

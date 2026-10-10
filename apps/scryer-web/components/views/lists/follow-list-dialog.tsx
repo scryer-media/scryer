@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Eye, ListPlus } from "lucide-react";
 
+import { LabeledFieldset } from "@/components/common/labeled-fieldset";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Button } from "@/components/ui/button";
 import { CheckboxField } from "@/components/ui/checkbox";
@@ -79,7 +80,6 @@ type FollowListDialogProps = {
   onUpdate: (id: string, draft: ListSubscriptionDraft) => Promise<boolean>;
 };
 
-const SECTION_HEADING = "text-[13px] font-semibold uppercase tracking-[0.06em] text-[var(--scry-muted)]";
 const ID = "follow-list";
 
 function initialDraft(target: FollowListTarget, routeOptions: ListRouteOptions, user: AuthUser | null): ListSubscriptionDraft {
@@ -233,8 +233,7 @@ function FollowListDialogBody({
 
       <div className="space-y-6 p-5 sm:p-6">
         {source && !source.fixedParams && paramDefinitions.length > 0 ? (
-          <section className="space-y-3">
-            <h3 className={SECTION_HEADING}>{t("lists.follow.sourceHeading")}</h3>
+          <LabeledFieldset label={t("lists.follow.sourceHeading")}>
             <div className="grid gap-3 sm:grid-cols-2">
               {paramDefinitions.map((definition) => {
                 const value = source.params.find((param) => param.key === definition.key)?.value ?? "";
@@ -271,36 +270,33 @@ function FollowListDialogBody({
                 );
               })}
             </div>
-          </section>
+          </LabeledFieldset>
         ) : null}
 
-        <section className="space-y-3">
-          <label className="block space-y-1.5" htmlFor={`${ID}-name`}>
-            <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.name")}</span>
-            <Input
-              id={`${ID}-name`}
-              value={draft.name}
-              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-            />
-          </label>
-          <div className="space-y-2">
-            <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.kinds")}</span>
-            <div className="flex flex-wrap gap-x-6 gap-y-2">
-              {offeredKinds.map((kind) => (
-                <CheckboxField
-                  key={kind}
-                  id={`${ID}-kind-${kind.toLowerCase()}`}
-                  label={t(listKindLabelKey(kind))}
-                  checked={draft.kinds.includes(kind)}
-                  onCheckedChange={(checked) => toggleKind(kind, checked === true)}
-                />
-              ))}
-            </div>
-          </div>
-        </section>
+        <label className="block space-y-1.5" htmlFor={`${ID}-name`}>
+          <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.name")}</span>
+          <Input
+            id={`${ID}-name`}
+            value={draft.name}
+            onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+          />
+        </label>
 
-        <section className="space-y-3">
-          <h3 className={SECTION_HEADING}>{t("lists.follow.modeHeading")}</h3>
+        <LabeledFieldset label={t("lists.follow.kinds")}>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {offeredKinds.map((kind) => (
+              <CheckboxField
+                key={kind}
+                id={`${ID}-kind-${kind.toLowerCase()}`}
+                label={t(listKindLabelKey(kind))}
+                checked={draft.kinds.includes(kind)}
+                onCheckedChange={(checked) => toggleKind(kind, checked === true)}
+              />
+            ))}
+          </div>
+        </LabeledFieldset>
+
+        <LabeledFieldset label={t("lists.follow.modeHeading")}>
           <RadioGroup
             value={draft.mode}
             onValueChange={(mode) => setDraft((current) => ({ ...current, mode: mode as ListMode }))}
@@ -334,11 +330,11 @@ function FollowListDialogBody({
               );
             })}
           </RadioGroup>
-        </section>
+        </LabeledFieldset>
 
         {draft.kinds.length > 0 ? (
-          <section className="space-y-3">
-            <h3 className={SECTION_HEADING}>{t("lists.follow.routesHeading")}</h3>
+          // Each card's own header says what it routes, so the group needs no visible heading.
+          <section className="space-y-3" aria-label={t("lists.follow.routesHeading")}>
             {draft.kinds.map((kind) => {
               const route =
                 draft.routes.find((entry) => entry.kind === kind) ??
@@ -376,17 +372,15 @@ function FollowListDialogBody({
           </section>
         ) : null}
 
-        <section className="space-y-3">
-          <h3 className={SECTION_HEADING}>{t("lists.follow.filtersHeading")}</h3>
+        <LabeledFieldset label={t("lists.follow.filtersHeading")}>
           <ListFiltersFields
             filters={draft.filters}
             idPrefix={ID}
             onChange={(filters) => setDraft((current) => ({ ...current, filters }))}
           />
-        </section>
+        </LabeledFieldset>
 
-        <section className="space-y-3">
-          <h3 className={SECTION_HEADING}>{t("lists.follow.syncHeading")}</h3>
+        <LabeledFieldset label={t("lists.follow.syncHeading")}>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5" htmlFor={`${ID}-max-per-sync`}>
               <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.maxPerSync")}</span>
@@ -411,12 +405,12 @@ function FollowListDialogBody({
               }
             />
           </div>
-        </section>
+        </LabeledFieldset>
 
         {source || target.kind === "edit" ? (
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <h3 className={SECTION_HEADING}>{t("lists.preview.heading")}</h3>
+              <h3 className="text-sm font-medium">{t("lists.preview.heading")}</h3>
               <Button
                 id={`${ID}-preview-button`}
                 type="button"
