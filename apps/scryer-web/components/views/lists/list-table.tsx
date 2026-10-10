@@ -1,6 +1,7 @@
-import { Power, PowerOff, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   Table,
@@ -54,6 +55,7 @@ export function ListTable({
           <TableHead>{t("lists.table.list")}</TableHead>
           <TableHead className="hidden md:table-cell">{t("lists.table.coverage")}</TableHead>
           <TableHead className="hidden sm:table-cell">{t("lists.table.mode")}</TableHead>
+          {canManageLists ? <TableHead className="w-[1%] text-center">{t("label.enabled")}</TableHead> : null}
           <TableHead>{t("lists.table.lastSync")}</TableHead>
           {canManageLists ? <TableHead className="w-[1%] text-right">{t("label.actions")}</TableHead> : null}
         </TableRow>
@@ -96,7 +98,7 @@ export function ListTable({
                   </div>
                 </div>
               </TableCell>
-              <TableCell className="hidden min-w-[160px] md:table-cell">
+              <TableCell className="hidden w-36 md:table-cell">
                 <ListCoverageBar counts={subscription.counts} />
                 <p className="mt-1 text-[11.5px] text-[var(--scry-muted)]">
                   {t("lists.table.coverageSummary", {
@@ -108,6 +110,18 @@ export function ListTable({
               <TableCell className="hidden sm:table-cell">
                 <span className="text-[13px] text-[var(--scry-ink2)]">{t(listModeLabelKey(subscription.mode))}</span>
               </TableCell>
+              {canManageLists ? (
+                <TableCell className="text-center" onClick={(event) => event.stopPropagation()}>
+                  <Checkbox
+                    id={`list-enabled-${subscription.id}`}
+                    size="large"
+                    checked={subscription.enabled}
+                    disabled={busy}
+                    aria-label={`${t("label.enabled")}: ${subscription.name}`}
+                    onCheckedChange={(checked) => onSetEnabled(subscription, checked === true)}
+                  />
+                </TableCell>
+              ) : null}
               <TableCell>
                 <div className="flex flex-col items-start gap-1">
                   <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state))}</Badge>
@@ -134,16 +148,6 @@ export function ListTable({
                       onClick={() => onSyncNow(subscription)}
                     >
                       <RefreshCw className="h-4 w-4" />
-                    </IconButton>
-                    <IconButton
-                      id={`list-enabled-${subscription.id}`}
-                      label={subscription.enabled ? t("label.disable") : t("label.enable")}
-                      tone={subscription.enabled ? "enabled" : "disabled"}
-                      aria-pressed={subscription.enabled}
-                      disabled={busy}
-                      onClick={() => onSetEnabled(subscription, !subscription.enabled)}
-                    >
-                      {subscription.enabled ? <Power className="h-4 w-4" /> : <PowerOff className="h-4 w-4" />}
                     </IconButton>
                   </div>
                 </TableCell>
