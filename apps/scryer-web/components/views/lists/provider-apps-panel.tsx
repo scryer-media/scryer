@@ -68,13 +68,20 @@ function ProviderAppForm({ app, onSaved }: { app: ListProviderApp; onSaved: (app
   return (
     <form onSubmit={(event) => void submit(event)} className="space-y-3 rounded-xl border p-4">
       <h3 className="font-semibold">{app.provider === "mal" ? "MyAnimeList" : app.provider === "anilist" ? "AniList" : "Trakt"}</h3>
-      <div className="flex items-center gap-2"><Switch id={`provider-app-${app.provider}-enabled`} checked={enabled} onCheckedChange={setEnabled} /><label htmlFor={`provider-app-${app.provider}-enabled`}>{t("lists.providerApps.useOwn")}</label></div>
+      <div className="flex items-center gap-2"><Switch id={`provider-app-${app.provider}-enabled`} checked={enabled} aria-expanded={enabled} aria-controls={enabled ? `provider-app-${app.provider}-fields` : undefined} onCheckedChange={setEnabled} /><label htmlFor={`provider-app-${app.provider}-enabled`}>{t("lists.providerApps.useOwn")}</label></div>
+      {/* The app's details are only asked for once the instance is to use its own app. */}
+      {enabled ? (
+        <div id={`provider-app-${app.provider}-fields`} className="space-y-3">
       <label className="block space-y-1"><span>{t("lists.providerApps.clientId")}</span><Input value={clientId} autoComplete="off" onChange={(event) => setClientId(event.target.value)} /></label>
       <label className="block space-y-1"><span>{t("lists.providerApps.clientSecret")}</span><Input type="password" value={clientSecret} autoComplete="new-password" placeholder={app.clientSecretSet ? t("lists.providerSettings.secretPlaceholder") : undefined} onChange={(event) => setClientSecret(event.target.value)} />{app.provider === "trakt" ? <span className="block text-sm text-muted-foreground">{t("lists.providerApps.traktSecretHint")}</span> : null}</label>
       <label className="block space-y-1"><span>{t("lists.providerApps.redirectUri")}</span><Input value={redirectUri} inputMode="url" autoComplete="off" onChange={(event) => setRedirectUri(event.target.value)} /></label>
       <p className="text-sm text-muted-foreground">{t("lists.providerApps.redirectHelp")}</p>
       <code className="block select-all break-all text-sm">{callbackUri}</code>
-      <Button type="submit" disabled={saving || (enabled && (!clientId.trim() || !redirectUri.trim()))}>{t("label.save")}</Button>
+        </div>
+      ) : null}
+      {enabled || app.enabled ? (
+        <Button type="submit" disabled={saving || (enabled && (!clientId.trim() || !redirectUri.trim()))}>{t("label.save")}</Button>
+      ) : null}
     </form>
   );
 }
