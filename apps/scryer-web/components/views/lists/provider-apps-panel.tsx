@@ -11,6 +11,8 @@ import { listProviderAppsQuery, updateListProviderAppMutation } from "@/lib/grap
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import type { ListProviderApp } from "@/lib/types/lists";
 
+import { ProviderTile } from "./provider-tile";
+
 export function ProviderAppsPanel({ onChanged }: { onChanged?: () => void }) {
   const client = useClient();
   const t = useTranslate();
@@ -53,6 +55,7 @@ function ProviderAppForm({ app, onSaved }: { app: ListProviderApp; onSaved: (app
   const [redirectUri, setRedirectUri] = React.useState(app.redirectUri ?? callbackUri);
   const [enabled, setEnabled] = React.useState(app.enabled);
   const [saving, setSaving] = React.useState(false);
+  const name = app.provider === "mal" ? "MyAnimeList" : app.provider === "anilist" ? "AniList" : "Trakt";
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
@@ -67,7 +70,10 @@ function ProviderAppForm({ app, onSaved }: { app: ListProviderApp; onSaved: (app
   };
   return (
     <form onSubmit={(event) => void submit(event)} className="space-y-3 rounded-xl border p-4">
-      <h3 className="font-semibold">{app.provider === "mal" ? "MyAnimeList" : app.provider === "anilist" ? "AniList" : "Trakt"}</h3>
+      <div className="flex items-center gap-3">
+        <ProviderTile provider={{ providerType: app.provider, name, tile: null }} />
+        <h3 className="font-semibold">{name}</h3>
+      </div>
       <div className="flex items-center gap-2"><Switch id={`provider-app-${app.provider}-enabled`} checked={enabled} aria-expanded={enabled} aria-controls={enabled ? `provider-app-${app.provider}-fields` : undefined} onCheckedChange={setEnabled} /><label htmlFor={`provider-app-${app.provider}-enabled`}>{t("lists.providerApps.useOwn")}</label></div>
       {/* The app's details are only asked for once the instance is to use its own app. */}
       {enabled ? (
