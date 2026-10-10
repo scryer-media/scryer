@@ -1102,6 +1102,59 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
   return (
     <>
       <div className="space-y-4 text-sm">
+        <section id="jobs-custom" className={JOBS_PANEL_CLASS}>
+          <div className={`${JOBS_PANEL_HEADER_CLASS} flex items-center justify-between gap-3`}>
+            <div className="min-w-0">
+              <h2 className={JOBS_PANEL_TITLE_CLASS}>{t("jobs.custom.title")}</h2>
+              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{t("jobs.custom.description")}</p>
+            </div>
+            <Button
+              id="jobs-custom-add"
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={customJobEditor.onAdd}
+            >
+              <Plus className="h-4 w-4" />
+              {t("jobs.custom.add")}
+            </Button>
+          </div>
+          {customJobRows.length === 0 ? (
+            <p id="jobs-custom-empty" className={`p-4 text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
+              {t("jobs.custom.empty")}
+            </p>
+          ) : (
+            <>
+              <div className="space-y-3 p-4 sm:p-5 md:hidden">{renderCustomMobileCards()}</div>
+              <div className="hidden overflow-x-auto md:block">
+                <Table className="min-w-[70rem] table-fixed">
+                  <TableHeader>
+                    <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
+                      <TableHead className={`w-[16rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.name")}
+                      </TableHead>
+                      <TableHead className={`w-[12rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.schedule")}
+                      </TableHead>
+                      <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.nextRun")}
+                      </TableHead>
+                      <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.lastRun")}
+                      </TableHead>
+                      <TableHead className={`w-[7.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.column.status")}
+                      </TableHead>
+                      <TableHead className="w-[13rem]" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>{renderCustomRows()}</TableBody>
+                </Table>
+              </div>
+            </>
+          )}
+        </section>
+
         <section className={JOBS_PANEL_CLASS}>
           <div className={JOBS_PANEL_HEADER_CLASS}>
             <h2 className={JOBS_PANEL_TITLE_CLASS}>{t("jobs.builtin.title")}</h2>
@@ -1160,59 +1213,6 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               </Table>
             </div>
           </div>
-        </section>
-
-        <section id="jobs-custom" className={JOBS_PANEL_CLASS}>
-          <div className={`${JOBS_PANEL_HEADER_CLASS} flex items-center justify-between gap-3`}>
-            <div className="min-w-0">
-              <h2 className={JOBS_PANEL_TITLE_CLASS}>{t("jobs.custom.title")}</h2>
-              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{t("jobs.custom.description")}</p>
-            </div>
-            <Button
-              id="jobs-custom-add"
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={customJobEditor.onAdd}
-            >
-              <Plus className="h-4 w-4" />
-              {t("jobs.custom.add")}
-            </Button>
-          </div>
-          {customJobRows.length === 0 ? (
-            <p id="jobs-custom-empty" className={`p-4 text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
-              {t("jobs.custom.empty")}
-            </p>
-          ) : (
-            <>
-              <div className="space-y-3 p-4 sm:p-5 md:hidden">{renderCustomMobileCards()}</div>
-              <div className="hidden overflow-x-auto md:block">
-                <Table className="min-w-[70rem] table-fixed">
-                  <TableHeader>
-                    <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
-                      <TableHead className={`w-[16rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                        {t("jobs.column.name")}
-                      </TableHead>
-                      <TableHead className={`w-[12rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                        {t("jobs.column.schedule")}
-                      </TableHead>
-                      <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                        {t("jobs.column.nextRun")}
-                      </TableHead>
-                      <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                        {t("jobs.column.lastRun")}
-                      </TableHead>
-                      <TableHead className={`w-[7.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
-                        {t("jobs.column.status")}
-                      </TableHead>
-                      <TableHead className="w-[13rem]" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>{renderCustomRows()}</TableBody>
-                </Table>
-              </div>
-            </>
-          )}
         </section>
       </div>
 
