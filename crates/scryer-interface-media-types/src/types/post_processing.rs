@@ -7,7 +7,7 @@ use scryer_domain::{ScheduleWeekday, ScriptLanguage, ScriptSchedule, ScriptTrigg
 
 /// Language an inline script is written in; selects its interpreter.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(name = "ScriptLanguage", rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ScriptLanguageValue {
     /// Shell script.
     Shell,
@@ -48,7 +48,7 @@ impl From<ScriptLanguageValue> for ScriptLanguage {
 
 /// What starts a script.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(name = "ScriptTrigger", rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ScriptTriggerValue {
     /// The import pipeline, after a file lands in the library.
     PostImport,
@@ -76,7 +76,7 @@ impl From<ScriptTriggerValue> for ScriptTrigger {
 
 /// Shape of a script schedule.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(name = "ScriptScheduleKind", rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ScriptScheduleKindValue {
     /// Runs only when started by hand.
     Manual,
@@ -92,7 +92,7 @@ pub enum ScriptScheduleKindValue {
 
 /// Day of the week for weekly schedules.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(name = "ScheduleWeekday", rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ScheduleWeekdayValue {
     /// Monday.
     Monday,

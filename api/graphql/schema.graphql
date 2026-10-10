@@ -2406,11 +2406,11 @@ input CreatePostProcessingScriptInput {
 	"""
 	Language of inline script content, or null for `SHELL`.
 	"""
-	language: ScriptLanguage
+	language: ScriptLanguageValue
 	"""
 	What starts the script, or null for `POST_IMPORT`.
 	"""
-	trigger: ScriptTrigger
+	trigger: ScriptTriggerValue
 	"""
 	Schedule, required when the trigger is `SCHEDULE`.
 	"""
@@ -21914,11 +21914,11 @@ type PostProcessingScriptPayload {
 	"""
 	Language of inline script content.
 	"""
-	language: ScriptLanguage!
+	language: ScriptLanguageValue!
 	"""
 	What starts the script.
 	"""
-	trigger: ScriptTrigger!
+	trigger: ScriptTriggerValue!
 	"""
 	Schedule of a scheduled script, or null for import-triggered scripts.
 	"""
@@ -24230,7 +24230,7 @@ type QueryRoot {
 		"""
 		Only return scripts started by this trigger; null returns every script.
 		"""
-		trigger: ScriptTrigger
+		trigger: ScriptTriggerValue
 	): [PostProcessingScriptPayload!]!
 	"""
 	Check a script schedule before saving it and preview its next three fire times.
@@ -26736,7 +26736,7 @@ input ScanLibraryInput {
 """
 Day of the week for weekly schedules.
 """
-enum ScheduleWeekday {
+enum ScheduleWeekdayValue {
 	"""
 	Monday.
 	"""
@@ -26915,7 +26915,7 @@ type ScriptInterpreterSettingsPayload {
 """
 Language an inline script is written in; selects its interpreter.
 """
-enum ScriptLanguage {
+enum ScriptLanguageValue {
 	"""
 	Shell script.
 	"""
@@ -26945,7 +26945,7 @@ input ScriptScheduleInput {
 	"""
 	Schedule shape.
 	"""
-	kind: ScriptScheduleKind!
+	kind: ScriptScheduleKindValue!
 	"""
 	Interval length in seconds, at least 60. Required for `INTERVAL`.
 	"""
@@ -26957,7 +26957,7 @@ input ScriptScheduleInput {
 	"""
 	Days to run on. Required for `WEEKLY`.
 	"""
-	days: [ScheduleWeekday!]
+	days: [ScheduleWeekdayValue!]
 	"""
 	Five-field crontab expression in host-local time. Required for `CRON`.
 	"""
@@ -26967,7 +26967,7 @@ input ScriptScheduleInput {
 """
 Shape of a script schedule.
 """
-enum ScriptScheduleKind {
+enum ScriptScheduleKindValue {
 	"""
 	Runs only when started by hand.
 	"""
@@ -26997,7 +26997,7 @@ type ScriptSchedulePayload {
 	"""
 	Schedule shape.
 	"""
-	kind: ScriptScheduleKind!
+	kind: ScriptScheduleKindValue!
 	"""
 	Interval length in seconds, for `INTERVAL`.
 	"""
@@ -27009,7 +27009,7 @@ type ScriptSchedulePayload {
 	"""
 	Days to run on, for `WEEKLY`.
 	"""
-	days: [ScheduleWeekday!]
+	days: [ScheduleWeekdayValue!]
 	"""
 	Crontab expression, for `CRON`.
 	"""
@@ -27041,7 +27041,7 @@ type ScriptScheduleValidationPayload {
 """
 What starts a script.
 """
-enum ScriptTrigger {
+enum ScriptTriggerValue {
 	"""
 	The import pipeline, after a file lands in the library.
 	"""
@@ -32048,13 +32048,13 @@ input UpdatePostProcessingScriptInput {
 	"""
 	Replacement inline script language, or null to leave unchanged.
 	"""
-	language: ScriptLanguage
+	language: ScriptLanguageValue
 	"""
 	The trigger is fixed when a script is created. Omit this field, or
 	pass the stored trigger; any other value is rejected with a validation
 	error.
 	"""
-	trigger: ScriptTrigger
+	trigger: ScriptTriggerValue
 	"""
 	Replacement schedule, or null to leave unchanged.
 	"""

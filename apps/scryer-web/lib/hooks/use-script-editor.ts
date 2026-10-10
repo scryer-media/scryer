@@ -18,8 +18,8 @@ import type {
   PostProcessingScript,
   PostProcessingScriptDraft,
   PostProcessingScriptRun,
-  ScriptLanguage,
-  ScriptTrigger,
+  ScriptLanguageValue,
+  ScriptTriggerValue,
 } from "@/lib/types/scripts";
 import {
   defaultScriptSchedule,
@@ -27,9 +27,9 @@ import {
   toScriptScheduleInput,
 } from "@/lib/utils/script-schedule";
 
-const LANGUAGES: readonly ScriptLanguage[] = ["SHELL", "PYTHON", "POWERSHELL", "BATCH", "GO"];
+const LANGUAGES: readonly ScriptLanguageValue[] = ["SHELL", "PYTHON", "POWERSHELL", "BATCH", "GO"];
 
-function initialDraft(trigger: ScriptTrigger): PostProcessingScriptDraft {
+function initialDraft(trigger: ScriptTriggerValue): PostProcessingScriptDraft {
   return {
     name: "",
     description: "",
@@ -124,7 +124,7 @@ type PendingInlineShellAction =
  * edit, enable or disable, and delete, with the inline-shell acknowledgement
  * and the discard-changes confirmation.
  */
-export function useScriptEditor(trigger: ScriptTrigger, options: { onChanged?: () => void } = {}) {
+export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChanged?: () => void } = {}) {
   const { onChanged } = options;
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();

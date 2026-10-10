@@ -1081,10 +1081,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // payloads: public types 934->941, OBJECT 509->511, INPUT_OBJECT 235->236,
     // ENUM 178->182.
     for name in [
-        "ScriptLanguage",
-        "ScriptTrigger",
-        "ScriptScheduleKind",
-        "ScheduleWeekday",
+        "ScriptLanguageValue",
+        "ScriptTriggerValue",
+        "ScriptScheduleKindValue",
+        "ScheduleWeekdayValue",
         "ScriptScheduleInput",
         "ScriptSchedulePayload",
         "ScriptScheduleValidationPayload",

@@ -16,18 +16,18 @@ import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
 import {
   SCRIPT_LANGUAGES,
   type PostProcessingScriptDraft,
-  type ScriptLanguage,
-  type ScriptTrigger,
+  type ScriptLanguageValue,
+  type ScriptTriggerValue,
 } from "@/lib/types/scripts";
 import { defaultScriptSchedule } from "@/lib/utils/script-schedule";
 
-function editorLanguageFor(language: ScriptLanguage): CodeEditorLanguage {
+function editorLanguageFor(language: ScriptLanguageValue): CodeEditorLanguage {
   return language === "SHELL" ? "shell" : "plain";
 }
 
 type ScriptEditorFormProps = {
   /** POST_IMPORT edits a post-processing script; SCHEDULE edits a scheduled job. */
-  trigger: ScriptTrigger;
+  trigger: ScriptTriggerValue;
   formId: string;
   draft: PostProcessingScriptDraft;
   setDraft: React.Dispatch<React.SetStateAction<PostProcessingScriptDraft>>;
@@ -157,7 +157,7 @@ export function ScriptEditorForm({
         description={t("script.editor.languageHelp")}
         value={draft.language}
         onValueChange={(language) =>
-          setDraft((prev) => ({ ...prev, language: language as ScriptLanguage }))
+          setDraft((prev) => ({ ...prev, language: language as ScriptLanguageValue }))
         }
         options={SCRIPT_LANGUAGES.map((language) => ({
           value: language,
