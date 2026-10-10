@@ -149,7 +149,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       if (result.error) throw result.error;
       setManagedAccount((current) => current?.id === account.id ? result.data?.listAccount ?? null : current);
     } catch (error) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     } finally { setAccountLoading(false); }
   };
 
@@ -163,7 +163,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       setGlobalStatus(t("lists.accounts.unlinked"));
       return true;
     } catch (error) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
       return false;
     } finally { markBusy(account.id, false); }
   };
@@ -202,6 +202,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
           setRouteOptions({ libraries: [], qualityProfiles: [] });
           setGlobalStatus(
             userFacingGraphQlErrorMessage(optionsResult.error, t("status.failedToLoad")),
+            { level: "ERROR" },
           );
           return;
         }
@@ -232,7 +233,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       if (result.error) throw result.error;
       setExclusions((result.data?.listExclusions ?? []) as ListExclusion[]);
     } catch (error) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     } finally {
       setExclusionsLoading(false);
     }
@@ -247,7 +248,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       if (result.error) throw result.error;
       setProviderSettings((result.data?.listProviderSettings ?? []) as ListProviderSettings[]);
     } catch (error) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     }
   }, [canManageLists, client, setGlobalStatus, t]);
 
@@ -283,7 +284,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         setGlobalStatus(t("lists.providerSettings.saved"));
         return true;
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
         return false;
       }
     },
@@ -300,7 +301,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
     try {
       await loadSubscriptions();
     } catch (error) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
     }
   }, [loadSubscriptions, setGlobalStatus, t]);
 
@@ -390,7 +391,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         if (result.error) throw result.error;
         return (result.data?.[field] ?? null) as ListPreview | null;
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("lists.preview.failed")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("lists.preview.failed")), { level: "ERROR" });
         return null;
       }
     },
@@ -444,7 +445,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         await refreshAfterChange();
         return true;
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
         return false;
       }
     },
@@ -464,7 +465,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         if (detail?.id === id) void loadDetail(id, detail.membershipOffset);
         return true;
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
         return false;
       } finally {
         markBusy(id, false);
@@ -485,7 +486,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
           .toPromise();
         if (result.error) throw result.error;
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
       } finally {
         markBusy(subscription.id, false);
         await refreshAfterChange();
@@ -612,7 +613,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         setGlobalStatus(t("lists.status.syncQueued", { name: subscription.name }));
         watchSync([subscription]);
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
       } finally {
         markBusy(subscription.id, false);
       }
@@ -628,7 +629,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       const queuedIds = new Set<string>(result.data?.syncAllLists?.subscriptionIds ?? []);
       watchSync(subscriptions.filter((subscription) => queuedIds.has(subscription.id)));
     } catch (error) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
     }
   }, [client, personal, setGlobalStatus, subscriptions, t, watchSync]);
 
@@ -645,7 +646,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         await refreshAfterChange();
         return true;
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
         return false;
       } finally {
         markBusy(subscription.id, false);
@@ -663,7 +664,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         await loadExclusions();
         return true;
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
         return false;
       }
     },
@@ -682,7 +683,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         setExclusions((current) => current.filter((entry) => entry.id !== exclusion.id));
         return true;
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
         return false;
       } finally {
         markBusy(exclusion.id, false);

@@ -1,12 +1,14 @@
 import * as React from "react";
 import { Link } from "react-router";
+import { Check } from "lucide-react";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useTranslate } from "@/lib/context/translate-context";
-import type { ListAccount, ListProviderItem, ListProviderManifest, ListSourceDraft } from "@/lib/types/lists";
+import type { ListAccount, ListProviderItem, ListProviderManifest, ListSourceDraft, ListSubscription } from "@/lib/types/lists";
+import { isListSourceFollowed } from "@/lib/utils/lists";
 import { buildViewPath } from "@/lib/utils/routing";
 import { ProviderTile } from "./provider-tile";
 import { ListProviderSetup } from "./list-provider-setup";
@@ -14,6 +16,8 @@ import { ListProviderSetup } from "./list-provider-setup";
 type Props = {
   providers: ListProviderManifest[];
   accounts: ListAccount[];
+  /** The member's own follows, so a list already followed is not offered again. */
+  subscriptions: ListSubscription[];
   managedAccount: ListAccount | null;
   accountLoading: boolean;
   busyIds: ReadonlySet<string>;
@@ -73,6 +77,14 @@ export function PersonalAccounts(props: Props) {
     ...account.ownedLists.map((list) => ({ key: `list:${list.id}`, label: list.name, sourceType: list.sourceType, params: list.params, kinds: list.kinds })),
     ...account.statuses.map((status) => ({ key: `status:${status.key}`, label: status.label, sourceType: status.sourceType, params: status.params, kinds: status.kinds })),
   ] : [];
+  const followed = (sourceType: string, params: ListSourceDraft["params"]) =>
+    !!account && isListSourceFollowed(props.subscriptions, { provider: account.provider, sourceType, params });
+  const followedMark = (
+    <Button size="sm" variant="outline" disabled>
+      <Check className="h-3.5 w-3.5" />
+      {t("lists.catalog.followed")}
+    </Button>
+  );
 
   return (
     <section id="lists-personal-accounts" className="space-y-3">
@@ -115,11 +127,11 @@ export function PersonalAccounts(props: Props) {
                 {items.filter((item) => !choices.some((choice) => choice.sourceType === item.sourceType)).map((item) => (
                   <div key={item.id} className="flex items-center gap-3 rounded-lg border p-3">
                     <div className="min-w-0 flex-1"><p className="font-medium">{item.name}</p><p className="text-sm text-muted-foreground">{item.description}</p></div>
-                    <Button size="sm" variant="outline" onClick={() => {
+                    {followed(item.sourceType, []) ? followedMark : <Button size="sm" variant="outline" onClick={() => {
                       if (!manifest) return;
                       props.onFollow(manifest, item, { provider: account.provider, sourceType: item.sourceType, params: [], url: null, credentialId: account.id }, item.name);
                       props.onManage(null);
-                    }}>{t("lists.catalog.follow")}</Button>
+                    }}>{t("lists.catalog.follow")}</Button>}
                   </div>
                 ))}
                 {choices.map((choice) => {
@@ -128,10 +140,10 @@ export function PersonalAccounts(props: Props) {
                   return (
                     <div key={choice.key} className="flex items-center gap-3 rounded-lg border p-3">
                       <p className="min-w-0 flex-1 text-sm font-medium">{choice.label}</p>
-                      <Button size="sm" variant="outline" onClick={() => {
+                      {followed(choice.sourceType, choice.params) ? followedMark : <Button size="sm" variant="outline" onClick={() => {
                         props.onFollow(manifest, { ...item, kinds: choice.kinds }, { provider: account.provider, sourceType: choice.sourceType, params: choice.params, fixedParams: true, url: null, credentialId: account.id }, choice.label);
                         props.onManage(null);
-                      }}>{t("lists.catalog.follow")}</Button>
+                      }}>{t("lists.catalog.follow")}</Button>}
                     </div>
                   );
                 })}

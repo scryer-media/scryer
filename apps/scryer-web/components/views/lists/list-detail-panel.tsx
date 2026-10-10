@@ -138,7 +138,7 @@ export function ListDetailPanel({
         ) : (
           <div className="space-y-6 px-4 pb-8">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state))}</Badge>
+              <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state, subscription.sync.lastAt))}</Badge>
               {subscription.kinds.map((kind) => (
                 <Badge key={kind} tone="outline">
                   {t(listKindLabelKey(kind))}

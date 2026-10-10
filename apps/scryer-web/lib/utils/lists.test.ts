@@ -35,6 +35,7 @@ import {
   withListFilter,
   exclusionInputFromTitle,
   isListModeSelectable,
+  isListSourceFollowed,
   listCoverageSegments,
   listDraftProblems,
   listIntervalParts,
@@ -45,6 +46,7 @@ import {
   listMembershipStateLabelKey,
   listMembershipStateTone,
   listModeLabelKey,
+  listSyncStateLabelKey,
   listSyncStateTone,
   listMembershipRowId,
   listSyncPollDelayMs,
@@ -238,10 +240,50 @@ test("public modes exclude member requests and discover cannot be picked yet", (
 test("state labels and tones cover every sync and membership state", () => {
   assert.equal(listSyncStateTone("FAIL"), "negative");
   assert.equal(listSyncStateTone("OK"), "positive");
+  assert.equal(listSyncStateLabelKey("NEW"), "lists.syncState.new");
+  assert.equal(listSyncStateLabelKey("NEW", null), "lists.syncState.new");
+  assert.equal(listSyncStateLabelKey("NEW", "2026-10-09T12:00:00Z"), "lists.syncState.waiting");
+  assert.equal(listSyncStateLabelKey("OK", "2026-10-09T12:00:00Z"), "lists.syncState.ok");
   assert.equal(listMembershipStateLabelKey("BLOCKED_PERMISSION"), "lists.membershipState.blockedPermission");
   assert.equal(listMembershipStateLabelKey("IN_LIBRARY"), "lists.membershipState.inLibrary");
   assert.equal(listMembershipStateTone("REJECTED"), "negative");
   assert.equal(listMembershipStateTone("UNRESOLVED"), "warning");
+});
+
+test("a source counts as followed only on the same provider, source type and parameters", () => {
+  const followed = [
+    { source: { provider: "anilist", sourceType: "popular", params: [] } },
+    {
+      source: {
+        provider: "trakt",
+        sourceType: "user_list",
+        params: [{ key: "user", value: "someone" }, { key: "list", value: "favourites" }],
+      },
+    },
+  ];
+  assert.equal(isListSourceFollowed(followed, { provider: "anilist", sourceType: "popular", params: [] }), true);
+  assert.equal(isListSourceFollowed(followed, { provider: "anilist", sourceType: "trending", params: [] }), false);
+  assert.equal(isListSourceFollowed(followed, { provider: "imdb", sourceType: "popular", params: [] }), false);
+  assert.equal(
+    isListSourceFollowed(followed, {
+      provider: "trakt",
+      sourceType: "user_list",
+      params: [{ key: "list", value: "favourites " }, { key: "user", value: "someone" }],
+    }),
+    true,
+  );
+  assert.equal(
+    isListSourceFollowed(followed, {
+      provider: "trakt",
+      sourceType: "user_list",
+      params: [{ key: "user", value: "someone" }, { key: "list", value: "watchlist" }],
+    }),
+    false,
+  );
+  assert.equal(
+    isListSourceFollowed(followed, { provider: "trakt", sourceType: "user_list", params: [{ key: "user", value: "someone" }] }),
+    false,
+  );
 });
 
 test("provider intervals read in the largest whole unit", () => {

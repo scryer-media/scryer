@@ -269,7 +269,7 @@ export function ListsView(props: ListsViewProps) {
         ) : (
           <div className="space-y-8">
             {section === "personal" ? (
-              <PersonalAccounts providers={providers} accounts={props.accounts} managedAccount={props.managedAccount} accountLoading={props.accountLoading} busyIds={busyIds} linkingProvider={props.linkingProvider} linkError={props.accountLinkError} onLink={props.onLinkAccount} onCancelLink={props.onCancelLink} onManage={props.onManageAccount} onUnlink={props.onUnlinkAccount} onFollow={(manifest, item, source, name) => setFollowTarget({ kind: "new", source, manifest, item, name, kinds: item.kinds, preview: null })} />
+              <PersonalAccounts providers={providers} accounts={props.accounts} subscriptions={subscriptions} managedAccount={props.managedAccount} accountLoading={props.accountLoading} busyIds={busyIds} linkingProvider={props.linkingProvider} linkError={props.accountLinkError} onLink={props.onLinkAccount} onCancelLink={props.onCancelLink} onManage={props.onManageAccount} onUnlink={props.onUnlinkAccount} onFollow={(manifest, item, source, name) => setFollowTarget({ kind: "new", source, manifest, item, name, kinds: item.kinds, preview: null })} />
             ) : canManageLists ? (
               <AddByUrlCard providers={providers} onPreviewUrl={props.onPreviewUrl} onRecognized={followFromUrl} />
             ) : null}
@@ -298,6 +298,7 @@ export function ListsView(props: ListsViewProps) {
                 <h2 className={PANEL_HEADING}>{t("lists.catalog.heading")}</h2>
                 <ProviderBrowser
                   providers={providers}
+                  subscriptions={subscriptions}
                   onFollow={followFromCatalog}
                   providerSettings={props.providerSettings}
                   onSaveProviderSettings={props.onSaveProviderSettings}

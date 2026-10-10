@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Plus } from "lucide-react";
+import { Check, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,9 @@ import type {
   ListProviderManifest,
   ListProviderSettingChange,
   ListProviderSettings,
+  ListSubscription,
 } from "@/lib/types/lists";
-import { listIntervalParts, listKindLabelKey, publicProviders } from "@/lib/utils/lists";
+import { isListSourceFollowed, listIntervalParts, listKindLabelKey, publicProviders } from "@/lib/utils/lists";
 import { cn } from "@/lib/utils";
 
 import { ProviderSettingsCard } from "./provider-settings-card";
@@ -33,6 +34,8 @@ const NOTE_CLASS: Record<ListNoteTone, string> = {
 
 type ProviderBrowserProps = {
   providers: ListProviderManifest[];
+  /** The followed public lists, so a list already followed is not offered again. */
+  subscriptions: ListSubscription[];
   onFollow: (manifest: ListProviderManifest, item: ListProviderItem) => void;
   /** Stored server-wide settings, with non-secret values; null until loaded. */
   providerSettings?: ListProviderSettings[] | null;
@@ -40,7 +43,7 @@ type ProviderBrowserProps = {
 };
 
 /** The catalog of public lists: a provider rail and that provider's followable lists. */
-export function ProviderBrowser({ providers, onFollow, providerSettings, onSaveProviderSettings }: ProviderBrowserProps) {
+export function ProviderBrowser({ providers, subscriptions, onFollow, providerSettings, onSaveProviderSettings }: ProviderBrowserProps) {
   const t = useTranslate();
   const catalog = React.useMemo(() => publicProviders(providers), [providers]);
   const [selectedType, setSelectedType] = React.useState<string | null>(null);
@@ -120,6 +123,11 @@ export function ProviderBrowser({ providers, onFollow, providerSettings, onSaveP
             <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {group.items.map((item) => {
                 const interval = listIntervalParts(item.defaultIntervalSeconds);
+                // Only a list that takes no value is one fixed source; the rest
+                // can be followed again with a different value.
+                const followed =
+                  item.params.length === 0 &&
+                  isListSourceFollowed(subscriptions, { provider: selected.providerType, sourceType: item.sourceType, params: [] });
                 return (
                   <li
                     key={item.id}
@@ -152,10 +160,11 @@ export function ProviderBrowser({ providers, onFollow, providerSettings, onSaveP
                         type="button"
                         size="xs"
                         variant="outline"
+                        disabled={followed}
                         onClick={() => onFollow(selected, item)}
                       >
-                        <Plus className="h-3.5 w-3.5" />
-                        {t("lists.catalog.follow")}
+                        {followed ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                        {t(followed ? "lists.catalog.followed" : "lists.catalog.follow")}
                       </Button>
                     </div>
                   </li>

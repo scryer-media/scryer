@@ -124,7 +124,7 @@ export function ListTable({
               ) : null}
               <TableCell>
                 <div className="flex flex-col items-start gap-1">
-                  <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state))}</Badge>
+                  <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state, subscription.sync.lastAt))}</Badge>
                   <span className="text-[11.5px] text-[var(--scry-muted)]">
                     {subscription.sync.lastAt
                       ? formatUiDateTime(subscription.sync.lastAt, dateTimeFormat)

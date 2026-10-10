@@ -87,7 +87,10 @@ export function listOnLeaveLabelKey(onLeave: ListOnLeave): string {
   return `lists.onLeave.${camel(onLeave)}`;
 }
 
-export function listSyncStateLabelKey(state: ListSyncState): string {
+export function listSyncStateLabelKey(state: ListSyncState, lastAt?: string | null): string {
+  // Switching a list back on makes it new to the scheduler again; one that has
+  // synced before is only waiting for its next sync.
+  if (state === "NEW" && lastAt) return "lists.syncState.waiting";
   return `lists.syncState.${camel(state)}`;
 }
 
@@ -224,6 +227,25 @@ export function publicProviders(manifests: readonly ListProviderManifest[]): Lis
   return manifests
     .map((manifest) => ({ ...manifest, groups: publicProviderGroups(manifest) }))
     .filter((manifest) => manifest.groups.length > 0);
+}
+
+/**
+ * Whether a followed list already reads this exact source. The server refuses
+ * a second follow of the same provider, source type and parameters.
+ */
+export function isListSourceFollowed(
+  subscriptions: readonly Pick<ListSubscription, "source">[],
+  source: { provider: string; sourceType: string; params: readonly ListParam[] },
+): boolean {
+  const paramsKey = (params: readonly ListParam[]) =>
+    params.map((param) => `${param.key}\u0000${param.value.trim()}`).sort().join("\u0001");
+  const wanted = paramsKey(source.params);
+  return subscriptions.some(
+    (subscription) =>
+      subscription.source.provider === source.provider &&
+      subscription.source.sourceType === source.sourceType &&
+      paramsKey(subscription.source.params) === wanted,
+  );
 }
 
 export function findProviderItem(
