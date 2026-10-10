@@ -2,6 +2,11 @@ import * as React from "react";
 import { Eye, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import {
+  TITLE_TABLE_HEADER_CELL_CLASS,
+  TITLE_TABLE_HEADER_ROW_CLASS,
+  TITLE_TABLE_ROW_CLASS,
+} from "@/components/views/media-content/title-table-shared";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +16,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableCodeCell,
   TableHead,
   TableHeader,
   TableRow,
@@ -23,6 +29,7 @@ import {
   listIntervalParts,
   listKindLabelKey,
   listMembershipRowId,
+  listMembershipTitleHref,
   listMembershipStateLabelKey,
   listMembershipStateTone,
   listModeLabelKey,
@@ -263,12 +270,12 @@ export function ListDetailPanel({
               </h3>
               {memberships && memberships.items.length > 0 ? (
                 <>
-                  <Table id="list-detail-memberships" density="dense">
+                  <Table id="list-detail-memberships" density="dense" wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]">
                     <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-10">#</TableHead>
-                        <TableHead>{t("lists.detail.title")}</TableHead>
-                        <TableHead>{t("lists.detail.state")}</TableHead>
+                      <TableRow className={TITLE_TABLE_HEADER_ROW_CLASS}>
+                        <TableHead className={`w-12 text-center ${TITLE_TABLE_HEADER_CELL_CLASS}`}>#</TableHead>
+                        <TableHead className={TITLE_TABLE_HEADER_CELL_CLASS}>{t("lists.detail.title")}</TableHead>
+                        <TableHead className={TITLE_TABLE_HEADER_CELL_CLASS}>{t("lists.detail.state")}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -279,15 +286,23 @@ export function ListDetailPanel({
                           data-item-key={membership.itemKey}
                           data-title-id={membership.titleId ?? undefined}
                           data-membership-state={membership.state}
+                          className={TITLE_TABLE_ROW_CLASS}
                         >
-                          <TableCell className="text-[12px] text-[var(--scry-muted)]">{membership.rank ?? "—"}</TableCell>
+                          <TableCodeCell className="text-center text-[12px] text-[var(--scry-muted)]">{membership.rank ?? "—"}</TableCodeCell>
                           <TableCell>
-                            <span className="block text-[13px] text-[var(--scry-ink2)]">
-                              {membership.displayTitle ?? membership.itemKey}
+                            <div className="text-[13px] font-medium text-[var(--scry-ink)]">
+                              {listMembershipTitleHref(membership.kind, membership.titleId) ? (
+                                <a
+                                  href={listMembershipTitleHref(membership.kind, membership.titleId)!}
+                                  className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
+                                >
+                                  {membership.displayTitle ?? membership.itemKey}
+                                </a>
+                              ) : membership.displayTitle ?? membership.itemKey}
                               {membership.year ? (
-                                <span className="text-[var(--scry-muted)]"> ({membership.year})</span>
+                                <span className="font-normal text-[var(--scry-muted)]"> ({membership.year})</span>
                               ) : null}
-                            </span>
+                            </div>
                           </TableCell>
                           <TableCell>
                             <Badge tone={listMembershipStateTone(membership.state)}>

@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { listMembershipTitleHref } from "./lists.ts";
+
+test("membership title links use library IDs for every facet and omit unlinked titles", () => {
+  assert.equal(listMembershipTitleHref("MOVIE", "movie-1"), "/movies?id=movie-1");
+  assert.equal(listMembershipTitleHref("SERIES", "series-1"), "/series?id=series-1");
+  assert.equal(listMembershipTitleHref("ANIME", "anime-1"), "/anime?id=anime-1");
+  assert.equal(listMembershipTitleHref("ANIME", "title&other=1"), "/anime?id=title%26other%3D1");
+  assert.equal(listMembershipTitleHref("ANIME", null), null);
+  assert.equal(listMembershipTitleHref("ANIME", "  "), null);
+});
 
 import type {
   ListProviderManifest,

@@ -25,10 +25,17 @@ import type {
 import type { ExternalId, Facet } from "../types/titles.ts";
 import { allOf, forEventTypes, forTitle, type DomainEventPredicate } from "../reactive/domain-event-feed.ts";
 import { selectorToken } from "./dom-ids.ts";
+import { facetById } from "../facets/registry.ts";
 import { getPluginLogoSources } from "./plugin-logos.ts";
 import { ratingSourceInfo } from "./title-ratings.ts";
 
 export type ListTone = "neutral" | "positive" | "warning" | "negative" | "info" | "outline";
+
+export function listMembershipTitleHref(kind: Facet, titleId: string | null): string | null {
+  const facet = facetById(kind);
+  const id = titleId?.trim();
+  return facet && id ? `/${facet.viewId}?${new URLSearchParams({ id })}` : null;
+}
 
 /** Modes offered for public lists. `REQUEST` belongs to personal lists only. */
 export const PUBLIC_LIST_MODES: readonly ListMode[] = ["SEARCH", "ADD", "HOLD", "DISCOVER"];
