@@ -6305,7 +6305,6 @@ const ru: LocaleDictionary = {
   "lists.catalog.empty": "Провайдеры списков не установлены.",
   "lists.catalog.follow": "Отслеживать",
   "lists.catalog.every": "Синхронизация каждые {{interval}}",
-  "lists.catalog.auth.needsValue": "Нужно значение",
   "lists.catalog.auth.memberAccount": "Аккаунт участника",
   "lists.catalog.auth.serverKey": "API-ключ сервера",
   "lists.interval.minutes": "{{count}} мин",

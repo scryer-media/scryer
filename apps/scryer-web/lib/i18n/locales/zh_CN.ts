@@ -2771,7 +2771,6 @@ const zh_CN: LocaleDictionary = {
   "lists.catalog.empty": "未安装任何列表提供方。",
   "lists.catalog.follow": "关注",
   "lists.catalog.every": "每 {{interval}} 同步一次",
-  "lists.catalog.auth.needsValue": "需要填写值",
   "lists.catalog.auth.memberAccount": "成员账号",
   "lists.catalog.auth.serverKey": "服务器 API 密钥",
   "lists.interval.minutes": "{{count}} 分钟",

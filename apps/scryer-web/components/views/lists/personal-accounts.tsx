@@ -127,7 +127,7 @@ export function PersonalAccounts(props: Props) {
                 {items.filter((item) => !choices.some((choice) => choice.sourceType === item.sourceType)).map((item) => (
                   <div key={item.id} className="flex items-center gap-3 rounded-lg border p-3">
                     <div className="min-w-0 flex-1"><p className="font-medium">{item.name}</p><p className="text-sm text-muted-foreground">{item.description}</p></div>
-                    {followed(item.sourceType, []) ? followedMark : <Button size="sm" variant="outline" onClick={() => {
+                    {followed(item.sourceType, []) ? followedMark : <Button size="sm" variant="primary" onClick={() => {
                       if (!manifest) return;
                       props.onFollow(manifest, item, { provider: account.provider, sourceType: item.sourceType, params: [], url: null, credentialId: account.id }, item.name);
                       props.onManage(null);
@@ -140,7 +140,7 @@ export function PersonalAccounts(props: Props) {
                   return (
                     <div key={choice.key} className="flex items-center gap-3 rounded-lg border p-3">
                       <p className="min-w-0 flex-1 text-sm font-medium">{choice.label}</p>
-                      {followed(choice.sourceType, choice.params) ? followedMark : <Button size="sm" variant="outline" onClick={() => {
+                      {followed(choice.sourceType, choice.params) ? followedMark : <Button size="sm" variant="primary" onClick={() => {
                         props.onFollow(manifest, { ...item, kinds: choice.kinds }, { provider: account.provider, sourceType: choice.sourceType, params: choice.params, fixedParams: true, url: null, credentialId: account.id }, choice.label);
                         props.onManage(null);
                       }}>{t("lists.catalog.follow")}</Button>}

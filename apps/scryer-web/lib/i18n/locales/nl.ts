@@ -3654,7 +3654,6 @@ const nl: LocaleDictionary = {
   "lists.catalog.empty": "Er zijn geen lijstaanbieders geïnstalleerd.",
   "lists.catalog.follow": "Volgen",
   "lists.catalog.every": "Synchroniseert elke {{interval}}",
-  "lists.catalog.auth.needsValue": "Waarde nodig",
   "lists.catalog.auth.memberAccount": "Ledenaccount",
   "lists.catalog.auth.serverKey": "API-sleutel van server",
   "lists.interval.minutes": "{{count}} min",

@@ -2896,7 +2896,6 @@ const ja: LocaleDictionary = {
   "lists.catalog.empty": "リストプロバイダーがインストールされていません。",
   "lists.catalog.follow": "フォロー",
   "lists.catalog.every": "{{interval}}ごとに同期",
-  "lists.catalog.auth.needsValue": "値が必要",
   "lists.catalog.auth.memberAccount": "メンバーアカウント",
   "lists.catalog.auth.serverKey": "サーバー API キー",
   "lists.interval.minutes": "{{count}} 分",

@@ -2852,7 +2852,6 @@ const ko: LocaleDictionary = {
   "lists.catalog.empty": "설치된 목록 제공자가 없습니다.",
   "lists.catalog.follow": "팔로우",
   "lists.catalog.every": "{{interval}}마다 동기화",
-  "lists.catalog.auth.needsValue": "값 필요",
   "lists.catalog.auth.memberAccount": "멤버 계정",
   "lists.catalog.auth.serverKey": "서버 API 키",
   "lists.interval.minutes": "{{count}}분",

@@ -22,7 +22,6 @@ import { ProviderTile } from "./provider-tile";
 
 /** What a group of lists needs before it can be followed; nothing is said when it needs nothing. */
 const AUTH_BADGE_KEY: Partial<Record<ListAuthBadge, string>> = {
-  NO_ACCOUNT_NEEDS_VALUE: "lists.catalog.auth.needsValue",
   MEMBER_ACCOUNT: "lists.catalog.auth.memberAccount",
   SERVER_API_KEY: "lists.catalog.auth.serverKey",
 };
@@ -171,11 +170,6 @@ export function ProviderBrowser({
                               {t(listKindLabelKey(kind))}
                             </Badge>
                           ))}
-                          {item.params.map((param) => (
-                            <Badge key={param.key} tone="info" className="px-1.5 py-0 text-[10.5px]">
-                              {param.label}
-                            </Badge>
-                          ))}
                         </div>
                       </div>
                       <div className="flex items-center justify-between gap-2">
@@ -186,7 +180,7 @@ export function ProviderBrowser({
                           id={`lists-catalog-follow-${shown.providerType}-${item.id}`}
                           type="button"
                           size="xs"
-                          variant="outline"
+                          variant={followed ? "outline" : "primary"}
                           disabled={followed}
                           onClick={() => onFollow(shown, item)}
                         >

@@ -5633,7 +5633,6 @@ const en: LocaleDictionary = {
   "lists.catalog.follow": "Follow",
   "lists.catalog.followed": "Followed",
   "lists.catalog.every": "Syncs every {{interval}}",
-  "lists.catalog.auth.needsValue": "Needs a value",
   "lists.catalog.auth.memberAccount": "Member account",
   "lists.catalog.auth.serverKey": "Server API key",
   "lists.interval.minutes": "{{count}} min",

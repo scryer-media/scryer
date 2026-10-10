@@ -2961,7 +2961,6 @@ const es: LocaleDictionary = {
   "lists.catalog.empty": "No hay proveedores de listas instalados.",
   "lists.catalog.follow": "Seguir",
   "lists.catalog.every": "Se sincroniza cada {{interval}}",
-  "lists.catalog.auth.needsValue": "Requiere un valor",
   "lists.catalog.auth.memberAccount": "Cuenta de miembro",
   "lists.catalog.auth.serverKey": "Clave API del servidor",
   "lists.interval.minutes": "{{count}} min",

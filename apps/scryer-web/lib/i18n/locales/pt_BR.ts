@@ -2943,7 +2943,6 @@ const pt_BR: LocaleDictionary = {
   "lists.catalog.empty": "Nenhum provedor de listas instalado.",
   "lists.catalog.follow": "Seguir",
   "lists.catalog.every": "Sincroniza a cada {{interval}}",
-  "lists.catalog.auth.needsValue": "Precisa de um valor",
   "lists.catalog.auth.memberAccount": "Conta de membro",
   "lists.catalog.auth.serverKey": "Chave de API do servidor",
   "lists.interval.minutes": "{{count}} min",
