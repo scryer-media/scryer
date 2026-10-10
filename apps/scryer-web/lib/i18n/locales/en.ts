@@ -122,6 +122,7 @@ const en: LocaleDictionary = {
   "label.edit": "Edit",
   "label.delete": "Delete",
   "label.actions": "Actions",
+  "label.custom": "Custom",
   "label.create": "Create",
   "label.cancel": "Cancel",
   "folderBrowser.selectPath": "Select path",

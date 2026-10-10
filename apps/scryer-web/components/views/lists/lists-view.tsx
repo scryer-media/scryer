@@ -25,7 +25,6 @@ import type {
 import type { LibraryRecord } from "@/lib/types/titles";
 import { listParamInput, type AddListExclusionInput } from "@/lib/utils/lists";
 
-import { AddByUrlCard } from "./add-by-url-card";
 import { ExclusionsTable } from "./exclusions-table";
 import { FollowListDialog, type FollowListTarget } from "./follow-list-dialog";
 import { ListDetailPanel } from "./list-detail-panel";
@@ -196,12 +195,6 @@ export function ListsView(props: ListsViewProps) {
             </h1>
             <p className="mt-1 max-w-2xl text-[13.5px] text-[var(--scry-muted)]">{t("lists.heading.copy")}</p>
           </div>
-          {canManageSubscriptions && (section === "public" || section === "personal") && subscriptions.length > 0 ? (
-            <Button id="lists-sync-all" type="button" variant="outline" size="sm" onClick={props.onSyncAll}>
-              <RefreshCw className="h-4 w-4" />
-              {t("lists.action.syncAll")}
-            </Button>
-          ) : null}
           {showPlugins && !pluginsDocked ? (
             <Button type="button" variant="outline" size="sm" aria-expanded={pluginsOpen} aria-controls="lists-plugins-panel" onClick={() => setPluginsOpen(true)}>
               <Puzzle className="h-4 w-4" />
@@ -273,12 +266,18 @@ export function ListsView(props: ListsViewProps) {
           <div className="space-y-8">
             {section === "personal" ? (
               <PersonalAccounts providers={providers} accounts={props.accounts} subscriptions={subscriptions} managedAccount={props.managedAccount} accountLoading={props.accountLoading} busyIds={busyIds} linkingProvider={props.linkingProvider} linkError={props.accountLinkError} onLink={props.onLinkAccount} onCancelLink={props.onCancelLink} onManage={props.onManageAccount} onUnlink={props.onUnlinkAccount} onFollow={(manifest, item, source, name) => setFollowTarget({ kind: "new", source, manifest, item, name, kinds: item.kinds, preview: null })} />
-            ) : canManageLists ? (
-              <AddByUrlCard providers={providers} onPreviewUrl={props.onPreviewUrl} onRecognized={followFromUrl} />
             ) : null}
 
             <section className="space-y-3">
-              <h2 className={PANEL_HEADING}>{t("lists.followed.heading")}</h2>
+              <div className="flex min-h-8 items-center justify-between gap-3">
+                <h2 className={PANEL_HEADING}>{t("lists.followed.heading")}</h2>
+                {canManageSubscriptions && subscriptions.length > 0 ? (
+                  <Button id="lists-sync-all" type="button" variant="primary" size="sm" onClick={props.onSyncAll}>
+                    <RefreshCw className="h-4 w-4" />
+                    {t("lists.action.syncAll")}
+                  </Button>
+                ) : null}
+              </div>
               {subscriptions.length === 0 ? (
                 <p id="lists-empty" className="text-[13px] text-[var(--scry-muted)]">
                   {canManageLists ? t("lists.followed.emptyManager") : t("lists.followed.empty")}
@@ -303,6 +302,8 @@ export function ListsView(props: ListsViewProps) {
                   providers={providers}
                   subscriptions={subscriptions}
                   onFollow={followFromCatalog}
+                  onPreviewUrl={props.onPreviewUrl}
+                  onFollowUrl={followFromUrl}
                   providerSettings={props.providerSettings}
                   onSaveProviderSettings={props.onSaveProviderSettings}
                 />
