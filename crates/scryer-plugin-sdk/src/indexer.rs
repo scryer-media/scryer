@@ -89,6 +89,35 @@ pub struct IndexerLimitCapabilities {
     pub api_quota_supported: bool,
     #[serde(default)]
     pub grab_quota_supported: bool,
+    /// The plugin answers searches one provider page at a time.
+    ///
+    /// A plugin that sets this promises, for every request that names a query
+    /// or ids, that one invocation fetches at most one provider page, never
+    /// loops over pages internally, returns at most
+    /// [`Self::paged_response_bound`] results, honours
+    /// [`PluginSearchRequest::page_cursor`](crate::PluginSearchRequest::page_cursor)
+    /// and reports [`PluginSearchResponse::next_cursor`](crate::PluginSearchResponse::next_cursor).
+    /// `PageCeilingReached` then only means the provider itself refused to page
+    /// further. Requests for recent releases (no query, no ids) are outside
+    /// this promise: a plugin may still page its feed internally to reach
+    /// `rss_catch_up`, and never sets a cursor on those responses.
+    ///
+    /// Absent or `false` keeps the unpaged contract, and the host treats the
+    /// plugin's responses as before SDK 3.14.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paged_search: bool,
+}
+
+impl IndexerLimitCapabilities {
+    /// The most results one paged search response may carry for a request
+    /// asking for `limit` results (`0` asks for no cap): the smaller of
+    /// `limit` and the declared `max_page_size`, falling back to `page_size`.
+    /// `None` when the plugin declares neither size. A host may truncate or
+    /// reject a paged response larger than this bound.
+    pub fn paged_response_bound(&self, limit: usize) -> Option<usize> {
+        let page = self.max_page_size.or(self.page_size)? as usize;
+        Some(if limit == 0 { page } else { page.min(limit) })
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -426,6 +455,7 @@ pub fn indexer_capability_fixtures() -> Vec<PluginDescriptor> {
                     rate_limit_hint_seconds: Some(2),
                     api_quota_supported: true,
                     grab_quota_supported: true,
+                    paged_search: false,
                 }),
                 torrent: Some(IndexerTorrentCapabilities {
                     reports_seeders: true,
