@@ -23,8 +23,10 @@ import {
 } from "@/lib/types/scripts";
 import { defaultScriptSchedule } from "@/lib/utils/script-schedule";
 
-// A bordered group that keeps a set of related fields under their label.
-const SCRIPT_EDITOR_BOX_CLASS = "space-y-3 rounded-lg border border-border p-3";
+// A bordered group whose label names everything inside it.
+const SCRIPT_EDITOR_BOX_CLASS = "min-w-0 space-y-3 rounded-lg border border-border px-3 pb-3";
+// Sits in the box's top border, its text level with the fields below.
+const SCRIPT_EDITOR_BOX_LEGEND_CLASS = "-ml-1.5 px-1.5 text-sm leading-none font-medium";
 
 function editorLanguageFor(language: ScriptLanguageValue): CodeEditorLanguage {
   return language === "SHELL" ? "shell" : "plain";
@@ -222,8 +224,8 @@ export function ScriptEditorForm({
       </div>
 
       {isScheduled ? (
-        <div id="script-editor-schedule" className={SCRIPT_EDITOR_BOX_CLASS}>
-          <Label className="block">{t("script.editor.schedule")}</Label>
+        <fieldset id="script-editor-schedule" className={SCRIPT_EDITOR_BOX_CLASS}>
+          <legend className={SCRIPT_EDITOR_BOX_LEGEND_CLASS}>{t("script.editor.schedule")}</legend>
           <ScriptScheduleEditor
             value={draft.schedule ?? defaultScriptSchedule()}
             onChange={(schedule) => setDraft((prev) => ({ ...prev, schedule }))}
@@ -232,7 +234,7 @@ export function ScriptEditorForm({
               setDraft((prev) => ({ ...prev, runOnStartup }))
             }
           />
-        </div>
+        </fieldset>
       ) : (
         /* Facets */
         <div>
@@ -249,8 +251,8 @@ export function ScriptEditorForm({
       )}
 
       {/* Execution Mode */}
-      <div className={SCRIPT_EDITOR_BOX_CLASS}>
-        <Label className="block">{t("settings.pp.executionMode")}</Label>
+      <fieldset className={SCRIPT_EDITOR_BOX_CLASS}>
+        <legend className={SCRIPT_EDITOR_BOX_LEGEND_CLASS}>{t("settings.pp.executionMode")}</legend>
         <RadioGroup
           id="script-editor-execution-mode"
           value={draft.executionMode}
@@ -288,7 +290,7 @@ export function ScriptEditorForm({
                   }
                 />
                 <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
-                  {t("settings.pp.timeoutSuffix")}
+                  {t("unit.seconds")}
                 </span>
               </div>
             </div>
@@ -316,7 +318,7 @@ export function ScriptEditorForm({
             )}
           </div>
         ) : null}
-      </div>
+      </fieldset>
 
       <div className="flex flex-wrap gap-x-6 gap-y-2">
         {/* Enabled (scheduled jobs; post-processing scripts toggle from their table) */}
