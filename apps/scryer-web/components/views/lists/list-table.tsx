@@ -113,7 +113,8 @@ export function ListTable({
                       {subscription.name}
                     </button>
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--scry-muted)]">
-                      <span className="truncate">{provider?.name ?? subscription.source.provider}</span>
+                      {/* The logo names the provider on screen; this names it to a screen reader. */}
+                      <span className="sr-only">{provider?.name ?? subscription.source.provider}</span>
                       {subscription.kinds.map((kind) => (
                         <Badge key={kind} tone="outline" className="px-1.5 py-0 text-[10.5px]">
                           {t(listKindLabelKey(kind))}

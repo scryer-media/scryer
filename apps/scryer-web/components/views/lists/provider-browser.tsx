@@ -118,12 +118,8 @@ export function ProviderBrowser({
       </nav>
 
       <div className="min-w-0 space-y-4">
-        {selected ? (
-          <div className="flex items-center gap-3">
-            <ProviderTile provider={selected} />
-            <h3 className="min-w-0 truncate font-display text-[17px] font-bold text-[var(--scry-ink)]">{selected.name}</h3>
-          </div>
-        ) : (
+        {/* The rail already says which provider is open, so the pane starts with its lists. */}
+        {selected ? null : (
           <AddByUrlCard providers={providers} onPreviewUrl={onPreviewUrl} onRecognized={onFollowUrl} />
         )}
         {shown && onSaveProviderSettings && settingFields.length > 0 ? (
