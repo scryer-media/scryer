@@ -1152,10 +1152,16 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     }
     assert!(mutation_field_names.contains(&"refreshFileScores"));
     assert!(mutation_field_names.contains(&"cancelFileScoreRefresh"));
-    assert_eq!(public_types.len(), 970);
-    assert_eq!(kind_count("OBJECT"), 523);
+    // Ranking-only audio language preferences add the per-release rank on a
+    // decision and the priority enum: public types 970->972, OBJECT 523->524,
+    // ENUM 195->196.
+    for name in ["AudioLanguageRankPayload", "AudioLanguagePriorityValue"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert_eq!(public_types.len(), 972);
+    assert_eq!(kind_count("OBJECT"), 524);
     assert_eq!(kind_count("INPUT_OBJECT"), 240);
-    assert_eq!(kind_count("ENUM"), 195);
+    assert_eq!(kind_count("ENUM"), 196);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

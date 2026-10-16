@@ -924,3 +924,95 @@ async fn normalize_routing_settings_assigns_distinct_priorities_to_multiple_inde
 
     assert_ne!(first_priority, second_priority);
 }
+
+#[tokio::test]
+async fn library_audio_language_preferences_override_the_facet_one_value_at_a_time() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, user) =
+        bootstrap_with_search_settings_and_indexer(settings.clone(), Arc::new(MockIndexerClient));
+    let facet = app
+        .update_media_settings(
+            &user,
+            MediaFacet::Movie,
+            UpdateMediaSettings {
+                preferred_audio_languages: Some(vec!["de".into()]),
+                audio_language_priority: Some(AudioLanguagePriority::LanguageFirst),
+                ..empty_update_media_settings()
+            },
+        )
+        .await
+        .expect("save facet preferences")
+        .audio_language_preferences;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let library = app.get_library_settings(&user, &library_id).await.unwrap();
+    assert_eq!(library.preferred_audio_languages_override, None);
+    assert_eq!(library.audio_language_priority_override, None);
+    assert_eq!(library.preferred_audio_languages, facet.preferred);
+    assert_eq!(library.audio_language_priority, facet.priority);
+
+    let save = |draft: LibrarySettingsOverrideDraft| {
+        app.update_library_settings(&user, &library_id, draft)
+    };
+    let library = save(LibrarySettingsOverrideDraft {
+        optional_audio_languages: Some(vec!["en".into()]),
+        optional_audio_languages_keep_searching: Some(true),
+        ..empty_library_settings_override()
+    })
+    .await
+    .expect("save library preferences");
+    let optional = library
+        .optional_audio_languages_override
+        .clone()
+        .expect("the library sets its own optional list");
+    assert_eq!(library.optional_audio_languages, optional);
+    assert!(library.optional_audio_languages_keep_searching);
+    assert_eq!(
+        (
+            library.preferred_audio_languages,
+            library.audio_language_priority
+        ),
+        (facet.preferred.clone(), facet.priority),
+        "the preferred list and the priority still come from the facet"
+    );
+
+    assert!(
+        save(LibrarySettingsOverrideDraft {
+            preferred_audio_languages: Some(vec!["not a language".into()]),
+            ..empty_library_settings_override()
+        })
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        app.get_library_settings(&user, &library_id)
+            .await
+            .unwrap()
+            .optional_audio_languages_override,
+        Some(optional),
+        "a rejected save leaves the stored overrides alone"
+    );
+
+    let library = save(LibrarySettingsOverrideDraft {
+        preferred_audio_languages: Some(vec!["de".into(), "ger".into()]),
+        ..empty_library_settings_override()
+    })
+    .await
+    .expect("two spellings of one language are one entry, not an error");
+    assert_eq!(
+        library.preferred_audio_languages_override,
+        Some(facet.preferred.clone())
+    );
+
+    let library = save(LibrarySettingsOverrideDraft {
+        preferred_audio_languages: Some(Vec::new()),
+        ..empty_library_settings_override()
+    })
+    .await
+    .expect("clear library preferences");
+    assert_eq!(
+        library.preferred_audio_languages_override, None,
+        "an empty list inherits, like a missing one"
+    );
+    assert_eq!(library.optional_audio_languages_override, None);
+    assert_eq!(library.preferred_audio_languages, facet.preferred);
+}

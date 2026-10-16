@@ -460,7 +460,8 @@ pub use security::backup_bundle::{
 };
 pub use security::external_accounts::{ExternalAuthRuntimeConnection, ExternalAuthRuntimeSettings};
 pub use settings::settings::{
-    AcquisitionSettings, AutoBackupSettings, BackupSettings, DownloadClientRoutingSettingsEntry,
+    AcquisitionSettings, AudioLanguagePreferenceOverrides, AudioLanguagePreferenceSettings,
+    AutoBackupSettings, BackupSettings, DownloadClientRoutingSettingsEntry,
     ExternalImportLibraryPathsSelection, ExternalImportLibrarySettingsAutoApplyDraft,
     ExternalImportLibrarySettingsAutoApplyResult, ExternalImportSettingsAutoApplySkip,
     FacetScoringPersonaSelection, GeneralSettings, IndexerRoutingSettingsEntry, InstanceFeatures,

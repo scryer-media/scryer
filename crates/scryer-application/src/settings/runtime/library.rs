@@ -766,6 +766,12 @@ impl AppUseCase {
         let required_audio_languages = self
             .resolve_required_audio_languages(None, Some(&library.id), Some(scope_id))
             .await?;
+        let audio_language_overrides = self
+            .load_audio_language_preference_overrides(&library.id)
+            .await?;
+        let audio_language_preferences = audio_language_overrides
+            .clone()
+            .over(self.load_audio_language_preference_settings(scope_id).await?);
         let metadata_language_override = self
             .read_setting_string_value_explicit(METADATA_LANGUAGE_KEY, Some(&library.id))
             .await?
@@ -986,6 +992,16 @@ impl AppUseCase {
                 .unwrap_or_default(),
             required_audio_languages_override,
             required_audio_languages,
+            preferred_audio_languages_override: audio_language_overrides.preferred,
+            preferred_audio_languages: audio_language_preferences.preferred,
+            optional_audio_languages_override: audio_language_overrides.optional,
+            optional_audio_languages: audio_language_preferences.optional,
+            audio_language_priority_override: audio_language_overrides.priority,
+            audio_language_priority: audio_language_preferences.priority,
+            optional_audio_languages_keep_searching_override: audio_language_overrides
+                .optional_keep_searching,
+            optional_audio_languages_keep_searching: audio_language_preferences
+                .optional_keep_searching,
             metadata_language_override,
             metadata_language,
             use_season_folders_override,
@@ -1464,6 +1480,16 @@ impl AppUseCase {
             .and_then(|value| normalize_optional_string(Some(value)))
             .and_then(|value| crate::normalize_metadata_language_code(&value))
             != metadata_language_override;
+        let preferred_audio_languages = settings
+            .preferred_audio_languages
+            .clone()
+            .map(|languages| validated_preference_languages("preferred audio language", languages))
+            .transpose()?;
+        let optional_audio_languages = settings
+            .optional_audio_languages
+            .clone()
+            .map(|languages| validated_preference_languages("optional audio language", languages))
+            .transpose()?;
         if !is_anime_library
             && (settings.filler_policy.is_some()
                 || settings.recap_policy.is_some()
@@ -1522,6 +1548,61 @@ impl AppUseCase {
         } else {
             self.delete_scoped_system_setting(REQUIRED_AUDIO_LANGUAGES_KEY, &library.id)
                 .await?;
+        }
+
+        if let Some(languages) = preferred_audio_languages.filter(|languages| !languages.is_empty()) {
+            self.upsert_scoped_system_setting_json(
+                crate::PREFERRED_AUDIO_LANGUAGES_KEY,
+                &library.id,
+                &languages,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting(crate::PREFERRED_AUDIO_LANGUAGES_KEY, &library.id)
+                .await?;
+        }
+
+        if let Some(languages) = optional_audio_languages.filter(|languages| !languages.is_empty()) {
+            self.upsert_scoped_system_setting_json(
+                crate::OPTIONAL_AUDIO_LANGUAGES_KEY,
+                &library.id,
+                &languages,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting(crate::OPTIONAL_AUDIO_LANGUAGES_KEY, &library.id)
+                .await?;
+        }
+
+        if let Some(priority) = settings.audio_language_priority {
+            self.upsert_scoped_system_setting_json(
+                crate::AUDIO_LANGUAGE_PRIORITY_KEY,
+                &library.id,
+                &priority.as_str(),
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting(crate::AUDIO_LANGUAGE_PRIORITY_KEY, &library.id)
+                .await?;
+        }
+
+        if let Some(keep_searching) = settings.optional_audio_languages_keep_searching {
+            self.upsert_scoped_system_setting_json(
+                crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
+                &library.id,
+                &keep_searching,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting(
+                crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
+                &library.id,
+            )
+            .await?;
         }
 
         if let Some(language) = metadata_language_override {
@@ -1815,6 +1896,10 @@ impl AppUseCase {
 
         let mut changed_keys = vec![
             REQUIRED_AUDIO_LANGUAGES_KEY.to_string(),
+            crate::PREFERRED_AUDIO_LANGUAGES_KEY.to_string(),
+            crate::OPTIONAL_AUDIO_LANGUAGES_KEY.to_string(),
+            crate::AUDIO_LANGUAGE_PRIORITY_KEY.to_string(),
+            crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY.to_string(),
             METADATA_LANGUAGE_KEY.to_string(),
             USE_SEASON_FOLDERS_KEY.to_string(),
             QUALITY_PROFILE_ID_KEY.to_string(),

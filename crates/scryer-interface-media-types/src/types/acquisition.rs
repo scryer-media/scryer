@@ -283,6 +283,25 @@ pub struct QualityProfileDecisionPayload {
     pub preference_score: i32,
     /// Ordered scoring contributions used to compute the decision.
     pub scoring_log: Vec<ScoringEntryPayload>,
+    /// Standing against the title's audio language preferences.
+    pub audio_language: AudioLanguageRankPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+/// How a release or file ranks against the title's audio language preferences.
+/// Every field is neutral when no preferences are configured.
+pub struct AudioLanguageRankPayload {
+    /// Position of the first preferred language present; 0 is best, and the
+    /// length of the preferred list means none is present.
+    pub preferred_rank: i32,
+    /// Length of the preferred list; 0 when no preferred language is configured.
+    pub preferred_count: i32,
+    /// How many of the optional languages are present.
+    pub optional_hits: i32,
+    /// Whether the preferred language is compared before the quality tier.
+    pub language_first: bool,
+    /// Whether the preferences still want something this release lacks.
+    pub wanted: bool,
 }
 
 #[derive(SimpleObject, Clone)]
