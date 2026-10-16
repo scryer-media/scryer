@@ -79,6 +79,11 @@ export type Release = {
       source: string;
       ruleSetName?: string | null;
     }[];
+    audioLanguage?: {
+      preferredRank: number;
+      preferredCount: number;
+      optionalHits: number;
+    } | null;
   } | null;
   autoEligible?: boolean | null;
   autoDecisionCode?: string | null;
