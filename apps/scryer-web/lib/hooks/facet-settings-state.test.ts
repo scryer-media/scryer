@@ -109,6 +109,50 @@ test("media-only mutation hydration preserves loaded quality profiles and person
   assert.deepEqual(after.categoryRequiredAudioLanguages.ANIME, ["jpn"]);
 });
 
+test("audio language preference saves send only the change and adopt the saved facet", { timeout: 10_000 }, async () => {
+  const inputs: object[] = [];
+  const media = {
+    scope: "ANIME", libraryPath: "", rootFolders: [], requiredAudioLanguages: [],
+    preferredAudioLanguages: ["deu", "jpn"], optionalAudioLanguages: [],
+    audioLanguagePriority: "LANGUAGE_FIRST", optionalAudioLanguagesKeepSearching: false,
+  };
+  const h = harness({
+    mutation: (_query: string, variables: { input: object }) => {
+      inputs.push(variables.input);
+      return { toPromise: async () => ({ data: { updateMediaSettings: media } }) };
+    },
+  });
+  const render = () => h.render<UseMediaSettingsResult>("use-media-settings.ts", "useMediaSettings");
+  const scope = "ANIME";
+  await render().saveCategoryAudioLanguagePreferences({ preferredAudioLanguages: ["deu", "jpn"] });
+  assert.deepEqual(inputs, [{ scope, preferredAudioLanguages: ["deu", "jpn"] }]);
+  assert.deepEqual(render().categoryAudioLanguagePreferences.ANIME, {
+    preferredAudioLanguages: ["deu", "jpn"],
+    optionalAudioLanguages: [],
+    audioLanguagePriority: "LANGUAGE_FIRST",
+    optionalAudioLanguagesKeepSearching: false,
+  });
+  assert.equal(render().mediaSettingsSaving, false);
+});
+
+test("a failed audio language preference save restores the previous preferences", { timeout: 10_000 }, async () => {
+  const response = deferred<{ error: Error }>();
+  const h = harness({ mutation: () => ({ toPromise: () => response.promise }) });
+  const render = () => h.render<UseMediaSettingsResult>("use-media-settings.ts", "useMediaSettings");
+  const scope = "ANIME";
+  const before = render().categoryAudioLanguagePreferences[scope];
+  const saving = render().saveCategoryAudioLanguagePreferences({
+    audioLanguagePriority: "LANGUAGE_FIRST",
+  }) as Promise<void>;
+  assert.equal(render().categoryAudioLanguagePreferences[scope].audioLanguagePriority, "LANGUAGE_FIRST");
+  assert.equal(render().mediaSettingsSaving, true);
+  response.resolve({ error: new Error("save rejected") });
+  await assert.rejects(saving, /save rejected/);
+  assert.deepEqual(render().categoryAudioLanguagePreferences[scope], before);
+  assert.equal(render().mediaSettingsSaving, false);
+  assert.deepEqual(h.messages, ["save rejected"]);
+});
+
 test("failed general save restores the previous value and releases the save lock", { timeout: 10_000 }, async () => {
   const response = deferred<{ error: Error }>();
   const h = harness({ mutation: () => ({ toPromise: () => response.promise }) });

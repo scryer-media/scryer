@@ -1,8 +1,9 @@
 import * as React from "react";
-import { Languages, SlidersVertical, Sparkles } from "lucide-react";
+import { AudioLines, Languages, SlidersVertical, Sparkles } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { InfoHelp } from "@/components/common/info-help";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
+import { AudioLanguagePreferencesEditor } from "./audio-language-preferences-editor";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -12,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { ViewCategoryId } from "./indexer-category-picker";
+import type { AudioLanguagePreferences } from "@/lib/types/settings";
 import type {
   FacetScoringPersonaSelectionRecord,
   ScoringPersonaId,
@@ -70,6 +72,8 @@ export function QualitySettingsPanel({
   categoryQualityProfileOverrides,
   categoryRequiredAudioLanguages,
   saveCategoryRequiredAudioLanguages,
+  categoryAudioLanguagePreferences,
+  saveCategoryAudioLanguagePreferences,
   activeQualityScopeId,
   globalScoringPersona,
   categoryPersonaSelections,
@@ -86,6 +90,10 @@ export function QualitySettingsPanel({
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
   categoryRequiredAudioLanguages: Record<ViewCategoryId, string[]>;
   saveCategoryRequiredAudioLanguages: (languages: string[]) => Promise<void> | void;
+  categoryAudioLanguagePreferences: Record<ViewCategoryId, AudioLanguagePreferences>;
+  saveCategoryAudioLanguagePreferences: (
+    update: Partial<AudioLanguagePreferences>,
+  ) => Promise<void> | void;
   activeQualityScopeId: ViewCategoryId;
   globalScoringPersona: ScoringPersonaId;
   categoryPersonaSelections: Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>;
@@ -248,6 +256,20 @@ export function QualitySettingsPanel({
             disabled={mediaSettingsLoading || mediaSettingsSaving || personaSaving}
           />
         </div>
+      </QualitySettingsSection>
+
+      <QualitySettingsSection
+        icon={AudioLines}
+        title={t("settings.audioLanguagePreferences")}
+        description={t("settings.audioLanguagePreferencesInfo")}
+      >
+        <AudioLanguagePreferencesEditor
+          value={categoryAudioLanguagePreferences[activeQualityScopeId]}
+          onChange={(update) => {
+            void saveCategoryAudioLanguagePreferences(update);
+          }}
+          disabled={mediaSettingsLoading || mediaSettingsSaving || personaSaving}
+        />
       </QualitySettingsSection>
     </div>
   );

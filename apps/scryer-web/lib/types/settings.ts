@@ -397,11 +397,24 @@ export type TotpEnrollmentComplete = {
 
 export type ImportMode = "HARDLINK_OR_COPY" | "MOVE";
 
+export type AudioLanguagePriority = "QUALITY_FIRST" | "LANGUAGE_FIRST";
+
+export type AudioLanguagePreferences = {
+  preferredAudioLanguages: string[];
+  optionalAudioLanguages: string[];
+  audioLanguagePriority: AudioLanguagePriority;
+  optionalAudioLanguagesKeepSearching: boolean;
+};
+
 export type MediaSettings = {
   scope: "MOVIE" | "SERIES" | "ANIME";
   libraryPath: string;
   rootFolders: { path: string; isDefault: boolean }[];
   requiredAudioLanguages: string[];
+  preferredAudioLanguages: string[];
+  optionalAudioLanguages: string[];
+  audioLanguagePriority: AudioLanguagePriority;
+  optionalAudioLanguagesKeepSearching: boolean;
   useSeasonFolders: boolean;
   folderTemplate: string;
   seasonFolderTemplate: string | null;

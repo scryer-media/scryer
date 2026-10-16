@@ -104,6 +104,18 @@ export function audioLanguageOptions(
   ];
 }
 
+/** Choices for how the preferred audio language weighs against quality. */
+export const AUDIO_LANGUAGE_PRIORITY_OPTIONS = [
+  { value: "QUALITY_FIRST", labelKey: "settings.audioLanguagePriorityQualityFirst" },
+  { value: "LANGUAGE_FIRST", labelKey: "settings.audioLanguagePriorityLanguageFirst" },
+] as const;
+
+export function audioLanguagePriorityLabelKey(value: string | null | undefined): string {
+  return value === "LANGUAGE_FIRST"
+    ? "settings.audioLanguagePriorityLanguageFirst"
+    : "settings.audioLanguagePriorityQualityFirst";
+}
+
 export function audioLanguageLabel(
   code: string,
   originalLanguageLabel: string,
