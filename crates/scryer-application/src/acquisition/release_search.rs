@@ -4269,6 +4269,7 @@ mod tests {
             tier_index: None,
             size_fit_penalty: 0,
             revision_preference: 0,
+            language: Default::default(),
         }
     }
 

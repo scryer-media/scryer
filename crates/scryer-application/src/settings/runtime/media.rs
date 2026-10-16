@@ -373,6 +373,80 @@ impl AppUseCase {
             &title_context,
         ))
     }
+
+    /// Preferred and optional audio languages for a title.
+    ///
+    /// Each key resolves on its own: the library's value when it sets one,
+    /// otherwise the facet's. An empty list counts as unset, the same rule
+    /// [`Self::resolve_required_audio_languages`] applies.
+    pub(crate) async fn resolve_audio_language_preferences_for_title(
+        &self,
+        title: &scryer_domain::Title,
+    ) -> AppResult<crate::AudioLanguagePreferences> {
+        let scopes = [title.library_id.as_str(), title.facet.as_str()];
+        let preferred = self
+            .first_configured_language_list(crate::PREFERRED_AUDIO_LANGUAGES_KEY, &scopes)
+            .await?;
+        let optional = self
+            .first_configured_language_list(crate::OPTIONAL_AUDIO_LANGUAGES_KEY, &scopes)
+            .await?;
+        let mut priority = crate::AudioLanguagePriority::default();
+        for scope in scopes {
+            if let Some(value) = self
+                .read_setting_string_value_explicit(crate::AUDIO_LANGUAGE_PRIORITY_KEY, Some(scope))
+                .await?
+                .as_deref()
+                .and_then(crate::AudioLanguagePriority::parse)
+            {
+                priority = value;
+                break;
+            }
+        }
+        let mut optional_keep_searching = false;
+        for scope in scopes {
+            if let Some(value) = self
+                .read_setting_bool_value_explicit(
+                    crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
+                    Some(scope),
+                )
+                .await?
+            {
+                optional_keep_searching = value;
+                break;
+            }
+        }
+        let title_context = title_audio_language_context(
+            title.language.as_deref(),
+            title.country.as_deref(),
+            Some(title.facet.as_str()),
+            &title.tags,
+        );
+        Ok(crate::AudioLanguagePreferences::resolve(
+            &preferred,
+            &optional,
+            priority,
+            optional_keep_searching,
+            &title_context,
+        ))
+    }
+
+    async fn first_configured_language_list(
+        &self,
+        key_name: &str,
+        scopes: &[&str],
+    ) -> AppResult<Vec<String>> {
+        for scope in scopes {
+            let languages = normalize_required_audio_requirements(
+                self.read_setting_json_value::<Vec<String>>(key_name, Some(scope))
+                    .await?
+                    .unwrap_or_default(),
+            );
+            if !languages.is_empty() {
+                return Ok(languages);
+            }
+        }
+        Ok(Vec::new())
+    }
 }
 impl AppUseCase {
     /// Whether renaming is turned on for titles of this facet. Rename preview
