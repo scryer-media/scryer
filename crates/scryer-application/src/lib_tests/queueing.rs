@@ -5300,6 +5300,7 @@ async fn convergence_fingerprint_matches_the_full_upgrade_context_resolution() {
             &context.profile.id,
             &crate::acquisition::convergence::profile_criteria_version(&context.profile.criteria),
             &audio,
+            &crate::media::language_preference::NO_LANGUAGE_PREFERENCES,
             &crate::acquisition::convergence::scope_match_identity(&subject),
         );
 
