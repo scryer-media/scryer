@@ -496,7 +496,8 @@ pub use security::restore_job::{
     read_restore_job,
 };
 pub use settings::settings::{
-    AcquisitionSettings, AutoBackupSettings, BackupSettings, DownloadClientRoutingSettingsEntry,
+    AcquisitionSettings, AudioLanguagePreferenceOverrides, AudioLanguagePreferenceSettings,
+    AutoBackupSettings, BackupSettings, DownloadClientRoutingSettingsEntry,
     ExternalImportLibraryPathsSelection, ExternalImportLibrarySettingsAutoApplyDraft,
     ExternalImportLibrarySettingsAutoApplyResult, ExternalImportSettingsAutoApplySkip,
     FacetScoringPersonaSelection, GeneralSettings, IndexerRoutingSettingsEntry, InstanceFeatures,

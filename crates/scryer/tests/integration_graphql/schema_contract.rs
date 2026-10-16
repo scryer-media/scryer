@@ -1267,14 +1267,20 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Tagged alias metadata adds TitleAliasPayload: public types 990->991,
     // OBJECT 534->535.
     assert!(public_type_names.contains(&"TitleAliasPayload"));
+    // Ranking-only audio language preferences add the per-release rank on a
+    // decision and the priority enum: public types 991->993, OBJECT 535->536,
+    // ENUM 201->202.
+    for name in ["AudioLanguageRankPayload", "AudioLanguagePriorityValue"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        991,
+        993,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 535);
+    assert_eq!(kind_count("OBJECT"), 536);
     assert_eq!(kind_count("INPUT_OBJECT"), 243);
-    assert_eq!(kind_count("ENUM"), 201);
+    assert_eq!(kind_count("ENUM"), 202);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

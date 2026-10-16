@@ -347,6 +347,18 @@ pub enum ScoringPersonaValue {
     Compatible,
 }
 
+/// Where the preferred audio language is compared in release ranking and
+/// upgrade decisions.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum AudioLanguagePriorityValue {
+    /// Quality tier and revision first; the preferred language decides between
+    /// releases of equal quality.
+    QualityFirst,
+    /// The preferred language first, even over a better quality tier.
+    LanguageFirst,
+}
+
 /// Monitoring mode applied to episodic content.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
