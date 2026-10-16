@@ -1190,6 +1190,7 @@ fn whatever_grab_admits_import_admits() {
                                 file_path: "/data/Movies/Portmere (2024).mkv".into(),
                                 release_group: None,
                                 score: bar,
+                                language: Default::default(),
                                 covers: Vec::new(),
                                 created_at: "2026-01-01T00:00:00Z".into(),
                             },
@@ -2523,4 +2524,92 @@ fn rederiving_a_dual_audio_row_keeps_both_languages() {
         re_derived.announced_decision.block_codes
     );
     assert_eq!(re_derived.total, at_import.total);
+}
+
+fn german_first() -> crate::AudioLanguagePreferences {
+    crate::AudioLanguagePreferences {
+        preferred: vec!["deu".to_string()],
+        optional: vec!["eng".to_string()],
+        priority: crate::AudioLanguagePriority::LanguageFirst,
+        optional_keep_searching: false,
+    }
+}
+
+fn stream(language: &str) -> crate::AudioStreamDetail {
+    crate::AudioStreamDetail {
+        codec: Some("eac3".to_string()),
+        profile: None,
+        channels: Some(6),
+        language: Some(language.to_string()),
+        name: None,
+        bitrate_kbps: None,
+    }
+}
+
+/// The announced pass ranks the release name; the analyzed pass ranks the
+/// probed tracks, and that is the standing a stored file carries as its bar.
+#[test]
+fn language_rank_follows_the_announcement_until_the_tracks_are_measured() {
+    let profile = movie_profile();
+    let tags: Vec<String> = Vec::new();
+    let preferences = german_first();
+    let context = ScoringContext {
+        language_preferences: &preferences,
+        original_language: Some("en"),
+        original_country: Some("US"),
+        ..ctx(&profile, &tags)
+    };
+    let german = ReleaseEvidence::announced(
+        parse_release_metadata("Movie.2024.German.DL.1080p.WEB-DL.H.264"),
+        Some(8 * GIB),
+    );
+
+    let announced_only = score_release(&german, &context);
+    assert_eq!(announced_only.language.matched.preferred_rank, 0);
+    assert!(announced_only.language.language_first);
+    assert!(!announced_only.language.wanted);
+
+    // The file turned out to carry English only.
+    let mut facts = analyzed(8.0, None);
+    facts.analysis.audio_streams = vec![stream("eng")];
+    facts.analysis.audio_languages = vec!["eng".to_string()];
+    let measured = score_release(&german.clone().with_analysis(facts), &context);
+    assert_eq!(
+        measured.announced_decision.language.matched.preferred_rank, 0,
+        "the announcement keeps its own standing"
+    );
+    assert_eq!(measured.language.matched.preferred_rank, 1);
+    assert_eq!(measured.language.matched.optional_hits, 1);
+    assert!(measured.language.wanted);
+}
+
+/// An unlabelled release is ranked as the title's original language, not as
+/// carrying none at all.
+#[test]
+fn an_unlabelled_release_ranks_as_the_titles_original_language() {
+    let profile = movie_profile();
+    let tags: Vec<String> = Vec::new();
+    let preferences = german_first();
+    let context = ScoringContext {
+        language_preferences: &preferences,
+        original_language: Some("en"),
+        original_country: Some("US"),
+        ..ctx(&profile, &tags)
+    };
+    let scored = score_release(&announced(8.0), &context);
+    assert_eq!(scored.language.matched.preferred_rank, 1);
+    assert_eq!(scored.language.matched.optional_hits, 1);
+}
+
+/// Without preferences the rank stays neutral, so nothing downstream moves.
+#[test]
+fn no_preferences_leave_the_language_rank_neutral() {
+    let profile = movie_profile();
+    let tags: Vec<String> = Vec::new();
+    let scored = score_release(&announced(8.0), &ctx(&profile, &tags));
+    assert_eq!(scored.language, crate::AudioLanguageRank::default());
+    assert_eq!(
+        scored.announced_decision.language,
+        crate::AudioLanguageRank::default()
+    );
 }

@@ -1432,6 +1432,7 @@ impl AppUseCase {
             facts.revision,
             candidate_score,
         )
+        .with_language(facts.language)
         .with_release_title(&pr.release_title)
         .with_revision_policy(
             facts.release_group.as_deref(),

@@ -70,6 +70,23 @@ pub(crate) static NO_LANGUAGE_PREFERENCES: AudioLanguagePreferences = AudioLangu
     optional_keep_searching: false,
 };
 
+#[cfg(test)]
+impl AudioLanguageRank {
+    /// A rank with no preferences behind it, for tests that only compare ranks.
+    /// It is wanted whenever a better preferred language exists.
+    pub(crate) fn for_test(preferred_rank: u16, optional_hits: u16, language_first: bool) -> Self {
+        Self {
+            matched: AudioLanguageMatch {
+                preferred_rank,
+                optional_hits,
+            },
+            language_first,
+            wanted: preferred_rank > 0,
+            ..Default::default()
+        }
+    }
+}
+
 /// Where one release or file stands against [`AudioLanguagePreferences`].
 ///
 /// Both fields are oriented for comparison: a lower `preferred_rank` is better,
@@ -87,14 +104,23 @@ pub struct AudioLanguageMatch {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct AudioLanguageRank {
     pub matched: AudioLanguageMatch,
+    /// Length of the preferred list; `matched.preferred_rank` equals it when
+    /// none of the preferred languages is present. Display only, never ranked.
+    pub preferred_count: u16,
     pub language_first: bool,
+    /// The preferences still want something this release or file lacks; see
+    /// [`AudioLanguagePreferences::is_satisfied`]. A file with this set is never
+    /// "done", whatever its tier and score.
+    pub wanted: bool,
 }
 
 impl AudioLanguageRank {
     pub(crate) fn new(preferences: &AudioLanguagePreferences, matched: AudioLanguageMatch) -> Self {
         Self {
             matched,
+            preferred_count: saturating_u16(preferences.preferred.len()),
             language_first: preferences.language_first(),
+            wanted: !preferences.is_satisfied(matched),
         }
     }
 
@@ -284,6 +310,21 @@ mod tests {
         assert_eq!(prefs.evaluate(&langs(&["eng"])).preferred_rank, 1);
         assert_eq!(prefs.evaluate(&langs(&["fra"])).preferred_rank, 2);
         assert_eq!(prefs.evaluate(&[]).preferred_rank, 2);
+    }
+
+    #[test]
+    fn the_rank_carries_the_preferred_list_length_for_display() {
+        let prefs = prefs(&["deu", "eng"], &[]);
+        let english = AudioLanguageRank::new(&prefs, prefs.evaluate(&langs(&["eng"])));
+        assert_eq!(english.preferred_count, 2);
+        assert!(english.matched.preferred_rank < english.preferred_count);
+        let french = AudioLanguageRank::new(&prefs, prefs.evaluate(&langs(&["fra"])));
+        assert_eq!(french.matched.preferred_rank, french.preferred_count);
+        let none = AudioLanguagePreferences::default();
+        assert_eq!(
+            AudioLanguageRank::new(&none, none.evaluate(&langs(&["fra"]))).preferred_count,
+            0
+        );
     }
 
     #[test]

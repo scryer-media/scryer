@@ -5,6 +5,7 @@
 //! written from the gate's contract rather than from either caller.
 
 use super::admission::*;
+use crate::AudioLanguageRank;
 
 fn incumbent(id: &str, score: i32, covers: &[&str]) -> (Incumbent, bool) {
     (
@@ -18,6 +19,7 @@ fn incumbent(id: &str, score: i32, covers: &[&str]) -> (Incumbent, bool) {
             file_path: format!("/data/TV/Show/Season 01/{id}.mkv"),
             release_group: Some("group".into()),
             score,
+            language: Default::default(),
             covers: covers.iter().map(|value| (*value).to_string()).collect(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
         },
@@ -1005,6 +1007,7 @@ fn queued(title: &str, tier_index: Option<usize>, revision: i32, score: i32) -> 
         tier_index,
         revision,
         score,
+        language: Default::default(),
         release_key: crate::admission::release_key(title),
     }
 }
@@ -1424,4 +1427,288 @@ fn a_pack_below_every_members_tier_is_refused_on_the_tier() {
         verdict.rejection().map(|rejection| &rejection.reason),
         Some(AdmissionRejectionReason::FormatCutoffReached { .. })
     ));
+}
+
+// ── Audio language preferences: preferred rank and optional hits ───────────
+
+fn spoken(
+    id: &str,
+    tier_index: Option<usize>,
+    score: i32,
+    language: crate::AudioLanguageRank,
+) -> (Incumbent, bool) {
+    let (mut incumbent, primary) = incumbent(id, score, &[]);
+    incumbent.tier_index = tier_index;
+    incumbent.language = language;
+    (incumbent, primary)
+}
+
+fn title_scope(file: (Incumbent, bool)) -> AdmissionSubject {
+    AdmissionSubject::new(AdmissionScope::Title, [file])
+}
+
+#[test]
+fn language_first_replaces_a_better_tier_without_the_preferred_language() {
+    // English 2160p on disk, German 1080p offered, German preferred.
+    let subject = title_scope(spoken(
+        "english-2160p",
+        Some(0),
+        900,
+        AudioLanguageRank::for_test(1, 0, true),
+    ));
+    let candidate =
+        CandidateFacts::new(Some(1), 0, 100).with_language(AudioLanguageRank::for_test(0, 0, true));
+    assert!(evaluate_admission(&subject, candidate, &grab_policy()).is_admitted());
+}
+
+#[test]
+fn language_first_keeps_the_preferred_language_against_a_better_tier() {
+    let subject = title_scope(spoken(
+        "german-1080p",
+        Some(1),
+        100,
+        AudioLanguageRank::for_test(0, 0, true),
+    ));
+    let candidate = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(1, 1, true));
+    let verdict = evaluate_admission(&subject, candidate, &grab_policy());
+    assert!(matches!(
+        verdict.rejection().map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerLanguagePreference {
+            incumbent_preferred_rank: 0,
+            candidate_preferred_rank: 1,
+        })
+    ));
+}
+
+#[test]
+fn quality_first_keeps_the_tier_ahead_of_the_preferred_language() {
+    let subject = title_scope(spoken(
+        "english-2160p",
+        Some(0),
+        900,
+        AudioLanguageRank::for_test(1, 0, false),
+    ));
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0, false));
+    let verdict = evaluate_admission(&subject, candidate, &grab_policy());
+    assert!(matches!(
+        verdict.rejection().map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerQualityTier)
+    ));
+}
+
+#[test]
+fn quality_first_upgrades_to_the_preferred_language_within_a_tier() {
+    // Same tier and revision: the preferred language wins over any score.
+    let subject = title_scope(spoken(
+        "english-1080p",
+        Some(1),
+        9_000,
+        AudioLanguageRank::for_test(1, 0, false),
+    ));
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0, false));
+    assert!(evaluate_admission(&subject, candidate, &grab_policy()).is_admitted());
+}
+
+#[test]
+fn a_language_upgrade_ignores_the_format_cutoff_and_the_churn_threshold() {
+    let subject = title_scope(spoken(
+        "english-1080p",
+        Some(1),
+        9_000,
+        AudioLanguageRank::for_test(1, 0, false),
+    ));
+    let policy = AdmissionPolicy {
+        cutoff_score: Some(500),
+        ..auto(5_000)
+    };
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0, false));
+    assert!(evaluate_admission(&subject, candidate, &policy).is_admitted());
+}
+
+#[test]
+fn more_optional_languages_upgrade_after_tier_and_revision() {
+    let subject = title_scope(spoken(
+        "german-only",
+        Some(0),
+        9_000,
+        AudioLanguageRank::for_test(0, 0, true),
+    ));
+    let dual =
+        CandidateFacts::new(Some(0), 0, 100).with_language(AudioLanguageRank::for_test(0, 1, true));
+    assert!(evaluate_admission(&subject, dual, &grab_policy()).is_admitted());
+
+    let worse_tier_dual =
+        CandidateFacts::new(Some(1), 0, 100).with_language(AudioLanguageRank::for_test(0, 1, true));
+    assert!(matches!(
+        evaluate_admission(&subject, worse_tier_dual, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerQualityTier)
+    ));
+}
+
+#[test]
+fn fewer_optional_languages_are_refused_before_the_score() {
+    let subject = title_scope(spoken(
+        "dual",
+        Some(0),
+        100,
+        AudioLanguageRank::for_test(0, 1, true),
+    ));
+    let single = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(0, 0, true));
+    assert!(matches!(
+        evaluate_admission(&subject, single, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::FewerOptionalLanguages {
+            incumbent_optional_hits: 1,
+            candidate_optional_hits: 0,
+        })
+    ));
+}
+
+#[test]
+fn a_proper_still_beats_more_optional_languages() {
+    let (mut held, primary) = spoken(
+        "dual",
+        Some(0),
+        100,
+        AudioLanguageRank::for_test(0, 1, true),
+    );
+    held.revision = 0;
+    held.release_group = Some("group".into());
+    let subject = title_scope((held, primary));
+    let proper = CandidateFacts::new(Some(0), 1, 100)
+        .with_revision_policy(Some("group"), false)
+        .with_language(AudioLanguageRank::for_test(0, 0, true));
+    assert!(evaluate_admission(&subject, proper, &grab_policy()).is_admitted());
+}
+
+#[test]
+fn an_unrelated_proper_does_not_beat_more_optional_languages() {
+    let (mut held, primary) = spoken(
+        "dual",
+        Some(0),
+        100,
+        AudioLanguageRank::for_test(0, 1, true),
+    );
+    held.revision = 0;
+    held.release_group = Some("group".into());
+    let subject = title_scope((held, primary));
+    let proper = CandidateFacts::new(Some(0), 1, 100)
+        .with_revision_policy(Some("other"), false)
+        .with_language(AudioLanguageRank::for_test(0, 0, true));
+    assert!(matches!(
+        evaluate_admission(&subject, proper, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::FewerOptionalLanguages { .. })
+    ));
+}
+
+#[test]
+fn a_language_upgrade_respects_a_profile_that_forbids_upgrades() {
+    let subject = title_scope(spoken(
+        "english",
+        Some(0),
+        100,
+        AudioLanguageRank::for_test(1, 0, true),
+    ));
+    let policy = AdmissionPolicy {
+        allow_upgrades: false,
+        ..auto(0)
+    };
+    let candidate =
+        CandidateFacts::new(Some(0), 0, 100).with_language(AudioLanguageRank::for_test(0, 0, true));
+    assert!(matches!(
+        evaluate_admission(&subject, candidate, &policy)
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::UpgradesDisabled)
+    ));
+}
+
+#[test]
+fn manual_replacement_ignores_the_language_rungs() {
+    let subject = title_scope(spoken(
+        "german",
+        Some(0),
+        100,
+        AudioLanguageRank::for_test(0, 1, true),
+    ));
+    let candidate =
+        CandidateFacts::new(Some(0), 0, 100).with_language(AudioLanguageRank::for_test(1, 0, true));
+    assert!(evaluate_admission(&subject, candidate, &AdmissionPolicy::manual()).is_admitted());
+}
+
+#[test]
+fn neutral_language_facts_leave_the_ladder_unchanged() {
+    let subject = title_scope(spoken(
+        "held",
+        Some(0),
+        1_000,
+        crate::AudioLanguageRank::default(),
+    ));
+    let lower_tier = CandidateFacts::new(Some(1), 0, 9_000);
+    assert!(matches!(
+        evaluate_admission(&subject, lower_tier, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerQualityTier)
+    ));
+}
+
+#[test]
+fn a_pack_improves_members_held_without_the_preferred_language() {
+    let (mut english, primary) = incumbent("english-e1", 900, &["ep-1"]);
+    english.language = AudioLanguageRank::for_test(1, 0, true);
+    let subject = AdmissionSubject::new(episodes(&["ep-1"]), [(english, primary)]).per_member();
+    let german_pack =
+        CandidateFacts::new(Some(1), 0, 100).with_language(AudioLanguageRank::for_test(0, 0, true));
+    assert!(evaluate_admission(&subject, german_pack, &grab_policy()).is_admitted());
+}
+
+#[test]
+fn a_pack_is_refused_when_every_member_has_a_more_preferred_language() {
+    let (mut german, primary) = incumbent("german-e1", 100, &["ep-1"]);
+    german.language = AudioLanguageRank::for_test(0, 0, true);
+    let subject = AdmissionSubject::new(episodes(&["ep-1"]), [(german, primary)]).per_member();
+    let english_pack = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(1, 0, true));
+    assert!(matches!(
+        evaluate_admission(&subject, english_pack, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerLanguagePreference { .. })
+    ));
+}
+
+#[test]
+fn a_queued_release_in_the_preferred_language_blocks_a_better_tier_without_it() {
+    let mut german = queued("Movie.2024.German.1080p", Some(1), 0, 100);
+    german.language = AudioLanguageRank::for_test(0, 0, true);
+    let subject = AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![german]);
+    let english = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(1, 0, true))
+        .with_release_title("Movie.2024.2160p");
+    assert!(matches!(
+        evaluate_admission(&subject, english, &grab_policy_with_queue(0))
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::QueuedEqualOrBetter { .. })
+    ));
+
+    let mut english_queued = queued("Movie.2024.2160p", Some(0), 0, 9_000);
+    english_queued.language = AudioLanguageRank::for_test(1, 0, true);
+    let subject =
+        AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![english_queued]);
+    let german = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0, true))
+        .with_release_title("Movie.2024.German.1080p");
+    assert!(evaluate_admission(&subject, german, &grab_policy_with_queue(0)).is_admitted());
 }
