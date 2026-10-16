@@ -57,6 +57,11 @@ export type Release = {
     releaseScore: number;
     preferenceScore: number;
     scoringLog: { code: string; delta: number; kind?: ScoringEntryKind; source: string; ruleSetName?: string | null }[];
+    audioLanguage?: {
+      preferredRank: number;
+      preferredCount: number;
+      optionalHits: number;
+    } | null;
   } | null;
   autoEligible?: boolean | null;
   autoDecisionCode?: string | null;
