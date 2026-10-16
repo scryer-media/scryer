@@ -219,6 +219,7 @@ pub(crate) fn compare_ranked_results(
 #[cfg(test)]
 mod tests {
     use super::{RankHead, SearchRank};
+    use crate::AudioLanguageRank;
 
     fn rank() -> SearchRank {
         SearchRank {
@@ -349,31 +350,17 @@ mod tests {
         assert!(proper.key() < high.key());
     }
 
-    fn language(
-        preferred_rank: u16,
-        optional_hits: u16,
-        language_first: bool,
-    ) -> crate::AudioLanguageRank {
-        crate::AudioLanguageRank {
-            matched: crate::AudioLanguageMatch {
-                preferred_rank,
-                optional_hits,
-            },
-            language_first,
-        }
-    }
-
     #[test]
     fn language_first_puts_the_preferred_language_above_a_better_tier() {
         let german_1080p = RankHead {
             tier_index: 1,
-            language: language(0, 0, true),
+            language: AudioLanguageRank::for_test(0, 0, true),
             ..Default::default()
         };
         let english_2160p = RankHead {
             tier_index: 0,
             negated_score: -5000,
-            language: language(1, 1, true),
+            language: AudioLanguageRank::for_test(1, 1, true),
             ..Default::default()
         };
         assert!(german_1080p.key() < english_2160p.key());
@@ -383,19 +370,19 @@ mod tests {
     fn quality_first_keeps_the_tier_ahead_of_the_preferred_language() {
         let german_1080p = RankHead {
             tier_index: 1,
-            language: language(0, 0, false),
+            language: AudioLanguageRank::for_test(0, 0, false),
             ..Default::default()
         };
         let english_2160p = RankHead {
             tier_index: 0,
-            language: language(1, 0, false),
+            language: AudioLanguageRank::for_test(1, 0, false),
             ..Default::default()
         };
         assert!(english_2160p.key() < german_1080p.key());
         let german_2160p = RankHead {
             tier_index: 0,
             negated_score: 0,
-            language: language(0, 0, false),
+            language: AudioLanguageRank::for_test(0, 0, false),
             ..Default::default()
         };
         let english_2160p_high_score = RankHead {
@@ -409,13 +396,13 @@ mod tests {
     fn optional_languages_follow_the_revision_and_precede_the_score() {
         let dual = RankHead {
             tier_index: 0,
-            language: language(0, 1, true),
+            language: AudioLanguageRank::for_test(0, 1, true),
             ..Default::default()
         };
         let single_high_score = RankHead {
             tier_index: 0,
             negated_score: -9000,
-            language: language(0, 0, true),
+            language: AudioLanguageRank::for_test(0, 0, true),
             ..Default::default()
         };
         assert!(dual.key() < single_high_score.key());

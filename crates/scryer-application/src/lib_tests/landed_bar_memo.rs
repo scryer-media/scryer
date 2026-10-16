@@ -115,6 +115,12 @@ impl Fixture {
         }
     }
 
+    async fn set_movie_setting(&self, key: &str, value: &str) {
+        self.settings
+            .set_scoped_value(SETTINGS_SCOPE_SYSTEM, key, "movie", value)
+            .await;
+    }
+
     async fn edit_title(&self, title_id: &str, edit: impl Fn(&mut Title)) {
         let mut store = self.titles.store.lock().await;
         for title in store.iter_mut().filter(|title| title.id == title_id) {
@@ -131,7 +137,7 @@ impl Fixture {
             "{change}: every scope is occupied"
         );
         let (hits, fills) = self.memo().counters();
-        let memoised = self.app.landed_bars_for_scopes_memoized(scopes).await;
+        let memoised = scores(self.app.landed_bars_for_scopes_memoized(scopes).await);
         assert_eq!(
             memoised, fresh,
             "{change}: memoised bar must equal a fresh one"
@@ -142,7 +148,7 @@ impl Fixture {
             "{change}: a changed input must miss the memo"
         );
         assert_eq!(
-            self.app.landed_bars_for_scopes_memoized(scopes).await,
+            scores(self.app.landed_bars_for_scopes_memoized(scopes).await),
             fresh,
             "{change}: the repeat must return the same bar"
         );
@@ -167,6 +173,12 @@ fn score_cutoff_profile(cutoff_score: Option<i32>) -> QualityProfile {
     let mut profile = cutoff_projection_test_profile("memo", "1080P");
     profile.criteria.cutoff_score = cutoff_score;
     profile
+}
+
+fn scores(bars: Vec<Option<crate::quality::landed_bar_memo::LandedBar>>) -> Vec<Option<i32>> {
+    bars.into_iter()
+        .map(|bar| bar.map(|bar| bar.score))
+        .collect()
 }
 
 #[tokio::test]
@@ -420,7 +432,7 @@ async fn an_engine_that_reads_the_clock_is_never_memoised() {
     let fresh = fixture.app.landed_bars_for_scopes(&scopes).await;
     for _ in 0..2 {
         assert_eq!(
-            fixture.app.landed_bars_for_scopes_memoized(&scopes).await,
+            scores(fixture.app.landed_bars_for_scopes_memoized(&scopes).await),
             fresh
         );
     }
@@ -550,12 +562,96 @@ async fn a_page_of_series_scopes_reads_episodes_once_and_a_changed_span_misses()
     let (hits, fills) = fixture.memo().counters();
     let fresh = fixture.app.landed_bars_for_scopes(&scopes).await;
     assert_eq!(
-        fixture.app.landed_bars_for_scopes_memoized(&scopes).await,
+        scores(fixture.app.landed_bars_for_scopes_memoized(&scopes).await),
         fresh
     );
     assert_eq!(
         fixture.memo().counters(),
         (hits + 2, fills + 1),
         "only the scope whose episode span changed is re-scored"
+    );
+}
+
+#[tokio::test]
+async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_score() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    let german = fixture
+        .add_movie(
+            "German Cut",
+            "German.Cut.2024.GERMAN.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    let english = fixture
+        .add_movie(
+            "English Cut",
+            "English.Cut.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::new(),
+        "both files are at the cutoff tier and no preference is set"
+    );
+
+    fixture
+        .set_movie_setting(crate::PREFERRED_AUDIO_LANGUAGES_KEY, "[\"de\"]")
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([english.id.clone()])
+    );
+
+    fixture
+        .set_movie_setting(crate::PREFERRED_AUDIO_LANGUAGES_KEY, "[\"en\", \"de\"]")
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([german.id.clone()]),
+        "the best-placed preferred language decides, not any preferred language"
+    );
+
+    let mut no_upgrades = score_cutoff_profile(None);
+    no_upgrades.criteria.allow_upgrades = false;
+    fixture
+        .quality_profiles
+        .set_profiles(vec![no_upgrades])
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::new(),
+        "a profile that refuses upgrades nominates nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_optional_language_is_a_target_only_when_keep_searching_is_on() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    let german_only = fixture
+        .add_movie(
+            "German Only",
+            "German.Only.2024.GERMAN.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    fixture
+        .add_movie(
+            "Dual Audio",
+            "Dual.Audio.2024.GERMAN.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    fixture
+        .set_movie_setting(crate::OPTIONAL_AUDIO_LANGUAGES_KEY, "[\"en\"]")
+        .await;
+    assert_eq!(fixture.target_titles().await, BTreeSet::new());
+
+    fixture
+        .set_movie_setting(crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY, "true")
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([german_only.id.clone()])
     );
 }

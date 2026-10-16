@@ -128,7 +128,11 @@ impl AppUseCase {
         &self,
         scopes: &[LandedBarScope],
     ) -> Vec<Option<i32>> {
-        self.landed_bars_for_scopes_with_memo(scopes, None).await
+        self.landed_bars_for_scopes_with_memo(scopes, None)
+            .await
+            .into_iter()
+            .map(|bar| bar.map(|bar| bar.score))
+            .collect()
     }
 
     /// [`Self::landed_bars_for_scopes`] for the background cutoff pass, reusing
@@ -137,7 +141,7 @@ impl AppUseCase {
     pub(crate) async fn landed_bars_for_scopes_memoized(
         &self,
         scopes: &[LandedBarScope],
-    ) -> Vec<Option<i32>> {
+    ) -> Vec<Option<crate::quality::landed_bar_memo::LandedBar>> {
         // Taken before any scoring context (and so before the rules engine) is
         // read: a swap that lands after this point refuses what we fill.
         let ticket = self.runtime.acquisition.landed_bar_memo.ticket();
@@ -148,7 +152,7 @@ impl AppUseCase {
         &self,
         scopes: &[LandedBarScope],
         memo_ticket: Option<crate::quality::landed_bar_memo::LandedBarMemoTicket>,
-    ) -> Vec<Option<i32>> {
+    ) -> Vec<Option<crate::quality::landed_bar_memo::LandedBar>> {
         let mut bars = vec![None; scopes.len()];
         if scopes.is_empty() {
             return bars;
@@ -270,7 +274,10 @@ impl AppUseCase {
             .unwrap_or_default();
 
         // One scoring context per title, reused by every scope that title owns.
-        let mut bars_by_scope: HashMap<(usize, Vec<String>), i32> = HashMap::new();
+        let mut bars_by_scope: HashMap<
+            (usize, Vec<String>),
+            crate::quality::landed_bar_memo::LandedBar,
+        > = HashMap::new();
         for title in &titles {
             let title_indices: Vec<usize> = scored_indices
                 .iter()
@@ -327,7 +334,7 @@ impl AppUseCase {
                         episode_ids.sort();
                         episode_ids.dedup();
                     }
-                    let score = *bars_by_scope
+                    let landed = *bars_by_scope
                         .entry((index, episode_ids.clone()))
                         .or_insert_with(|| {
                             // Ordinary multi-episode files retain their whole-span
@@ -354,21 +361,25 @@ impl AppUseCase {
                             {
                                 return bar;
                             }
-                            let bar = self
-                                .incumbent_bar_for_episodes(
-                                    &file.file,
-                                    &context,
-                                    basis,
-                                    &episode_ids,
-                                )
-                                .score;
+                            let facts = self.incumbent_bar_for_episodes(
+                                &file.file,
+                                &context,
+                                basis,
+                                &episode_ids,
+                            );
+                            let bar = crate::quality::landed_bar_memo::LandedBar {
+                                score: facts.score,
+                                tier_index: facts.tier_index,
+                                language: facts.language,
+                            };
                             if let Some((ticket, key)) = memo {
                                 memo_store.fill(ticket, key, bar);
                             }
                             bar
                         });
-                    bars[scope_index] =
-                        Some(bars[scope_index].map_or(score, |current| current.max(score)));
+                    bars[scope_index] = Some(
+                        bars[scope_index].map_or(landed, |current| current.with_file(landed)),
+                    );
                 }
             }
         }
