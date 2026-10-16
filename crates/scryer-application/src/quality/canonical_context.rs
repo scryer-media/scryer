@@ -20,6 +20,7 @@ use scryer_domain::Title;
 pub(crate) struct ResolvedScoringContext {
     profile: QualityProfile,
     required_audio_languages: Vec<String>,
+    language_preferences: crate::AudioLanguagePreferences,
     category: String,
     title_id: String,
     library_name: Option<String>,
@@ -69,6 +70,7 @@ impl ResolvedScoringContext {
         ScoringContext {
             profile: &self.profile,
             required_audio_languages: &self.required_audio_languages,
+            language_preferences: &self.language_preferences,
             category: &self.category,
             size_basis: size_basis.or_runtime(self.default_runtime_minutes),
             rules: (!self.rules.is_empty()).then_some(&self.rules),
@@ -105,6 +107,7 @@ impl ResolvedScoringContext {
         let Self {
             profile,
             required_audio_languages,
+            language_preferences,
             category,
             title_id,
             library_name,
@@ -122,6 +125,7 @@ impl ResolvedScoringContext {
             &serde_json::to_value(profile).unwrap_or(serde_json::Value::Null),
         );
         hash_debug(hasher, required_audio_languages);
+        hash_debug(hasher, language_preferences);
         hash_debug(hasher, category);
         hash_debug(hasher, title_id);
         hash_debug(hasher, library_name);
@@ -344,6 +348,17 @@ impl AppUseCase {
             .resolve_required_audio_languages_for_title(title)
             .await
             .unwrap_or_default();
+        let language_preferences = self
+            .resolve_audio_language_preferences_for_title(title)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    error = %error,
+                    title_id = %title.id,
+                    "canonical scoring: audio language preferences unresolved; ranking without them"
+                );
+                crate::AudioLanguagePreferences::default()
+            });
         let persona = self
             .resolve_scoring_persona(Some(title.library_id.as_str()), Some(category.as_str()))
             .await
@@ -390,6 +405,7 @@ impl AppUseCase {
         ResolvedScoringContext {
             profile,
             required_audio_languages,
+            language_preferences,
             category,
             title_id: title.id.clone(),
             library_name,
