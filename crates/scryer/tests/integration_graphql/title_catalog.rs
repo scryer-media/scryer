@@ -5702,6 +5702,94 @@ async fn graphql_library_search_languages_round_trip_in_order() {
     );
 }
 
+/// A library's audio language preferences override its facet's one value at a
+/// time; an omitted value inherits again.
+#[tokio::test]
+async fn graphql_library_audio_language_preferences_inherit_per_value() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    seed_library_settings_definitions(&ctx).await;
+    let facet = gql(
+        &ctx,
+        r#"mutation($input: UpdateMediaSettingsInput!) {
+            updateMediaSettings(input: $input) { scope }
+        }"#,
+        json!({"input": {
+            "scope": "SERIES",
+            "preferredAudioLanguages": ["ger"],
+            "audioLanguagePriority": "LANGUAGE_FIRST"
+        }}),
+    )
+    .await;
+    assert_no_errors(&facet);
+    let library_id =
+        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Series);
+    let read = r#"query($libraryId: ID!) {
+        librarySettings(libraryId: $libraryId) {
+            preferredAudioLanguagesOverride
+            preferredAudioLanguages
+            optionalAudioLanguagesOverride
+            optionalAudioLanguages
+            audioLanguagePriorityOverride
+            audioLanguagePriority
+            optionalAudioLanguagesKeepSearchingOverride
+            optionalAudioLanguagesKeepSearching
+        }
+    }"#;
+    let save = |settings: serde_json::Value| {
+        gql(
+            &ctx,
+            r#"mutation($input: UpdateLibraryInput!) {
+                updateLibrary(input: $input) { id }
+            }"#,
+            json!({"input": {"libraryId": library_id, "settings": settings}}),
+        )
+    };
+
+    let update = save(json!({
+        "optionalAudioLanguages": ["en"],
+        "audioLanguagePriority": "QUALITY_FIRST"
+    }))
+    .await;
+    assert_no_errors(&update);
+    let settings = gql(&ctx, read, json!({ "libraryId": library_id })).await;
+    assert_no_errors(&settings);
+    let settings = &settings["data"]["librarySettings"];
+    assert!(settings["preferredAudioLanguagesOverride"].is_null());
+    assert_eq!(settings["optionalAudioLanguagesOverride"], json!(["eng"]));
+    assert_eq!(settings["audioLanguagePriorityOverride"], "QUALITY_FIRST");
+    assert!(settings["optionalAudioLanguagesKeepSearchingOverride"].is_null());
+    assert_eq!(
+        (
+            &settings["preferredAudioLanguages"],
+            &settings["optionalAudioLanguages"],
+            &settings["audioLanguagePriority"],
+            &settings["optionalAudioLanguagesKeepSearching"],
+        ),
+        (
+            &json!(["deu"]),
+            &json!(["eng"]),
+            &json!("QUALITY_FIRST"),
+            &json!(false),
+        ),
+        "unset values come from the series facet"
+    );
+
+    let rejected = save(json!({ "preferredAudioLanguages": ["@@"] })).await;
+    assert!(
+        rejected.get("errors").is_some(),
+        "an unknown code is refused: {rejected}"
+    );
+
+    let cleared = save(json!({})).await;
+    assert_no_errors(&cleared);
+    let settings = gql(&ctx, read, json!({ "libraryId": library_id })).await;
+    let settings = &settings["data"]["librarySettings"];
+    assert!(settings["optionalAudioLanguagesOverride"].is_null());
+    assert!(settings["audioLanguagePriorityOverride"].is_null());
+    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
+}
+
 /// The per-title override validates against the same picker set as the
 /// library setting and distinguishes inherit (null), searching only the
 /// primary name (empty) and an ordered list.

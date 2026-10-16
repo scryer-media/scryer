@@ -425,6 +425,19 @@ pub fn from_library_settings(settings: LibrarySettings) -> LibrarySettingsPayloa
         search_languages: settings.search_languages,
         required_audio_languages_override: settings.required_audio_languages_override,
         required_audio_languages: settings.required_audio_languages,
+        preferred_audio_languages_override: settings.preferred_audio_languages_override,
+        preferred_audio_languages: settings.preferred_audio_languages,
+        optional_audio_languages_override: settings.optional_audio_languages_override,
+        optional_audio_languages: settings.optional_audio_languages,
+        audio_language_priority_override: settings
+            .audio_language_priority_override
+            .map(AudioLanguagePriorityValue::from_application),
+        audio_language_priority: AudioLanguagePriorityValue::from_application(
+            settings.audio_language_priority,
+        ),
+        optional_audio_languages_keep_searching_override: settings
+            .optional_audio_languages_keep_searching_override,
+        optional_audio_languages_keep_searching: settings.optional_audio_languages_keep_searching,
         metadata_language_override: settings.metadata_language_override,
         metadata_language: settings.metadata_language,
         use_season_folders_override: settings.use_season_folders_override,
@@ -559,6 +572,14 @@ pub fn from_media_settings(
             })
             .collect(),
         required_audio_languages: settings.required_audio_languages,
+        preferred_audio_languages: settings.audio_language_preferences.preferred,
+        optional_audio_languages: settings.audio_language_preferences.optional,
+        audio_language_priority: AudioLanguagePriorityValue::from_application(
+            settings.audio_language_preferences.priority,
+        ),
+        optional_audio_languages_keep_searching: settings
+            .audio_language_preferences
+            .optional_keep_searching,
         use_season_folders: settings.use_season_folders,
         folder_template: settings.folder_template,
         season_folder_template: settings.season_folder_template,

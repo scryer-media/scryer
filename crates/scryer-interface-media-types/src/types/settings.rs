@@ -1,8 +1,8 @@
 use super::{
-    ContentScopeValue, DelayProfilePreferredProtocolValue, FillerPolicyValue, ImportModeValue,
-    Long, MediaFacetValue, RecapPolicyValue, RenameCollisionPolicyValue,
-    RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
-    VerificationDepthValue,
+    AudioLanguagePriorityValue, ContentScopeValue, DelayProfilePreferredProtocolValue,
+    FillerPolicyValue, ImportModeValue, Long, MediaFacetValue, RecapPolicyValue,
+    RenameCollisionPolicyValue, RenameMissingMetadataPolicyValue, RootFolderPayload,
+    ScoringPersonaValue, VerificationDepthValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -863,6 +863,16 @@ pub struct MediaSettingsPayload {
     pub root_folders: Vec<RootFolderPayload>,
     /// Effective configured requirements; `original` remains unchanged.
     pub required_audio_languages: Vec<String>,
+    /// Ordered preferred audio languages; the first one a release carries sets
+    /// its rank. Unlike required languages they never reject a release.
+    pub preferred_audio_languages: Vec<String>,
+    /// Optional audio languages; among releases of equal quality, more of them
+    /// rank higher.
+    pub optional_audio_languages: Vec<String>,
+    /// Whether the preferred language is compared before or after quality.
+    pub audio_language_priority: AudioLanguagePriorityValue,
+    /// Whether a file missing optional languages stays an upgrade target.
+    pub optional_audio_languages_keep_searching: bool,
     /// Whether episodic titles use season folders.
     pub use_season_folders: bool,
     /// Folder naming template.
@@ -1176,6 +1186,14 @@ pub struct UpdateMediaSettingsInput {
     pub root_folders: Option<Vec<RootFolderInput>>,
     /// Optional required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
+    /// Optional ordered preferred audio-language codes; an empty list clears them.
+    pub preferred_audio_languages: Option<Vec<String>>,
+    /// Optional audio-language codes that rank higher when present; an empty list clears them.
+    pub optional_audio_languages: Option<Vec<String>>,
+    /// Whether the preferred language is compared before or after quality.
+    pub audio_language_priority: Option<AudioLanguagePriorityValue>,
+    /// Whether a file missing optional languages stays an upgrade target.
+    pub optional_audio_languages_keep_searching: Option<bool>,
     /// Whether episodic titles use season folders.
     pub use_season_folders: Option<bool>,
     /// Optional title folder template.

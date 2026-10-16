@@ -3,6 +3,9 @@ pub struct MediaSettings {
     pub library_path: String,
     pub root_folders: Vec<RootFolderEntry>,
     pub required_audio_languages: Vec<String>,
+    /// Ranking-only audio language preferences as configured for the facet;
+    /// `original` stays unexpanded.
+    pub audio_language_preferences: AudioLanguagePreferenceSettings,
     pub use_season_folders: bool,
     pub folder_template: String,
     pub season_folder_template: Option<String>,
@@ -26,11 +29,68 @@ pub struct MediaSettings {
     /// The Movie facet's availability gate settings; `None` for other facets.
     pub movie_availability: Option<MovieAvailabilitySettings>,
 }
+/// Configured audio language preferences for one scope, as an operator wrote
+/// them. [`crate::AudioLanguagePreferences`] is the per-title resolution.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AudioLanguagePreferenceSettings {
+    pub preferred: Vec<String>,
+    pub optional: Vec<String>,
+    pub priority: crate::AudioLanguagePriority,
+    pub optional_keep_searching: bool,
+}
+
+/// The audio language preferences one scope sets itself, where `None`
+/// inherits from the next scope. A library inherits from its facet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AudioLanguagePreferenceOverrides {
+    pub preferred: Option<Vec<String>>,
+    pub optional: Option<Vec<String>>,
+    pub priority: Option<crate::AudioLanguagePriority>,
+    pub optional_keep_searching: Option<bool>,
+}
+
+impl AudioLanguagePreferenceOverrides {
+    /// These overrides, with every value they leave unset taken from `inherited`.
+    pub fn over(self, inherited: AudioLanguagePreferenceSettings) -> AudioLanguagePreferenceSettings {
+        AudioLanguagePreferenceSettings {
+            preferred: self.preferred.unwrap_or(inherited.preferred),
+            optional: self.optional.unwrap_or(inherited.optional),
+            priority: self.priority.unwrap_or(inherited.priority),
+            optional_keep_searching: self
+                .optional_keep_searching
+                .unwrap_or(inherited.optional_keep_searching),
+        }
+    }
+}
+
+/// Normalizes a preferred or optional audio language list. Unlike required
+/// languages, an unknown code is refused rather than dropped, so a typo cannot
+/// silently empty the list; spellings of the same language collapse into one.
+pub(crate) fn validated_preference_languages(
+    label: &str,
+    languages: Vec<String>,
+) -> AppResult<Vec<String>> {
+    if let Some(unknown) = languages.iter().find(|value| {
+        !value.trim().is_empty()
+            && normalize_required_audio_requirements([value.to_string()]).is_empty()
+    }) {
+        return Err(AppError::Validation(format!(
+            "unknown {label} \"{}\"",
+            unknown.trim()
+        )));
+    }
+    Ok(normalize_required_audio_requirements(languages))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateMediaSettings {
     pub library_path: Option<String>,
     pub root_folders: Option<Vec<RootFolderEntry>>,
     pub required_audio_languages: Option<Vec<String>>,
+    pub preferred_audio_languages: Option<Vec<String>>,
+    pub optional_audio_languages: Option<Vec<String>>,
+    pub audio_language_priority: Option<crate::AudioLanguagePriority>,
+    pub optional_audio_languages_keep_searching: Option<bool>,
     pub use_season_folders: Option<bool>,
     pub folder_template: Option<String>,
     pub season_folder_template: Option<String>,
@@ -388,38 +448,13 @@ impl AppUseCase {
         &self,
         title: &scryer_domain::Title,
     ) -> AppResult<crate::AudioLanguagePreferences> {
-        let scopes = [title.library_id.as_str(), title.facet.as_str()];
-        let preferred = self
-            .first_configured_language_list(crate::PREFERRED_AUDIO_LANGUAGES_KEY, &scopes)
-            .await?;
-        let optional = self
-            .first_configured_language_list(crate::OPTIONAL_AUDIO_LANGUAGES_KEY, &scopes)
-            .await?;
-        let mut priority = crate::AudioLanguagePriority::default();
-        for scope in scopes {
-            if let Some(value) = self
-                .read_setting_string_value_explicit(crate::AUDIO_LANGUAGE_PRIORITY_KEY, Some(scope))
-                .await?
-                .as_deref()
-                .and_then(crate::AudioLanguagePriority::parse)
-            {
-                priority = value;
-                break;
-            }
-        }
-        let mut optional_keep_searching = false;
-        for scope in scopes {
-            if let Some(value) = self
-                .read_setting_bool_value_explicit(
-                    crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
-                    Some(scope),
-                )
-                .await?
-            {
-                optional_keep_searching = value;
-                break;
-            }
-        }
+        let settings = self
+            .load_audio_language_preference_overrides(&title.library_id)
+            .await?
+            .over(
+                self.load_audio_language_preference_settings(title.facet.as_str())
+                    .await?,
+            );
         let title_context = title_audio_language_context(
             title.language.as_deref(),
             title.country.as_deref(),
@@ -427,13 +462,57 @@ impl AppUseCase {
             &title.tags,
         );
         Ok(crate::AudioLanguagePreferences::resolve(
-            &preferred,
-            &optional,
-            priority,
-            optional_keep_searching,
+            &settings.preferred,
+            &settings.optional,
+            settings.priority,
+            settings.optional_keep_searching,
             &title_context,
         ))
     }
+
+    /// The audio language preferences configured on one scope (a facet name or
+    /// a library id), without falling back to any other scope.
+    pub(crate) async fn load_audio_language_preference_settings(
+        &self,
+        scope_id: &str,
+    ) -> AppResult<AudioLanguagePreferenceSettings> {
+        Ok(self
+            .load_audio_language_preference_overrides(scope_id)
+            .await?
+            .over(AudioLanguagePreferenceSettings::default()))
+    }
+
+    /// What one scope sets itself; every value it leaves unset is `None`.
+    pub(crate) async fn load_audio_language_preference_overrides(
+        &self,
+        scope_id: &str,
+    ) -> AppResult<AudioLanguagePreferenceOverrides> {
+        let list = |languages: Vec<String>| (!languages.is_empty()).then_some(languages);
+        let preferred = self
+            .first_configured_language_list(crate::PREFERRED_AUDIO_LANGUAGES_KEY, &[scope_id])
+            .await?;
+        let optional = self
+            .first_configured_language_list(crate::OPTIONAL_AUDIO_LANGUAGES_KEY, &[scope_id])
+            .await?;
+        let priority = self
+            .read_setting_string_value_explicit(crate::AUDIO_LANGUAGE_PRIORITY_KEY, Some(scope_id))
+            .await?
+            .as_deref()
+            .and_then(crate::AudioLanguagePriority::parse);
+        let optional_keep_searching = self
+            .read_setting_bool_value_explicit(
+                crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
+                Some(scope_id),
+            )
+            .await?;
+        Ok(AudioLanguagePreferenceOverrides {
+            preferred: list(preferred),
+            optional: list(optional),
+            priority,
+            optional_keep_searching,
+        })
+    }
+
 
     /// Which of `scope_ids` (library ids or facet names) set preferred or
     /// optional audio languages, so their titles can become language targets.
@@ -767,6 +846,9 @@ impl AppUseCase {
             required_audio_languages: self
                 .load_facet_required_audio_languages(facet.as_str())
                 .await?,
+            audio_language_preferences: self
+                .load_audio_language_preference_settings(facet.as_str())
+                .await?,
             use_season_folders,
             folder_template,
             season_folder_template,
@@ -930,6 +1012,14 @@ impl AppUseCase {
         if let Some(template) = input.specials_folder_template.as_deref() {
             crate::validate_specials_folder_template(template)?;
         }
+        let preferred_audio_languages = input
+            .preferred_audio_languages
+            .map(|languages| validated_preference_languages("preferred audio language", languages))
+            .transpose()?;
+        let optional_audio_languages = input
+            .optional_audio_languages
+            .map(|languages| validated_preference_languages("optional audio language", languages))
+            .transpose()?;
         let season_folder_template =
             normalize_optional_string(input.season_folder_template.clone());
         let specials_folder_template =
@@ -1069,6 +1159,70 @@ impl AppUseCase {
                 )
                 .await?;
             changed_keys.push(REQUIRED_AUDIO_LANGUAGES_KEY.to_string());
+        }
+
+        if let Some(languages) = preferred_audio_languages {
+            self.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    crate::PREFERRED_AUDIO_LANGUAGES_KEY,
+                    Some(facet.as_str().to_string()),
+                    encode_setting_json(&languages)?,
+                    SETTINGS_SOURCE_TYPED_GRAPHQL,
+                    Some(actor.id.clone()),
+                )
+                .await?;
+            changed_keys.push(crate::PREFERRED_AUDIO_LANGUAGES_KEY.to_string());
+        }
+
+        if let Some(languages) = optional_audio_languages {
+            self.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    crate::OPTIONAL_AUDIO_LANGUAGES_KEY,
+                    Some(facet.as_str().to_string()),
+                    encode_setting_json(&languages)?,
+                    SETTINGS_SOURCE_TYPED_GRAPHQL,
+                    Some(actor.id.clone()),
+                )
+                .await?;
+            changed_keys.push(crate::OPTIONAL_AUDIO_LANGUAGES_KEY.to_string());
+        }
+
+        if let Some(priority) = input.audio_language_priority {
+            self.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    crate::AUDIO_LANGUAGE_PRIORITY_KEY,
+                    Some(facet.as_str().to_string()),
+                    encode_setting_json(&priority.as_str())?,
+                    SETTINGS_SOURCE_TYPED_GRAPHQL,
+                    Some(actor.id.clone()),
+                )
+                .await?;
+            changed_keys.push(crate::AUDIO_LANGUAGE_PRIORITY_KEY.to_string());
+        }
+
+        if let Some(keep_searching) = input.optional_audio_languages_keep_searching {
+            self.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
+                    Some(facet.as_str().to_string()),
+                    encode_setting_json(&keep_searching)?,
+                    SETTINGS_SOURCE_TYPED_GRAPHQL,
+                    Some(actor.id.clone()),
+                )
+                .await?;
+            changed_keys.push(crate::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY.to_string());
         }
 
         if let Some(use_season_folders) = input.use_season_folders {

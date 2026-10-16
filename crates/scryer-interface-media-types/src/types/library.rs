@@ -1,10 +1,11 @@
 use super::{
-    DownloadClientRoutingEntryInput, DownloadClientRoutingEntryPayload, DownloadSourceKindValue,
-    FillerPolicyValue, ImportDecisionValue, ImportModeValue, ImportSkipReasonValue,
-    ImportStatusValue, ImportTypeValue, IndexerRoutingEntryInput, IndexerRoutingEntryPayload,
-    JobRunPayload, Long, ManualImportCandidateMappingInput, MediaFacetValue, MonitorSelectionInput,
-    MonitorTypeValue, PendingImportStatusValue, RecapPolicyValue, ReleaseNumberingValue,
-    RenameCollisionPolicyValue, RenameMissingMetadataPolicyValue, ScoringPersonaValue,
+    AudioLanguagePriorityValue, DownloadClientRoutingEntryInput, DownloadClientRoutingEntryPayload,
+    DownloadSourceKindValue, FillerPolicyValue, ImportDecisionValue, ImportModeValue,
+    ImportSkipReasonValue, ImportStatusValue, ImportTypeValue, IndexerRoutingEntryInput,
+    IndexerRoutingEntryPayload, JobRunPayload, Long, ManualImportCandidateMappingInput,
+    MediaFacetValue, MonitorSelectionInput, MonitorTypeValue, PendingImportStatusValue,
+    RecapPolicyValue, ReleaseNumberingValue, RenameCollisionPolicyValue,
+    RenameMissingMetadataPolicyValue, ScoringPersonaValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, OneofObject, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -38,6 +39,22 @@ pub struct LibrarySettingsPayload {
     pub required_audio_languages_override: Option<Vec<String>>,
     /// Effective configured requirements after inheritance; `original` remains unchanged.
     pub required_audio_languages: Vec<String>,
+    /// Library override for the ordered preferred audio languages; null means inherit the facet setting.
+    pub preferred_audio_languages_override: Option<Vec<String>>,
+    /// Effective preferred audio languages after inheritance.
+    pub preferred_audio_languages: Vec<String>,
+    /// Library override for the optional audio languages; null means inherit the facet setting.
+    pub optional_audio_languages_override: Option<Vec<String>>,
+    /// Effective optional audio languages after inheritance.
+    pub optional_audio_languages: Vec<String>,
+    /// Library override for the audio language priority; null means inherit the facet setting.
+    pub audio_language_priority_override: Option<AudioLanguagePriorityValue>,
+    /// Effective audio language priority after inheritance.
+    pub audio_language_priority: AudioLanguagePriorityValue,
+    /// Library override for keep-searching on optional languages; null means inherit the facet setting.
+    pub optional_audio_languages_keep_searching_override: Option<bool>,
+    /// Effective keep-searching setting after inheritance.
+    pub optional_audio_languages_keep_searching: bool,
     /// Library metadata-language override; null means inherit the global default.
     pub metadata_language_override: Option<String>,
     /// Effective metadata language after inheritance.
@@ -1365,6 +1382,14 @@ pub struct LibrarySettingsInput {
     pub search_languages: Option<Vec<String>>,
     /// Required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
+    /// Ordered preferred audio-language codes; null or empty inherits the facet's.
+    pub preferred_audio_languages: Option<Vec<String>>,
+    /// Optional audio-language codes; null or empty inherits the facet's.
+    pub optional_audio_languages: Option<Vec<String>>,
+    /// Audio language priority; null inherits the facet's.
+    pub audio_language_priority: Option<AudioLanguagePriorityValue>,
+    /// Whether a file missing optional languages stays an upgrade target; null inherits the facet's.
+    pub optional_audio_languages_keep_searching: Option<bool>,
     /// Metadata language override; null inherits the global default.
     pub metadata_language: Option<String>,
     /// Whether episodic titles use season folders; null inherits the facet setting.
