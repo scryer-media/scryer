@@ -430,6 +430,31 @@ impl AppUseCase {
         ))
     }
 
+    /// Which of `scope_ids` (library ids or facet names) set preferred or
+    /// optional audio languages, so their titles can become language targets.
+    pub(crate) async fn scopes_with_audio_language_preferences(
+        &self,
+        scope_ids: &[&str],
+    ) -> AppResult<HashSet<String>> {
+        let mut configured = HashSet::new();
+        for scope in scope_ids {
+            for key in [
+                crate::PREFERRED_AUDIO_LANGUAGES_KEY,
+                crate::OPTIONAL_AUDIO_LANGUAGES_KEY,
+            ] {
+                if !self
+                    .first_configured_language_list(key, &[scope])
+                    .await?
+                    .is_empty()
+                {
+                    configured.insert((*scope).to_string());
+                    break;
+                }
+            }
+        }
+        Ok(configured)
+    }
+
     async fn first_configured_language_list(
         &self,
         key_name: &str,

@@ -616,14 +616,26 @@ impl AppUseCase {
         let titles = self
             .titles_with_profiles_for_search(None, &library_ids, title_id, respect_title_monitoring)
             .await?;
-        let scored: Vec<(scryer_domain::Title, i32)> = titles
+        // Titles whose library or facet sets audio language preferences can be
+        // language targets without any `cutoff_score`: a file missing the
+        // preferred language is never done (see `incumbent_at_cutoff`).
+        let mut preference_scopes: Vec<&str> = titles
+            .iter()
+            .flat_map(|(title, _)| [title.library_id.as_str(), title.facet.as_str()])
+            .collect();
+        preference_scopes.sort_unstable();
+        preference_scopes.dedup();
+        let language_scopes = self
+            .scopes_with_audio_language_preferences(&preference_scopes)
+            .await?;
+        let scored: Vec<(scryer_domain::Title, Option<i32>)> = titles
             .into_iter()
             .filter(|(_, profile)| profile.criteria.allow_upgrades)
             .filter_map(|(title, profile)| {
-                profile
-                    .criteria
-                    .cutoff_score
-                    .map(|cutoff_score| (title, cutoff_score))
+                let language = language_scopes.contains(title.library_id.as_str())
+                    || language_scopes.contains(title.facet.as_str());
+                let cutoff_score = profile.criteria.cutoff_score;
+                (language || cutoff_score.is_some()).then_some((title, cutoff_score))
             })
             .collect();
         if scored.is_empty() {
@@ -633,7 +645,7 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
 
-        let cutoff_by_title: HashMap<&str, i32> = scored
+        let cutoff_by_title: HashMap<&str, Option<i32>> = scored
             .iter()
             .map(|(title, cutoff)| (title.id.as_str(), *cutoff))
             .collect();
@@ -695,7 +707,8 @@ impl AppUseCase {
                 else {
                     continue;
                 };
-                if bar >= cutoff_score {
+                let below_cutoff = cutoff_score.is_some_and(|cutoff| bar.score < cutoff);
+                if !below_cutoff && !bar.language.wanted {
                     continue;
                 }
                 let Some(title) = title_by_id.get(summary.title_id.as_str()) else {

@@ -53,6 +53,9 @@ pub(crate) struct PostDownloadAcquisitionDecision {
     /// From the same scoring pass as `score`, so the import side cannot read a
     /// different revision than the grab side did for the same release.
     pub revision: i32,
+    /// Standing against the title's audio language preferences, from the same
+    /// pass as `score`: the probed tracks when the file was measured.
+    pub language: crate::AudioLanguageRank,
     /// Whether the analyzed evidence contradicted the announcement.
     ///
     /// Acted on before admission by [`resolve_truth_verdict_action`], which is
@@ -1998,6 +2001,7 @@ pub(crate) fn compute_post_download_acquisition_decision(
         score,
         tier_index,
         revision: scored.revision,
+        language: scored.language,
         truth_verdict: scored.truth_verdict,
         scoring_log,
     }

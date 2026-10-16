@@ -91,10 +91,6 @@ impl ResolvedScoringContext {
         &self.required_audio_languages
     }
 
-    pub(crate) fn language_preferences(&self) -> &crate::AudioLanguagePreferences {
-        &self.language_preferences
-    }
-
     /// The title's own runtime, used as the per-episode fallback when the
     /// catalog has no duration for an episode.
     pub(crate) fn default_runtime_minutes(&self) -> Option<i32> {
@@ -206,6 +202,8 @@ pub(crate) struct ParkedReleaseFacts {
     /// release waited can veto it (D20).
     pub allowed: bool,
     pub block_codes: Vec<String>,
+    /// Standing against the title's audio language preferences, announced.
+    pub language: crate::AudioLanguageRank,
 }
 
 /// Score a release Scryer knows only as a title and a size.
@@ -275,6 +273,7 @@ pub(crate) fn score_parked_release_title(
         size_fit_penalty: scored.announced_decision.size_fit_penalty,
         allowed: scored.announced_decision.allowed,
         block_codes: scored.announced_decision.block_codes.clone(),
+        language: scored.language,
     }
 }
 
@@ -562,6 +561,7 @@ impl AppUseCase {
                     release_group: crate::canonical_scoring::announced_parse_from_media_file(file)
                         .release_group,
                     score: bar.score,
+                    language: bar.language,
                     covers,
                     created_at: file.created_at.clone(),
                 },
@@ -883,6 +883,7 @@ impl AppUseCase {
                     },
                     tier_index: facts.tier_index,
                     revision: facts.revision,
+                    language: facts.language,
                     score: facts.score,
                 })
             })
@@ -964,6 +965,7 @@ impl AppUseCase {
                     },
                     tier_index: facts.tier_index,
                     revision: facts.revision,
+                    language: facts.language,
                     // The grab-time score is what the ledger has, but the
                     // re-derivation is what the candidate beside it gets; use
                     // the same derivation unless the title no longer parses.
@@ -1089,6 +1091,7 @@ impl AppUseCase {
             score: scored.total,
             tier_index,
             revision: scored.revision,
+            language: scored.language,
         }
     }
 }
@@ -1106,6 +1109,8 @@ pub(crate) struct IncumbentFacts {
     pub tier_index: Option<usize>,
     /// PROPER/REPACK rank of the release the row remembers.
     pub revision: i32,
+    /// Standing against the title's audio language preferences.
+    pub language: crate::AudioLanguageRank,
 }
 
 /// What a scope row remembers about its last grab.
