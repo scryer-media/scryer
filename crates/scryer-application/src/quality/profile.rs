@@ -239,6 +239,12 @@ pub struct QualityProfileDecision {
     pub size_fit_penalty: i32,
     /// Context-derived revision preference; zero without related incumbents.
     pub revision_preference: i32,
+    /// Standing against the title's preferred and optional audio languages.
+    ///
+    /// Carried here for the same reason as `tier_index`: every ordering reads
+    /// it off the decision. It never contributes to the score, so custom rules
+    /// cannot outweigh it and it cannot outweigh them within its own step.
+    pub language: crate::AudioLanguageRank,
 }
 
 impl QualityProfileDecision {
@@ -252,6 +258,7 @@ impl QualityProfileDecision {
             tier_index: None,
             size_fit_penalty: 0,
             revision_preference: 0,
+            language: crate::AudioLanguageRank::default(),
         }
     }
 

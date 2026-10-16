@@ -4,6 +4,7 @@ pub(crate) mod disc_analysis;
 pub(crate) mod discs;
 pub(crate) mod language;
 pub(crate) mod language_data;
+pub(crate) mod language_preference;
 pub(crate) mod metrics;
 pub(crate) mod refresh;
 pub(crate) mod release_labels;

@@ -186,6 +186,7 @@ fn ctx<'a>(profile: &'a QualityProfile, tags: &'a [String]) -> ScoringContext<'a
     ScoringContext {
         profile,
         required_audio_languages: &[],
+        language_preferences: &crate::media::language_preference::NO_LANGUAGE_PREFERENCES,
         category: "movie",
         size_basis: CoverageSizeBasis::default(),
         rules: Some(crate::rules::builtin_trash::baseline_engine()),
@@ -853,6 +854,7 @@ fn episode_ctx<'a>(
     ScoringContext {
         profile,
         required_audio_languages: &[],
+        language_preferences: &crate::media::language_preference::NO_LANGUAGE_PREFERENCES,
         category: "series",
         size_basis,
         rules: Some(crate::rules::builtin_trash::baseline_engine()),
