@@ -81,6 +81,10 @@ pub(crate) struct Incumbent {
     pub release_group: Option<String>,
     /// The incumbent's canonical landed score — its bar.
     pub score: i32,
+    /// Standing against the title's audio language preferences, from the same
+    /// derivation as `score`: the probed tracks, or the remembered release name
+    /// when the tracks are untagged.
+    pub language: crate::AudioLanguageRank,
     /// Episode ids this file covers. Empty for title and link scopes.
     pub covers: Vec<String>,
     pub created_at: String,
@@ -111,6 +115,7 @@ pub(crate) struct QueuedRelease {
     pub tier_index: Option<usize>,
     pub revision: i32,
     pub score: i32,
+    pub language: crate::AudioLanguageRank,
     /// [`release_key`] of `title`, so the gate can tell "the very release that
     /// is already in flight" from "an equal one". `None` when the queued
     /// title is unknown.
@@ -252,6 +257,9 @@ pub(crate) struct CandidateFacts<'a> {
     /// PROPER/REPACK rank; [`crate::acquisition::scoring::revision_rank`].
     pub revision: i32,
     pub score: i32,
+    /// Standing against the title's audio language preferences. Neutral unless
+    /// the caller attaches one with [`CandidateFacts::with_language`].
+    pub language: crate::AudioLanguageRank,
     /// [`release_key`] of the candidate's release name, when the caller knows
     /// it. Only the queue comparison reads it: a candidate that *is* the
     /// queued release is refused before any ladder runs.
@@ -264,6 +272,7 @@ impl<'a> CandidateFacts<'a> {
             tier_index,
             revision,
             score,
+            language: crate::AudioLanguageRank::default(),
             release_key: None,
             release_group: None,
             ignore_proper_repack: false,
@@ -298,6 +307,11 @@ impl<'a> CandidateFacts<'a> {
         } else {
             std::cmp::Ordering::Equal
         }
+    }
+
+    pub(crate) fn with_language(mut self, language: crate::AudioLanguageRank) -> Self {
+        self.language = language;
+        self
     }
 
     /// Attach the candidate's release identity; see [`release_key`].
@@ -353,6 +367,29 @@ fn tier_cmp(left: Option<usize>, right: Option<usize>) -> std::cmp::Ordering {
     }
 }
 
+/// The preferred-language rung, oriented like [`tier_cmp`]: `Greater` means the
+/// candidate carries a better preferred language than what it would replace.
+fn preferred_language_cmp(
+    candidate: crate::AudioLanguageRank,
+    held: crate::AudioLanguageRank,
+) -> std::cmp::Ordering {
+    held.matched
+        .preferred_rank
+        .cmp(&candidate.matched.preferred_rank)
+}
+
+/// The optional-language rung: `Greater` means the candidate carries more of
+/// the optional languages. Always compared after tier and revision.
+fn optional_language_cmp(
+    candidate: crate::AudioLanguageRank,
+    held: crate::AudioLanguageRank,
+) -> std::cmp::Ordering {
+    candidate
+        .matched
+        .optional_hits
+        .cmp(&held.matched.optional_hits)
+}
+
 /// [`tier_cmp`] as an ascending sort key: best tier first, unlisted qualities
 /// last.
 ///
@@ -364,12 +401,40 @@ pub(crate) fn tier_sort_key(tier_index: Option<usize>) -> usize {
     tier_index.unwrap_or(usize::MAX)
 }
 
+/// Where a held file sits on the ladder before its score; lower is better. A
+/// preferred language outranks the tier under `language_first` and follows it
+/// otherwise.
+pub(crate) fn incumbent_ladder_key(
+    tier_index: Option<usize>,
+    language: crate::AudioLanguageRank,
+) -> (u16, usize, u16, i32) {
+    (
+        language.before_tier(),
+        tier_sort_key(tier_index),
+        language.after_revision(),
+        language.negated_optional_hits(),
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AdmissionRejectionReason {
     /// The candidate sits in a lower quality tier than the incumbent. No score
     /// rescues this: a 720p file does not replace a 1080p one because it has a
     /// better release group.
     LowerQualityTier,
+    /// The incumbent carries a better preferred audio language. Under
+    /// `language_first` no tier rescues this; under `quality_first` it is
+    /// reached only between equal tiers and revisions.
+    LowerLanguagePreference {
+        incumbent_preferred_rank: u16,
+        candidate_preferred_rank: u16,
+    },
+    /// Same preferred standing, tier and revision, but the incumbent carries
+    /// more of the optional audio languages.
+    FewerOptionalLanguages {
+        incumbent_optional_hits: u16,
+        candidate_optional_hits: u16,
+    },
     /// An incumbent covers episodes the candidate does not, so replacing it
     /// would silently drop coverage.
     BroaderIncumbentSpan,
@@ -571,6 +636,7 @@ impl AdmissionSubject {
     /// scoring 100 and a 1080p one scoring 900 it names the 1080p file — and a
     /// 1080p candidate compared against it would look like a tier upgrade. The
     /// bar is the best *file*, judged the way the gate judges files.
+    #[cfg(test)]
     pub(crate) fn best_incumbent(&self) -> Option<(Option<usize>, i32)> {
         self.best_incumbent_record()
             .map(|incumbent| (incumbent.tier_index, incumbent.score))
@@ -582,10 +648,15 @@ impl AdmissionSubject {
     /// decide whether a candidate is a revision upgrade over it) and its
     /// `created_at` (for the old-file guard). Reading them off the same record
     /// the bar came from is what stops the two answers describing different
-    /// files.
+    /// files. Files are ordered by [`incumbent_ladder_key`], then by score.
     pub(crate) fn best_incumbent_record(&self) -> Option<&Incumbent> {
         self.incumbents.iter().min_by(|left, right| {
-            tier_cmp(right.tier_index, left.tier_index).then_with(|| right.score.cmp(&left.score))
+            let rank = |incumbent: &Incumbent| {
+                incumbent_ladder_key(incumbent.tier_index, incumbent.language)
+            };
+            rank(left)
+                .cmp(&rank(right))
+                .then_with(|| right.score.cmp(&left.score))
         })
     }
 }
@@ -593,6 +664,7 @@ impl AdmissionSubject {
 /// How a candidate beats a queued release, when it does — the rung of the ladder
 /// it won on. Only the revision rung is exempt from `allow_upgrades`.
 enum QueueWin {
+    Language,
     Tier,
     Revision,
     Score,
@@ -611,24 +683,44 @@ fn queued_candidate_win(
     queued: &QueuedRelease,
     policy: &AdmissionPolicy,
 ) -> Option<QueueWin> {
-    match tier_cmp(candidate.tier_index, queued.tier_index) {
-        std::cmp::Ordering::Greater => Some(QueueWin::Tier),
-        std::cmp::Ordering::Less => None,
-        std::cmp::Ordering::Equal => match candidate.revision_cmp(
-            queued.tier_index,
-            queued.release_group.as_deref(),
-            queued.revision,
-        ) {
-            std::cmp::Ordering::Greater => Some(QueueWin::Revision),
-            std::cmp::Ordering::Less => None,
-            // A tie is never a win over a download already in flight: with a
-            // zero churn threshold the old `>=` admitted an identical score,
-            // and the scope fetched the same release again every pass.
-            std::cmp::Ordering::Equal => (candidate.score.saturating_sub(queued.score)
-                >= policy.required_delta().max(1))
-            .then_some(QueueWin::Score),
-        },
+    if candidate.language.language_first {
+        match preferred_language_cmp(candidate.language, queued.language) {
+            std::cmp::Ordering::Greater => return Some(QueueWin::Language),
+            std::cmp::Ordering::Less => return None,
+            std::cmp::Ordering::Equal => {}
+        }
     }
+    match tier_cmp(candidate.tier_index, queued.tier_index) {
+        std::cmp::Ordering::Greater => return Some(QueueWin::Tier),
+        std::cmp::Ordering::Less => return None,
+        std::cmp::Ordering::Equal => {}
+    }
+    match candidate.revision_cmp(
+        queued.tier_index,
+        queued.release_group.as_deref(),
+        queued.revision,
+    ) {
+        std::cmp::Ordering::Greater => return Some(QueueWin::Revision),
+        std::cmp::Ordering::Less => return None,
+        std::cmp::Ordering::Equal => {}
+    }
+    if !candidate.language.language_first {
+        match preferred_language_cmp(candidate.language, queued.language) {
+            std::cmp::Ordering::Greater => return Some(QueueWin::Language),
+            std::cmp::Ordering::Less => return None,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    match optional_language_cmp(candidate.language, queued.language) {
+        std::cmp::Ordering::Greater => return Some(QueueWin::Language),
+        std::cmp::Ordering::Less => return None,
+        std::cmp::Ordering::Equal => {}
+    }
+    // A tie is never a win over a download already in flight: with a zero
+    // churn threshold the old `>=` admitted an identical score, and the scope
+    // fetched the same release again every pass.
+    (candidate.score.saturating_sub(queued.score) >= policy.required_delta().max(1))
+        .then_some(QueueWin::Score)
 }
 
 fn queued_blocks_candidate(
@@ -696,7 +788,9 @@ fn queued_rejection(
             // Sonarr's `QueueUpgradesNotAllowed`: the candidate would only be
             // an *upgrade* over what is already downloading, and the profile
             // forbids upgrades — so it is not fetched beside it either.
-            Some(QueueWin::Tier | QueueWin::Score) if !policy.allow_upgrades => {
+            Some(QueueWin::Language | QueueWin::Tier | QueueWin::Score)
+                if !policy.allow_upgrades =>
+            {
                 Some(AdmissionRejection {
                     reason: AdmissionRejectionReason::UpgradesDisabled,
                     message: format!(
@@ -707,7 +801,7 @@ fn queued_rejection(
                     incumbent_file_path: String::new(),
                 })
             }
-            Some(QueueWin::Tier | QueueWin::Score) => None,
+            Some(QueueWin::Language | QueueWin::Tier | QueueWin::Score) => None,
             None => Some(queued_equal_or_better_rejection(queued, candidate)),
         }
     })
@@ -722,6 +816,44 @@ fn upgrades_disabled(incumbent: &Incumbent) -> AdmissionRejection {
         message: format!(
             "existing file {} cannot be replaced because the quality profile disallows upgrades",
             incumbent.file_path
+        ),
+        incumbent_file_id: incumbent.file_id.clone(),
+        incumbent_file_path: incumbent.file_path.clone(),
+    }
+}
+
+fn lower_language_preference(
+    incumbent: &Incumbent,
+    candidate: CandidateFacts,
+) -> AdmissionRejection {
+    AdmissionRejection {
+        reason: AdmissionRejectionReason::LowerLanguagePreference {
+            incumbent_preferred_rank: incumbent.language.matched.preferred_rank,
+            candidate_preferred_rank: candidate.language.matched.preferred_rank,
+        },
+        message: format!(
+            "existing file {} carries a more preferred audio language than this candidate",
+            incumbent.file_path
+        ),
+        incumbent_file_id: incumbent.file_id.clone(),
+        incumbent_file_path: incumbent.file_path.clone(),
+    }
+}
+
+fn fewer_optional_languages(
+    incumbent: &Incumbent,
+    candidate: CandidateFacts,
+) -> AdmissionRejection {
+    AdmissionRejection {
+        reason: AdmissionRejectionReason::FewerOptionalLanguages {
+            incumbent_optional_hits: incumbent.language.matched.optional_hits,
+            candidate_optional_hits: candidate.language.matched.optional_hits,
+        },
+        message: format!(
+            "existing file {} carries more of the optional audio languages ({} > {})",
+            incumbent.file_path,
+            incumbent.language.matched.optional_hits,
+            candidate.language.matched.optional_hits
         ),
         incumbent_file_id: incumbent.file_id.clone(),
         incumbent_file_path: incumbent.file_path.clone(),
@@ -856,6 +988,13 @@ fn evaluate_any_member(
             // revision, then score. A higher revision improves the member
             // whatever the profile says about upgrades — see the long note at
             // the single-file ladder.
+            if candidate.language.language_first {
+                match preferred_language_cmp(candidate.language, incumbent.language) {
+                    std::cmp::Ordering::Less => return false,
+                    std::cmp::Ordering::Greater => return policy.allow_upgrades,
+                    std::cmp::Ordering::Equal => {}
+                }
+            }
             match tier_cmp(candidate.tier_index, incumbent.tier_index) {
                 std::cmp::Ordering::Less => return false,
                 std::cmp::Ordering::Greater => return policy.allow_upgrades,
@@ -868,6 +1007,18 @@ fn evaluate_any_member(
             ) {
                 std::cmp::Ordering::Greater => return true,
                 std::cmp::Ordering::Less => return false,
+                std::cmp::Ordering::Equal => {}
+            }
+            if !candidate.language.language_first {
+                match preferred_language_cmp(candidate.language, incumbent.language) {
+                    std::cmp::Ordering::Less => return false,
+                    std::cmp::Ordering::Greater => return policy.allow_upgrades,
+                    std::cmp::Ordering::Equal => {}
+                }
+            }
+            match optional_language_cmp(candidate.language, incumbent.language) {
+                std::cmp::Ordering::Less => return false,
+                std::cmp::Ordering::Greater => return policy.allow_upgrades,
                 std::cmp::Ordering::Equal => {}
             }
             if !policy.allow_upgrades {
@@ -923,8 +1074,22 @@ fn evaluate_any_member(
     let lower_tier_than_every_member = subject.incumbents.iter().all(|incumbent| {
         tier_cmp(candidate.tier_index, incumbent.tier_index) == std::cmp::Ordering::Less
     });
+    let worse_language_than_every_member = candidate.language.language_first
+        && subject.incumbents.iter().all(|incumbent| {
+            preferred_language_cmp(candidate.language, incumbent.language)
+                == std::cmp::Ordering::Less
+        });
 
-    let (reason, message) = if lower_tier_than_every_member {
+    let (reason, message) = if worse_language_than_every_member {
+        (
+            AdmissionRejectionReason::LowerLanguagePreference {
+                incumbent_preferred_rank: blocker.language.matched.preferred_rank,
+                candidate_preferred_rank: candidate.language.matched.preferred_rank,
+            },
+            "every episode in this pack is already held by a file in a more preferred audio language"
+                .to_string(),
+        )
+    } else if lower_tier_than_every_member {
         (
             AdmissionRejectionReason::LowerQualityTier,
             "every episode in this pack is already held by a better quality file".to_string(),
@@ -1024,6 +1189,27 @@ pub(crate) fn evaluate_admission(
             continue;
         }
 
+        // Under `language_first` the preferred audio language outranks the
+        // tier: a file in the preferred language is not displaced by a better
+        // quality without it, and replacing a file that lacks it is an upgrade
+        // whatever the tier. A better preferred rank admits like a better tier.
+        if candidate.language.language_first {
+            match preferred_language_cmp(candidate.language, incumbent.language) {
+                std::cmp::Ordering::Less => {
+                    return AdmissionVerdict::Reject(lower_language_preference(
+                        incumbent, candidate,
+                    ));
+                }
+                std::cmp::Ordering::Greater => {
+                    if !policy.allow_upgrades {
+                        return AdmissionVerdict::Reject(upgrades_disabled(incumbent));
+                    }
+                    continue;
+                }
+                std::cmp::Ordering::Equal => {}
+            }
+        }
+
         // Tier before score, always. A candidate in a lower tier than what it
         // would replace is refused outright — this is Sonarr's
         // `qualityCompare < 0 => BetterQuality`, and it is what stops a
@@ -1093,6 +1279,39 @@ pub(crate) fn evaluate_admission(
                     incumbent_file_id: incumbent.file_id.clone(),
                     incumbent_file_path: incumbent.file_path.clone(),
                 });
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+
+        // The remaining language rungs sit between revision and score: the
+        // preferred rank under `quality_first`, then optional languages under
+        // either priority. Like a tier, each is a step, not a delta, so the
+        // churn threshold and the format cutoff never weigh it.
+        if !candidate.language.language_first {
+            match preferred_language_cmp(candidate.language, incumbent.language) {
+                std::cmp::Ordering::Less => {
+                    return AdmissionVerdict::Reject(lower_language_preference(
+                        incumbent, candidate,
+                    ));
+                }
+                std::cmp::Ordering::Greater => {
+                    if !policy.allow_upgrades {
+                        return AdmissionVerdict::Reject(upgrades_disabled(incumbent));
+                    }
+                    continue;
+                }
+                std::cmp::Ordering::Equal => {}
+            }
+        }
+        match optional_language_cmp(candidate.language, incumbent.language) {
+            std::cmp::Ordering::Less => {
+                return AdmissionVerdict::Reject(fewer_optional_languages(incumbent, candidate));
+            }
+            std::cmp::Ordering::Greater => {
+                if !policy.allow_upgrades {
+                    return AdmissionVerdict::Reject(upgrades_disabled(incumbent));
+                }
+                continue;
             }
             std::cmp::Ordering::Equal => {}
         }

@@ -948,6 +948,50 @@ input AssignTrackedDownloadTitleInput {
 }
 
 """
+Where the preferred audio language is compared in release ranking and
+upgrade decisions.
+"""
+enum AudioLanguagePriorityValue {
+	"""
+	Quality tier and revision first; the preferred language decides between
+	releases of equal quality.
+	"""
+	QUALITY_FIRST
+	"""
+	The preferred language first, even over a better quality tier.
+	"""
+	LANGUAGE_FIRST
+}
+
+"""
+How a release or file ranks against the title's audio language preferences.
+Every field is neutral when no preferences are configured.
+"""
+type AudioLanguageRankPayload {
+	"""
+	Position of the first preferred language present; 0 is best, and the
+	length of the preferred list means none is present.
+	"""
+	preferredRank: Int!
+	"""
+	Length of the preferred list; 0 when no preferred language is configured.
+	"""
+	preferredCount: Int!
+	"""
+	How many of the optional languages are present.
+	"""
+	optionalHits: Int!
+	"""
+	Whether the preferred language is compared before the quality tier.
+	"""
+	languageFirst: Boolean!
+	"""
+	Whether the preferences still want something this release lacks.
+	"""
+	wanted: Boolean!
+}
+
+"""
 Audio stream metadata for a media file.
 """
 type AudioStreamDetailPayload {
@@ -9924,6 +9968,22 @@ input LibrarySettingsInput {
 	"""
 	requiredAudioLanguages: [String!]
 	"""
+	Ordered preferred audio-language codes; null or empty inherits the facet's.
+	"""
+	preferredAudioLanguages: [String!]
+	"""
+	Optional audio-language codes; null or empty inherits the facet's.
+	"""
+	optionalAudioLanguages: [String!]
+	"""
+	Audio language priority; null inherits the facet's.
+	"""
+	audioLanguagePriority: AudioLanguagePriorityValue
+	"""
+	Whether a file missing optional languages stays an upgrade target; null inherits the facet's.
+	"""
+	optionalAudioLanguagesKeepSearching: Boolean
+	"""
 	Metadata language override; null inherits the global default.
 	"""
 	metadataLanguage: String
@@ -10017,6 +10077,38 @@ type LibrarySettingsPayload {
 	Effective configured requirements after inheritance; `original` remains unchanged.
 	"""
 	requiredAudioLanguages: [String!]!
+	"""
+	Library override for the ordered preferred audio languages; null means inherit the facet setting.
+	"""
+	preferredAudioLanguagesOverride: [String!]
+	"""
+	Effective preferred audio languages after inheritance.
+	"""
+	preferredAudioLanguages: [String!]!
+	"""
+	Library override for the optional audio languages; null means inherit the facet setting.
+	"""
+	optionalAudioLanguagesOverride: [String!]
+	"""
+	Effective optional audio languages after inheritance.
+	"""
+	optionalAudioLanguages: [String!]!
+	"""
+	Library override for the audio language priority; null means inherit the facet setting.
+	"""
+	audioLanguagePriorityOverride: AudioLanguagePriorityValue
+	"""
+	Effective audio language priority after inheritance.
+	"""
+	audioLanguagePriority: AudioLanguagePriorityValue!
+	"""
+	Library override for keep-searching on optional languages; null means inherit the facet setting.
+	"""
+	optionalAudioLanguagesKeepSearchingOverride: Boolean
+	"""
+	Effective keep-searching setting after inheritance.
+	"""
+	optionalAudioLanguagesKeepSearching: Boolean!
 	"""
 	Library metadata-language override; null means inherit the global default.
 	"""
@@ -17330,6 +17422,24 @@ type MediaSettingsPayload {
 	"""
 	requiredAudioLanguages: [String!]!
 	"""
+	Ordered preferred audio languages; the first one a release carries sets
+	its rank. Unlike required languages they never reject a release.
+	"""
+	preferredAudioLanguages: [String!]!
+	"""
+	Optional audio languages; among releases of equal quality, more of them
+	rank higher.
+	"""
+	optionalAudioLanguages: [String!]!
+	"""
+	Whether the preferred language is compared before or after quality.
+	"""
+	audioLanguagePriority: AudioLanguagePriorityValue!
+	"""
+	Whether a file missing optional languages stays an upgrade target.
+	"""
+	optionalAudioLanguagesKeepSearching: Boolean!
+	"""
 	Whether episodic titles use season folders.
 	"""
 	useSeasonFolders: Boolean!
@@ -23202,6 +23312,10 @@ type QualityProfileDecisionPayload {
 	Ordered scoring contributions used to compute the decision.
 	"""
 	scoringLog: [ScoringEntryPayload!]!
+	"""
+	Standing against the title's audio language preferences.
+	"""
+	audioLanguage: AudioLanguageRankPayload!
 }
 
 """
@@ -32427,6 +32541,22 @@ input UpdateMediaSettingsInput {
 	Optional required audio-language codes; use `original` to resolve per title.
 	"""
 	requiredAudioLanguages: [String!]
+	"""
+	Optional ordered preferred audio-language codes; an empty list clears them.
+	"""
+	preferredAudioLanguages: [String!]
+	"""
+	Optional audio-language codes that rank higher when present; an empty list clears them.
+	"""
+	optionalAudioLanguages: [String!]
+	"""
+	Whether the preferred language is compared before or after quality.
+	"""
+	audioLanguagePriority: AudioLanguagePriorityValue
+	"""
+	Whether a file missing optional languages stays an upgrade target.
+	"""
+	optionalAudioLanguagesKeepSearching: Boolean
 	"""
 	Whether episodic titles use season folders.
 	"""

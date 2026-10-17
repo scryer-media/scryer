@@ -178,6 +178,13 @@ pub fn from_quality_profile_decision(
     decision: QualityProfileDecision,
 ) -> QualityProfileDecisionPayload {
     QualityProfileDecisionPayload {
+        audio_language: AudioLanguageRankPayload {
+            preferred_rank: i32::from(decision.language.matched.preferred_rank),
+            preferred_count: i32::from(decision.language.preferred_count),
+            optional_hits: i32::from(decision.language.matched.optional_hits),
+            language_first: decision.language.language_first,
+            wanted: decision.language.wanted,
+        },
         allowed: decision.allowed,
         block_codes: decision.block_codes,
         release_score: decision.release_score,

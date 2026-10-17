@@ -1573,3 +1573,108 @@ async fn graphql_typed_general_settings_rejects_invalid_image_cache_size() {
         "expected image cache validation error: {body}"
     );
 }
+
+#[tokio::test]
+async fn graphql_audio_language_preferences_round_trip() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let mutation = r#"
+        mutation Update($input: UpdateMediaSettingsInput!) {
+          updateMediaSettings(input: $input) {
+            preferredAudioLanguages
+            optionalAudioLanguages
+            audioLanguagePriority
+            optionalAudioLanguagesKeepSearching
+          }
+        }
+    "#;
+    let read = |scope: &'static str| {
+        gql(
+            &ctx,
+            r#"query($scope: ContentScopeValue!) { mediaSettings(scope: $scope) {
+                preferredAudioLanguages optionalAudioLanguages audioLanguagePriority
+                optionalAudioLanguagesKeepSearching } }"#,
+            json!({ "scope": scope }),
+        )
+    };
+
+    let defaults = read("MOVIE").await;
+    assert_no_errors(&defaults);
+    let settings = &defaults["data"]["mediaSettings"];
+    assert_eq!(settings["preferredAudioLanguages"], json!([]));
+    assert_eq!(settings["audioLanguagePriority"], "QUALITY_FIRST");
+    assert_eq!(settings["optionalAudioLanguagesKeepSearching"], false);
+
+    let update = gql(
+        &ctx,
+        mutation,
+        json!({"input": {
+            "scope": "MOVIE",
+            "preferredAudioLanguages": ["ger", "en"],
+            "optionalAudioLanguages": ["original"],
+            "audioLanguagePriority": "LANGUAGE_FIRST",
+            "optionalAudioLanguagesKeepSearching": true
+        }}),
+    )
+    .await;
+    assert_no_errors(&update);
+    let settings = &update["data"]["updateMediaSettings"];
+    assert_eq!(settings["preferredAudioLanguages"], json!(["deu", "eng"]));
+    assert_eq!(settings["optionalAudioLanguages"], json!(["original"]));
+    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
+    assert_eq!(settings["optionalAudioLanguagesKeepSearching"], true);
+
+    // A partial update leaves the other values alone; an empty list clears.
+    let partial = gql(
+        &ctx,
+        mutation,
+        json!({"input": {"scope": "MOVIE", "optionalAudioLanguages": []}}),
+    )
+    .await;
+    assert_no_errors(&partial);
+    let settings = &partial["data"]["updateMediaSettings"];
+    assert_eq!(settings["preferredAudioLanguages"], json!(["deu", "eng"]));
+    assert_eq!(settings["optionalAudioLanguages"], json!([]));
+    assert_eq!(settings["audioLanguagePriority"], "LANGUAGE_FIRST");
+
+    // Preferences are per scope.
+    let series = read("SERIES").await;
+    assert_no_errors(&series);
+    assert_eq!(
+        series["data"]["mediaSettings"]["preferredAudioLanguages"],
+        json!([])
+    );
+
+    let unknown = gql(
+        &ctx,
+        mutation,
+        json!({"input": {"scope": "MOVIE", "preferredAudioLanguages": ["@@"]}}),
+    )
+    .await;
+    let message = unknown["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("unknown preferred audio language \"@@\""),
+        "an unknown language code is rejected by name: {unknown}"
+    );
+
+    // A rejected update writes nothing, not even its valid half.
+    let mixed = gql(
+        &ctx,
+        mutation,
+        json!({"input": {
+            "scope": "MOVIE",
+            "preferredAudioLanguages": ["fra"],
+            "optionalAudioLanguages": ["@@"]
+        }}),
+    )
+    .await;
+    assert!(
+        mixed.get("errors").is_some(),
+        "the invalid half is rejected: {mixed}"
+    );
+    let unchanged = read("MOVIE").await;
+    assert_eq!(
+        unchanged["data"]["mediaSettings"]["preferredAudioLanguages"],
+        json!(["deu", "eng"])
+    );
+}

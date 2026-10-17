@@ -634,6 +634,7 @@ fn scored_search_result(
         tier_index,
         size_fit_penalty: 0,
         revision_preference: 0,
+        language: crate::AudioLanguageRank::default(),
     });
     result
 }

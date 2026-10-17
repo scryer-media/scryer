@@ -74,6 +74,24 @@ impl IntoApplication<AppScoringPersona> for ScoringPersonaValue {
     }
 }
 
+impl FromApplication<scryer_application::AudioLanguagePriority> for AudioLanguagePriorityValue {
+    fn from_application(value: scryer_application::AudioLanguagePriority) -> Self {
+        match value {
+            scryer_application::AudioLanguagePriority::QualityFirst => Self::QualityFirst,
+            scryer_application::AudioLanguagePriority::LanguageFirst => Self::LanguageFirst,
+        }
+    }
+}
+
+impl IntoApplication<scryer_application::AudioLanguagePriority> for AudioLanguagePriorityValue {
+    fn into_application(self) -> scryer_application::AudioLanguagePriority {
+        match self {
+            Self::QualityFirst => scryer_application::AudioLanguagePriority::QualityFirst,
+            Self::LanguageFirst => scryer_application::AudioLanguagePriority::LanguageFirst,
+        }
+    }
+}
+
 impl IntoApplication<AppDownloadSourceKind> for DownloadSourceKindValue {
     fn into_application(self) -> AppDownloadSourceKind {
         match self {

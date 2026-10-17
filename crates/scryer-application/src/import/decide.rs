@@ -301,6 +301,7 @@ pub(crate) async fn decide_import(
 
     let candidate =
         crate::admission::CandidateFacts::new(scored.tier_index, scored.revision, scored.score)
+            .with_language(scored.language)
             .with_revision_policy(
                 scored.parsed.release_group.as_deref(),
                 input
@@ -448,6 +449,8 @@ pub(crate) fn disposition_for(
         // The candidate lost a fair comparison. Nothing to escalate.
         Reason::NotAnUpgrade { .. }
         | Reason::LowerQualityTier
+        | Reason::LowerLanguagePreference { .. }
+        | Reason::FewerOptionalLanguages { .. }
         | Reason::LowerRevision { .. }
         | Reason::QueuedEqualOrBetter { .. }
         | Reason::QueuedSameRelease { .. } => RejectionDisposition::Skip,
@@ -531,6 +534,25 @@ pub(crate) fn admission_rejection_to_import(
             format!(
                 "existing file {path} for {scope_label} is a later revision \
                  (PROPER/REPACK {incumbent_revision} > {candidate_revision})"
+            ),
+        ),
+        Reason::LowerLanguagePreference { .. } => (
+            "already_imported",
+            ImportSkipReason::AlreadyImported,
+            format!(
+                "existing file {path} for {scope_label} carries a more preferred audio language \
+                 than this import"
+            ),
+        ),
+        Reason::FewerOptionalLanguages {
+            incumbent_optional_hits,
+            candidate_optional_hits,
+        } => (
+            "already_imported",
+            ImportSkipReason::AlreadyImported,
+            format!(
+                "existing file {path} for {scope_label} carries more of the optional audio \
+                 languages ({incumbent_optional_hits} > {candidate_optional_hits})"
             ),
         ),
         Reason::BroaderIncumbentSpan => (

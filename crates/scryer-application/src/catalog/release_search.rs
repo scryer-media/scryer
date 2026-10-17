@@ -1375,6 +1375,7 @@ impl AppUseCase {
                         negated_revision: 0,
                         negated_score: decision.preference_score.saturating_neg(),
                         size_fit_penalty: decision.size_fit_penalty,
+                        language: decision.language,
                     },
                     non_preferred_protocol: !source_kind_matches_preference(
                         &result,

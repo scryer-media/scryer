@@ -2045,6 +2045,7 @@ async fn a_queued_releases_announced_size_affects_fit_without_creating_score_upg
             tier_index: queued_facts.tier_index,
             revision: queued_facts.revision,
             score: queued_facts.score,
+            language: Default::default(),
             release_key: None,
         }]);
     let grab_policy = AdmissionPolicy {
@@ -2161,6 +2162,7 @@ async fn a_queued_release_the_profile_now_vetoes_still_holds_its_scope() {
             tier_index: facts.tier_index,
             revision: facts.revision,
             score: facts.score,
+            language: Default::default(),
             release_key: None,
         }]);
     let policy = AdmissionPolicy {

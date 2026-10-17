@@ -300,8 +300,7 @@ pub(crate) fn resolve_audio_languages_from_track_title(title: &str) -> Vec<Strin
 /// tag (e.g. a codec string mis-stored in the language field) is treated as
 /// unresolved rather than a bogus "known" language that could flip an
 /// indeterminate result into a false rejection.
-#[cfg(any(test, feature = "runtime-media-analysis"))]
-fn resolved_track_languages(stream: &crate::AudioStreamDetail) -> Vec<String> {
+pub(crate) fn resolved_track_languages(stream: &crate::AudioStreamDetail) -> Vec<String> {
     if let Some(code) = stream
         .language
         .as_deref()
