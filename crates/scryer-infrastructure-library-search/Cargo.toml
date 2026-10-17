@@ -15,7 +15,7 @@ sqlx = { workspace = true }
 # The fuzzy lane. Default features pull in a zstd/brotli stack and the
 # directory watcher we do not use: mmap is the only directory this opens and
 # lz4 is the block compressor the store is written with.
-tantivy = { version = "0.26", default-features = false, features = ["mmap", "lz4-compression"] }
+tantivy = { version = "0.27", default-features = false, features = ["mmap", "lz4-compression"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 unicode-normalization = "0.1"
