@@ -250,33 +250,43 @@ impl AppUseCase {
 }
 impl AppUseCase {
     pub(crate) async fn load_security_settings(&self) -> AppResult<SecuritySettings> {
+        let mut diagnostic =
+            crate::diagnostic_trace::DiagnosticTrace::new("load_security_settings");
+        diagnostic.stage("read_form_login_enabled");
         let form_login_enabled = self
             .read_setting_bool_value(FORM_LOGIN_ENABLED_KEY, None)
             .await?
             .unwrap_or(false);
+        diagnostic.stage("read_password_min_length");
         let password_min_length = self.password_min_length().await?;
+        diagnostic.stage("read_local_ip_policy");
         let skip_login_for_local_ips = self
             .read_setting_bool_value(SKIP_LOGIN_FOR_LOCAL_IPS_KEY, None)
             .await?
             .unwrap_or(false);
+        diagnostic.stage("read_api_key_policy");
         let api_keys_restrict_to_system_settings_users = self
             .read_setting_bool_value(API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY, None)
             .await?
             .unwrap_or(false);
+        diagnostic.stage("load_or_migrate_mfa_config_policy");
         let mfa_require_config_step_up = self
             .load_mfa_setting_with_legacy_migration(
                 MFA_REQUIRE_CONFIG_STEP_UP_KEY,
                 LEGACY_TOTP_REQUIRE_CONFIG_STEP_UP_KEY,
             )
             .await?;
+        diagnostic.stage("read_jellyfin_mfa_policy");
         let totp_require_jellyfin_login = self
             .read_setting_bool_value(TOTP_REQUIRE_JELLYFIN_LOGIN_KEY, None)
             .await?
             .unwrap_or(false);
+        diagnostic.stage("read_emby_mfa_policy");
         let totp_require_emby_login = self
             .read_setting_bool_value(TOTP_REQUIRE_EMBY_LOGIN_KEY, None)
             .await?
             .unwrap_or(false);
+        diagnostic.stage("load_or_migrate_password_mfa_policy");
         let mfa_require_password_login = self
             .load_mfa_setting_with_legacy_migration(
                 MFA_REQUIRE_PASSWORD_LOGIN_KEY,
@@ -284,6 +294,7 @@ impl AppUseCase {
             )
             .await?;
 
+        diagnostic.stage("read_session_duration");
         Ok(SecuritySettings {
             form_login_enabled,
             session_duration_days: self.session_duration_days().await?,

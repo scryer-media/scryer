@@ -706,6 +706,9 @@ impl AppUseCase {
     }
 
     pub async fn user_auth_factor_status(&self, user_id: &str) -> AppResult<UserAuthFactorStatus> {
+        let mut diagnostic =
+            crate::diagnostic_trace::DiagnosticTrace::new("user_auth_factor_status");
+        diagnostic.stage("read_totp_credential");
         let has_mfa = self
             .services
             .identity
@@ -713,6 +716,7 @@ impl AppUseCase {
             .get_credential_for_user(user_id)
             .await?
             .is_some();
+        diagnostic.stage("read_passkey_credentials");
         let has_passkey = !self
             .services
             .identity
@@ -720,6 +724,7 @@ impl AppUseCase {
             .list_credentials_for_user(user_id)
             .await?
             .is_empty();
+        diagnostic.finish();
         Ok(UserAuthFactorStatus {
             has_mfa,
             has_passkey,

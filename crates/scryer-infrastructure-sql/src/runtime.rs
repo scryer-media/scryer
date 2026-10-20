@@ -14,7 +14,7 @@ use sqlx::{Postgres, Row, Sqlite, Transaction};
 use tokio::sync::Mutex;
 
 use super::common::parse_utc_datetime;
-use crate::writer_gate::WriterGateHold;
+use crate::writer_gate::{WriterGateHold, WriterGateSnapshot, writer_gate_snapshot};
 
 const SQLITE_BUSY_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(50),
@@ -67,6 +67,15 @@ impl StoreDatastore {
                 idle_connections: pool.num_idle(),
                 writer_gate_held: false,
             },
+        }
+    }
+
+    /// Sqlite only: who holds, last released and waits on the writer gate.
+    /// Like [`Self::pool_usage`] it never waits.
+    pub fn writer_gate_snapshot(&self) -> Option<WriterGateSnapshot> {
+        match self {
+            Self::Sqlite { writer_gate, .. } => Some(writer_gate_snapshot(writer_gate)),
+            Self::Postgres { .. } => None,
         }
     }
 }
@@ -159,8 +168,12 @@ impl SqlRuntime {
             )));
         };
 
+        let mut diagnostic = scryer_application::diagnostic_trace::DiagnosticTrace::new(op_name);
+        diagnostic.stage("sqlite.writer_gate");
         let mut hold = WriterGateHold::acquire(writer_gate, op_name).await;
+        diagnostic.stage("sqlite.serialized_operation");
         let result = run_with_sqlite_busy_retries(op_name, || op(pool.clone())).await;
+        diagnostic.finish();
         if result.is_ok() {
             hold.committed();
         }
@@ -390,21 +403,32 @@ impl SqlRuntime {
     {
         match datastore {
             StoreDatastore::Sqlite { pool, writer_gate } => {
+                let mut diagnostic =
+                    scryer_application::diagnostic_trace::DiagnosticTrace::new(op_name);
+                diagnostic.stage("sqlite.writer_gate");
                 let mut hold = WriterGateHold::acquire(writer_gate, op_name).await;
+                diagnostic.stage("sqlite.transaction_attempts");
                 let outcome = run_with_sqlite_busy_retries(op_name, || {
                     let pool = pool.clone();
                     let op = &op;
                     async move {
+                        let mut attempt =
+                            scryer_application::diagnostic_trace::DiagnosticTrace::new(op_name);
+                        attempt.stage("sqlite.pool_acquire_and_begin");
                         let mut tx = SqlTx::Sqlite(pool.begin().await.map_err(repo_err)?);
+                        attempt.stage("sqlite.transaction_body");
                         let result = {
                             let future = op(&mut tx);
                             future.await?
                         };
+                        attempt.stage("sqlite.commit");
                         tx.commit().await?;
+                        attempt.finish();
                         Ok(result)
                     }
                 })
                 .await;
+                diagnostic.finish();
                 if outcome.is_ok() {
                     hold.committed();
                 }

@@ -18,4 +18,6 @@ zstd = { version = "0.14", default-features = false }
 [dev-dependencies]
 blake3 = "1"
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
+# `test-util` gives the writer-gate tests a paused clock to advance.
+tokio = { workspace = true, features = ["test-util"] }
 zstd = { version = "0.14", default-features = false, features = ["zdict_builder"] }

@@ -480,11 +480,16 @@ impl AppUseCase {
         _username: Option<&str>,
         form_login_enabled: bool,
     ) -> AppResult<WebauthnChallengeStart> {
+        let mut diagnostic =
+            crate::diagnostic_trace::DiagnosticTrace::new("webauthn_authenticate_start");
+        diagnostic.stage("check_passkey_configuration");
         self.ensure_passkey_authentication_enabled(form_login_enabled)?;
+        diagnostic.stage("delete_expired_webauthn_challenges");
         self.cleanup_expired_webauthn_challenges().await?;
 
         // Username remains accepted for GraphQL compatibility but is deliberately
         // not an account selector: every public start is discoverable.
+        diagnostic.stage("generate_passkey_challenge");
         let (options, state) = self
             .webauthn_runtime()?
             .start_discoverable_authentication()
@@ -518,12 +523,13 @@ impl AppUseCase {
             ))
         })?;
 
+        diagnostic.stage("persist_passkey_challenge");
         self.services
             .identity
             .webauthn
             .create_challenge(record.clone())
             .await?;
-
+        diagnostic.finish();
         Ok(WebauthnChallengeStart {
             challenge_id: record.id,
             options_json,

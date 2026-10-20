@@ -18,14 +18,20 @@ impl AppUseCase {
         legacy_totp_code: Option<&str>,
         expected_auth_session_version: Option<&Option<String>>,
     ) -> AppResult<LoginVerificationRequirement> {
+        let mut diagnostic =
+            crate::diagnostic_trace::DiagnosticTrace::new("login_verification_requirement");
+        diagnostic.stage("delete_expired_login_verification_challenges");
         self.cleanup_expired_login_verification_challenges().await?;
+        diagnostic.stage("read_auth_factors");
         let factors = self.user_auth_factor_status(&user.id).await?;
+        diagnostic.stage("read_auth_session_version");
         let current_auth_session_version = self
             .services
             .identity
             .users
             .auth_session_version(&user.id)
             .await?;
+        diagnostic.stage("resolve_verification_requirement");
         let auth_session_version =
             if let Some(expected_auth_session_version) = expected_auth_session_version {
                 if current_auth_session_version != *expected_auth_session_version {

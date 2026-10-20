@@ -561,6 +561,9 @@ impl AppUseCase {
     }
 
     pub async fn load_user_for_auth_payload(&self, user: &User) -> AppResult<User> {
+        let mut diagnostic =
+            crate::diagnostic_trace::DiagnosticTrace::new("load_user_for_auth_payload");
+        diagnostic.stage("read_user");
         let mut user = self
             .services
             .identity
@@ -569,8 +572,10 @@ impl AppUseCase {
             .await?
             .ok_or_else(|| AppError::Unauthorized("token subject no longer exists".into()))?;
         let login_status = user.login_status();
+        diagnostic.stage("read_authorization");
         user.authorization = self.load_user_authorization(&user).await?;
         user.set_login_status(login_status);
+        diagnostic.finish();
         Ok(user)
     }
 
@@ -912,6 +917,8 @@ impl AppUseCase {
             password_change_required_after_enrollment,
             oauth,
         } = options;
+        let mut diagnostic = crate::diagnostic_trace::DiagnosticTrace::new("issue_access_token");
+        diagnostic.stage("load_auth_payload");
         let actor = self.load_user_for_auth_payload(actor).await?;
         let is_authless_oauth = matches!(
             oauth.as_ref().map(|(_, _, source)| source),
@@ -924,6 +931,7 @@ impl AppUseCase {
             .password_hash
             .clone()
             .unwrap_or_else(|| format!("federated:{}", actor.id));
+        diagnostic.stage("read_auth_session_version");
         let auth_session_version = self
             .services
             .identity
@@ -937,6 +945,7 @@ impl AppUseCase {
                 "authentication session was invalidated".into(),
             ));
         }
+        diagnostic.stage("construct_token_claims");
         let authorization_fingerprint = Self::auth_session_fingerprint_for_version(
             Self::authorization_fingerprint(&actor),
             auth_session_version.as_deref(),
@@ -994,6 +1003,7 @@ impl AppUseCase {
             actor_capabilities,
         };
 
+        diagnostic.stage("sign_token");
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
         let signing_key = self.derive_jwt_key(&signing_seed, &authorization_fingerprint);
         let key = jsonwebtoken::EncodingKey::from_secret(&signing_key);
@@ -1001,6 +1011,7 @@ impl AppUseCase {
         let token = jsonwebtoken::encode(&header, &claims, &key)
             .map_err(|err| AppError::Repository(format!("failed to issue token: {err}")))?;
 
+        diagnostic.finish();
         Ok(token)
     }
 
@@ -1581,6 +1592,8 @@ impl AppUseCase {
         password: &str,
         client_ip: Option<std::net::IpAddr>,
     ) -> AppResult<crate::types::VerifiedLocalCredentials> {
+        let mut diagnostic =
+            crate::diagnostic_trace::DiagnosticTrace::new("authenticate_local_credentials");
         let started_at = Instant::now();
         let username = Self::normalize_local_username(username);
         // One stable line per failed attempt so operators can grep and alert on
@@ -1612,6 +1625,7 @@ impl AppUseCase {
             return Err(AppError::Unauthorized("credentials unavailable".into()));
         }
 
+        diagnostic.stage("read_user_login_snapshot");
         let Some(snapshot) = self
             .services
             .identity
@@ -1650,6 +1664,7 @@ impl AppUseCase {
             return Err(AppError::Unauthorized("credentials unavailable".into()));
         };
 
+        diagnostic.stage("verify_password");
         if !self.validate_password(password, password_hash)? {
             Self::apply_login_failure_timing(
                 LoginFailureTimingClass::PasswordBackedLocal,
@@ -1663,6 +1678,7 @@ impl AppUseCase {
         // The former online v1 → v2 re-hash on login is gone with the v1 format
         // itself. Migration 0191 retires surviving v1 rows directly.
 
+        diagnostic.finish();
         Ok(crate::types::VerifiedLocalCredentials {
             user,
             auth_session_version: snapshot.auth_session_version,
