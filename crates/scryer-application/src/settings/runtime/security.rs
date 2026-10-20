@@ -295,9 +295,11 @@ impl AppUseCase {
             .await?;
 
         diagnostic.stage("read_session_duration");
+        let session_duration_days = self.session_duration_days().await?;
+        diagnostic.finish();
         Ok(SecuritySettings {
             form_login_enabled,
-            session_duration_days: self.session_duration_days().await?,
+            session_duration_days,
             password_min_length,
             skip_login_for_local_ips,
             api_keys_restrict_to_system_settings_users,

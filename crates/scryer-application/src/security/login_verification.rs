@@ -47,18 +47,19 @@ impl AppUseCase {
         if factors.has_mfa
             && let Some(code) = legacy_totp_code.filter(|code| !code.trim().is_empty())
         {
-            return self
-                .verify_totp_for_user(user, code)
-                .await
-                .map(|verified_until| {
-                    LoginVerificationRequirement::Satisfied(LoginVerificationSatisfied {
-                        mfa_verified_until: Some(verified_until),
-                        auth_session_version,
-                    })
-                });
+            diagnostic.stage("verify_totp");
+            let verified_until = self.verify_totp_for_user(user, code).await?;
+            diagnostic.finish();
+            return Ok(LoginVerificationRequirement::Satisfied(
+                LoginVerificationSatisfied {
+                    mfa_verified_until: Some(verified_until),
+                    auth_session_version,
+                },
+            ));
         }
 
         if !factors.has_mfa && !factors.has_passkey {
+            diagnostic.finish();
             return Ok(if policy_requires_mfa {
                 LoginVerificationRequirement::EnrollmentRequired {
                     auth_session_version: auth_session_version.clone(),
@@ -85,12 +86,14 @@ impl AppUseCase {
                 .to_rfc3339(),
         };
         let expected_auth_session_version = challenge.auth_session_version.clone();
+        diagnostic.stage("persist_login_verification_challenge");
         let challenge = self
             .services
             .identity
             .webauthn
             .create_login_verification_challenge(challenge, &expected_auth_session_version)
             .await?;
+        diagnostic.finish();
         Ok(LoginVerificationRequirement::Challenge(challenge))
     }
 
