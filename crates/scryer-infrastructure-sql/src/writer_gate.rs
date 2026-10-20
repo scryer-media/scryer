@@ -446,8 +446,11 @@ mod diagnostic_tests {
         span::{Attributes, Id, Record},
     };
 
+    /// Every captured event as its `(field, value)` pairs, in emission order.
+    type CapturedEvents = Arc<StdMutex<Vec<Vec<(String, String)>>>>;
+
     #[derive(Clone, Default)]
-    struct Capture(Arc<StdMutex<Vec<Vec<(String, String)>>>>);
+    struct Capture(CapturedEvents);
 
     struct Fields(Vec<(String, String)>);
     impl Visit for Fields {
