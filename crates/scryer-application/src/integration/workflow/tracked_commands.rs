@@ -3691,7 +3691,6 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
         .download_submissions
         .supports_durable_download_cleanup()
     {
-        use futures_util::StreamExt;
         let repository = &app.services.workflow.download_submissions;
         if let Err(error) = repository.seed_download_cleanup(100).await {
             tracing::warn!(error = %error, "failed to discover durable cleanup work");
@@ -3704,27 +3703,30 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
                 return;
             }
         };
-        // Drain every claim before applying any outcome. Claims and outcome
-        // writes share one writer gate, and the gate hands itself to the next
-        // waiter in line. Applying an outcome while the other claims sit in
-        // the stream unpolled would queue that write behind a claim nobody
-        // polls, and no write anywhere would ever get the gate again.
-        let results: Vec<_> = futures_util::stream::iter(candidates).map(|candidate| async move {
-            match repository.claim_download_cleanup(&candidate.download_id).await {
-                Ok(crate::DownloadCleanupClaim::Claimed(record)) =>
-                    crate::import::import::run_claimed_download_cleanup(app, *record, None).await,
-                Ok(_) => None,
-                Err(error) => {
-                    tracing::warn!(download_id = %candidate.download_id, error = %error, "failed to claim cleanup");
-                    None
-                }
-            }
-        }).buffer_unordered(4).collect().await;
         // One line per tick that did work, instead of one per row: an upgrade
         // backfills every historical terminal download through here.
         let mut settled: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         let mut pending = 0usize;
+        // Claims run four at a time, and every claim in a batch finishes
+        // before any outcome is applied. Claims and outcome writes share one
+        // writer gate, and the gate hands itself to the next waiter in line:
+        // applying an outcome while a claim sat unpolled would queue that
+        // write behind a claim nobody polls, and no write anywhere would ever
+        // get the gate again. Batches keep what a cancelled tick can leave
+        // settled-but-unapplied to one batch, not the whole page.
+        for batch in candidates.chunks(4) {
+            let results = futures_util::future::join_all(batch.iter().map(|candidate| async move {
+                match repository.claim_download_cleanup(&candidate.download_id).await {
+                    Ok(crate::DownloadCleanupClaim::Claimed(record)) =>
+                        crate::import::import::run_claimed_download_cleanup(app, *record, None).await,
+                    Ok(_) => None,
+                    Err(error) => {
+                        tracing::warn!(download_id = %candidate.download_id, error = %error, "failed to claim cleanup");
+                        None
+                    }
+                }
+            })).await;
         for result in results {
             if result.is_none() {
                 pending += 1;
@@ -3754,6 +3756,7 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
                 )
                 .await;
             }
+        }
         }
         if !settled.is_empty() || pending > 0 {
             tracing::info!(settled = ?settled, pending, "durable download cleanup tick");

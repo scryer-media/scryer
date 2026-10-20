@@ -405,16 +405,6 @@ impl Drop for WriterGateHold<'_> {
         tracing::debug!(target: "scryer_auth_diagnostics", gate_id = self.gate_id, transaction = self.transaction, event = "writer_releasing", "scryer writer boundary");
         let released_at = Instant::now();
         let held_for = released_at.saturating_duration_since(self.acquired_at);
-        // Runs before `_guard` drops, so the registry never shows this hold
-        // after the permit has moved on.
-        with_gate_record(self.gate_id, |record| {
-            record.holder = None;
-            record.last_released = Some(WriterGateRelease {
-                transaction: self.transaction,
-                released_at,
-                held_for,
-            });
-        });
         if held_for >= WRITER_GATE_STALL_THRESHOLD {
             tracing::warn!(
                 transaction = %self.transaction,
@@ -431,6 +421,18 @@ impl Drop for WriterGateHold<'_> {
             "outcome" => self.outcome,
         )
         .increment(1);
+        // Last, with nothing that can block left between it and the `_guard`
+        // drop that follows this body: the registry says "released" only
+        // once the permit is about to move on, and never after the next
+        // holder could have registered itself.
+        with_gate_record(self.gate_id, |record| {
+            record.holder = None;
+            record.last_released = Some(WriterGateRelease {
+                transaction: self.transaction,
+                released_at,
+                held_for,
+            });
+        });
     }
 }
 
