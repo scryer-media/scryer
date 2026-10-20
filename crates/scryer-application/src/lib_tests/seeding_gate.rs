@@ -59,7 +59,16 @@ impl DownloadClientPluginProvider for TorrentPluginProvider {
 fn bootstrap_with_torrent_clients(
     download_client: Arc<StubDownloadClient>,
 ) -> (AppUseCase, User, Arc<TrackingDownloadSubmissionRepo>) {
-    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    bootstrap_with_torrent_clients_on(
+        download_client,
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+    )
+}
+
+fn bootstrap_with_torrent_clients_on(
+    download_client: Arc<StubDownloadClient>,
+    download_submissions: Arc<TrackingDownloadSubmissionRepo>,
+) -> (AppUseCase, User, Arc<TrackingDownloadSubmissionRepo>) {
     let (mut app, user) = bootstrap_with_cleanup_tracking(
         download_client,
         download_submissions.clone(),
@@ -1475,6 +1484,69 @@ async fn durable_cleanup_settles_when_the_client_no_longer_exists() {
         .await
         .unwrap();
     assert_eq!(settled.2, TerminalDownloadCleanupOutcome::NotConfigured);
+    assert!(client.deleted_requests.lock().await.is_empty());
+}
+
+/// Claims run concurrently and every claim and write shares one writer gate,
+/// as on sqlite. Applying a finished claim's outcome writes too, so it must
+/// not wait on a gate a sibling claim holds or has been handed while nothing
+/// is polling that claim: the tick would never finish, and neither would any
+/// other write in the process.
+#[tokio::test]
+async fn a_durable_cleanup_tick_settles_concurrent_claims_that_share_the_writer_gate() {
+    let client = Arc::new(StubDownloadClient::default());
+    let repository = Arc::new(TrackingDownloadSubmissionRepo {
+        writer_gate: Some(Arc::new(Mutex::new(()))),
+        ..TrackingDownloadSubmissionRepo::default()
+    });
+    repository
+        .durable_cleanup
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let (app, user, repository) = bootstrap_with_torrent_clients_on(client.clone(), repository);
+    let config = create_enabled_download_client_config(&app, &user, "qBit", "qbittorrent").await;
+    // Retained by policy: each claim settles without touching the client, and
+    // the held torrent is then promoted to `imported`, which is a write.
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, false, true).await;
+    let title = movie_title(&app, &user, "Gate Drain Fixture").await;
+
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    let mut download_ids = Vec::new();
+    for item_id in ["gate-drain-a", "gate-drain-b"] {
+        let tracked = tracked_for(
+            &config.id,
+            "qbittorrent",
+            item_id,
+            &title,
+            TrackedDownloadState::ImportedSeeding,
+            true,
+        );
+        repository
+            .claimable_cleanup
+            .lock()
+            .await
+            .push(cleanup_record_for(&tracked));
+        download_ids.push(tracker.insert_for_tests(tracked));
+    }
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::app_usecase_integration::reconcile_terminal_tracked_downloads(&app, &mut tracker),
+    )
+    .await
+    .expect("the cleanup tick must finish instead of waiting on the writer gate forever");
+
+    let finished = repository.finished_cleanup.lock().await.clone();
+    for download_id in download_ids {
+        assert!(
+            finished.contains(&(download_id, "policy_retained".to_string(), true)),
+            "every due cleanup settles: {finished:?}"
+        );
+        let tracked = tracker
+            .get_by_download_id(download_id)
+            .expect("a torrent retained by policy stays tracked");
+        assert_eq!(tracked.state, TrackedDownloadState::Imported);
+        assert!(tracked.retained_in_client_after_cleanup);
+    }
     assert!(client.deleted_requests.lock().await.is_empty());
 }
 

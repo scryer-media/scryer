@@ -3704,7 +3704,12 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
                 return;
             }
         };
-        let mut work = futures_util::stream::iter(candidates).map(|candidate| async move {
+        // Drain every claim before applying any outcome. Claims and outcome
+        // writes share one writer gate, and the gate hands itself to the next
+        // waiter in line. Applying an outcome while the other claims sit in
+        // the stream unpolled would queue that write behind a claim nobody
+        // polls, and no write anywhere would ever get the gate again.
+        let results: Vec<_> = futures_util::stream::iter(candidates).map(|candidate| async move {
             match repository.claim_download_cleanup(&candidate.download_id).await {
                 Ok(crate::DownloadCleanupClaim::Claimed(record)) =>
                     crate::import::import::run_claimed_download_cleanup(app, *record, None).await,
@@ -3714,13 +3719,13 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
                     None
                 }
             }
-        }).buffer_unordered(4);
+        }).buffer_unordered(4).collect().await;
         // One line per tick that did work, instead of one per row: an upgrade
         // backfills every historical terminal download through here.
         let mut settled: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         let mut pending = 0usize;
-        while let Some(result) = work.next().await {
+        for result in results {
             if result.is_none() {
                 pending += 1;
             }
