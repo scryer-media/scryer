@@ -603,7 +603,7 @@ fn map_queue_item(
         import_transfer_updated_at: None,
         size_bytes: item.total_size_bytes,
         remaining_seconds: item.eta_seconds,
-        queued_at: None,
+        queued_at: parse_timestamp(item.added_at).map(|added_at| added_at.to_rfc3339()),
         last_updated_at: None,
         attention_required: attention,
         attention_reason,
@@ -1677,6 +1677,7 @@ mod tests {
             removed: None,
             raw_state: None,
             completed_at: None,
+            added_at: None,
         }
     }
 
@@ -1768,6 +1769,48 @@ mod tests {
             queue_item.attention_reason.as_deref(),
             Some("files are missing from the save path")
         );
+    }
+
+    #[test]
+    fn a_plugin_added_at_becomes_the_queue_age() {
+        let added = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let expected = added.to_rfc3339();
+        for raw in [
+            "1700000000",
+            "2023-11-14T22:13:20Z",
+            "2023-11-14T23:13:20+01:00",
+        ] {
+            let mut item = queue_filter_item(DownloadItemState::Downloading);
+            item.added_at = Some(raw.to_string());
+
+            let queue_item = map_queue_item(item, "client-1", "qBittorrent", "qbittorrent");
+
+            assert_eq!(
+                queue_item.queued_at.as_deref(),
+                Some(expected.as_str()),
+                "{raw}"
+            );
+            assert_eq!(
+                queue_item
+                    .queued_at
+                    .as_deref()
+                    .and_then(scryer_application::parse_published_at),
+                Some(added),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_or_unparseable_added_at_leaves_the_queue_age_unknown() {
+        for raw in [None, Some(""), Some("not-a-time")] {
+            let mut item = queue_filter_item(DownloadItemState::Downloading);
+            item.added_at = raw.map(str::to_string);
+
+            let queue_item = map_queue_item(item, "client-1", "qBittorrent", "qbittorrent");
+
+            assert_eq!(queue_item.queued_at, None, "{raw:?}");
+        }
     }
 
     #[test]
@@ -2322,6 +2365,7 @@ mod tests {
                 removed: None,
                 raw_state: None,
                 completed_at: None,
+                added_at: None,
             },
             "client-1",
             "Plugin Client",
@@ -2403,6 +2447,7 @@ mod tests {
                 removed: Some(false),
                 raw_state: Some("uploading".to_string()),
                 completed_at: Some("2026-05-02T00:00:00Z".to_string()),
+                added_at: None,
             },
             "client-1",
             "Decypharr qBit",
@@ -2578,6 +2623,7 @@ mod tests {
                 removed: Some(false),
                 raw_state: None,
                 completed_at: None,
+                added_at: None,
             },
             "client-1",
             "Plugin Client",
