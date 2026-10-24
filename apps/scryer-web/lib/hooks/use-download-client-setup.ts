@@ -16,6 +16,7 @@ import {
   buildDownloadClientTypeOptions,
   defaultDownloadClientConfigValuesForFields,
   ensureDownloadClientTypeOption,
+  isHostlessDownloadClientType,
   normalizeDownloadClientType,
 } from "@/lib/utils/download-clients";
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
@@ -35,7 +36,11 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
   });
   const [dcTypeOptions, setDcTypeOptions] = useState<
     DownloadClientTypeOption[]
-  >(() => buildDownloadClientTypeOptions([]));
+  >(() =>
+    buildDownloadClientTypeOptions([]).filter(
+      (option) => !isHostlessDownloadClientType(option.value),
+    ),
+  );
   const [dcLocalPathStyle, setDcLocalPathStyle] =
     useState<LocalPathStyle | undefined>(undefined);
   const [dcTesting, setDcTesting] = useState(false);

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./component-utilities.css";
+@import "./palettes.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -53,6 +54,7 @@
     "Source Code Pro", Menlo, Consolas, monospace;
   --font-space-grotesk: "Space Grotesk Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
 
+  --scry-table-hover-bg: linear-gradient(90deg, rgba(var(--scry-accent-rgb), 0.02), rgba(var(--scry-accent-rgb), 0.012) 72%, transparent 100%);
   --scry-page1: #eef0f7;
   --scry-page2: #e6eaf3;
   --scry-page3: #dde3ed;
@@ -174,11 +176,12 @@
   --scry-side1: rgba(255, 255, 255, 0.9);
   --scry-side2: rgba(248, 250, 253, 0.9);
   --scry-shell-left-glow: rgba(var(--scry-accent-rgb), 0.055);
+  --scry-glow: 1;
   --scry-shell-left-glow-reach: 34rem;
   --scry-shell-bg:
     radial-gradient(circle at 14% 10%, var(--scry-shell-left-glow), transparent var(--scry-shell-left-glow-reach)),
-    radial-gradient(circle at 86% 14%, rgba(56, 189, 248, 0.06), transparent 28rem),
-    radial-gradient(circle at 60% 92%, rgba(16, 185, 129, 0.05), transparent 34rem),
+    radial-gradient(circle at 86% 14%, rgba(var(--scry-accent-rgb), 0.06), transparent 28rem),
+    radial-gradient(circle at 60% 92%, rgba(var(--scry-accent-rgb), 0.05), transparent 34rem),
     linear-gradient(180deg, var(--scry-page1) 0%, var(--scry-page2) 42%, var(--scry-page3) 100%);
   --scry-shell-main-bg: transparent;
   --scry-shell-side-bg:
@@ -197,7 +200,7 @@
     color-mix(in srgb, var(--background) 78%, transparent);
   --scry-mobile-search-bg:
     radial-gradient(circle at 12% 0%, rgba(var(--scry-accent-rgb), 0.1), transparent 18rem),
-    radial-gradient(circle at 92% 12%, rgba(56, 189, 248, 0.06), transparent 20rem),
+    radial-gradient(circle at 92% 12%, rgba(var(--scry-accent-rgb), 0.06), transparent 20rem),
     linear-gradient(180deg, var(--background) 0%, color-mix(in srgb, var(--muted) 38%, transparent) 100%);
   --scry-search-sticky-bg: color-mix(in srgb, var(--background) 92%, transparent);
 
@@ -368,9 +371,9 @@
   --sidebar-accent-foreground: var(--accent-foreground);
   --sidebar-border: var(--border-color);
   --sidebar-ring: var(--ring);
-  --dark-atmo-indigo: rgba(91, 100, 255, 0.065);
-  --dark-atmo-cyan: rgba(56, 189, 248, 0.038);
-  --dark-atmo-emerald: rgba(16, 185, 129, 0.026);
+  --dark-atmo-indigo: rgba(var(--scry-accent-rgb), 0.065);
+  --dark-atmo-cyan: rgba(var(--scry-accent-rgb), 0.038);
+  --dark-atmo-emerald: rgba(var(--scry-accent-rgb), 0.026);
   --dark-atmo-white: rgba(255, 255, 255, 0.014);
 }
 
@@ -499,7 +502,7 @@ body {
 .dark [data-slot="card"]:not(.bg-transparent) {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.01), rgba(255, 255, 255, 0.005) 18%, rgba(255, 255, 255, 0.003) 100%),
-    linear-gradient(135deg, rgba(91, 100, 255, 0.03), rgba(56, 189, 248, 0.016) 72%, rgba(16, 185, 129, 0.012) 100%),
+    linear-gradient(135deg, rgba(var(--scry-accent-rgb), 0.03), rgba(var(--scry-accent-rgb), 0.016) 72%, rgba(var(--scry-accent-rgb), 0.012) 100%),
     rgba(10, 15, 29, 0.968);
   box-shadow:
     0 18px 38px rgba(2, 6, 23, 0.22),
@@ -512,7 +515,7 @@ body {
   inset: 0;
   background:
     radial-gradient(circle at top right, rgba(255, 255, 255, 0.015), transparent 20%),
-    linear-gradient(120deg, rgba(91, 100, 255, 0.024), transparent 44%, rgba(56, 189, 248, 0.014) 84%, transparent 100%);
+    linear-gradient(120deg, rgba(var(--scry-accent-rgb), 0.024), transparent 44%, rgba(var(--scry-accent-rgb), 0.014) 84%, transparent 100%);
   pointer-events: none;
   z-index: 0;
 }
@@ -531,7 +534,7 @@ body {
 .dark [data-slot="sidebar-inner"] {
   background:
     linear-gradient(180deg, rgba(12, 18, 34, 0.96), rgba(7, 12, 24, 0.98)),
-    linear-gradient(145deg, rgba(91, 100, 255, 0.04), rgba(56, 189, 248, 0.018) 68%, rgba(16, 185, 129, 0.014) 100%);
+    linear-gradient(145deg, rgba(var(--scry-accent-rgb), 0.04), rgba(var(--scry-accent-rgb), 0.018) 68%, rgba(var(--scry-accent-rgb), 0.014) 100%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     0 18px 40px rgba(2, 6, 23, 0.24);
@@ -544,9 +547,9 @@ body {
   height: 6rem;
   background: linear-gradient(
     90deg,
-    rgba(91, 100, 255, 0.09),
-    rgba(56, 189, 248, 0.05),
-    rgba(16, 185, 129, 0.03)
+    rgba(var(--scry-accent-rgb), 0.09),
+    rgba(var(--scry-accent-rgb), 0.05),
+    rgba(var(--scry-accent-rgb), 0.03)
   );
   filter: blur(26px);
   opacity: 0.22;
@@ -723,7 +726,7 @@ body {
 .dark [data-slot="table-actions-head"] {
   background:
     linear-gradient(180deg, rgba(21, 29, 49, 0.985), rgba(13, 19, 34, 0.985)),
-    linear-gradient(90deg, rgba(91, 100, 255, 0.03), rgba(56, 189, 248, 0.016) 100%);
+    linear-gradient(90deg, rgba(var(--scry-accent-rgb), 0.03), rgba(var(--scry-accent-rgb), 0.016) 100%);
   border-bottom-color: rgba(123, 140, 255, 0.12);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
@@ -732,9 +735,8 @@ body {
  * settings rows (excluded here) span the same gradient across the whole row.
  * A row opts in by carrying one of the data-ui values listed below, so both
  * lists have to stay in sync or a row gets the gradient twice. */
-.dark [data-slot="table-body"] [data-slot="table-row"]:not([data-ui="title-table-row"]):not([data-ui="compact-title-table-row"]):not([data-ui="title-table-empty-row"]):not([data-ui="settings-user-table-row"]):not([data-ui="settings-plugin-table-row"]):not([data-ui="settings-table-row"]):not([data-ui="activity-row"]):not([data-ui="wanted-item-row"]):not([data-ui="pending-release-row"]):not([data-ui="media-info-row"]):not([data-ui="subtitle-search-result-row"]):not([data-ui="list-subscription-row"]):not([data-ui="list-catalog-row"]):not([data-ui="list-catalog-preview"]):hover > [data-slot="table-cell"] {
-  background:
-    linear-gradient(90deg, rgba(91, 100, 255, 0.02), rgba(56, 189, 248, 0.012) 72%, transparent 100%);
+.dark [data-slot="table-body"] [data-slot="table-row"]:not([data-ui="title-table-row"]):not([data-ui="compact-title-table-row"]):not([data-ui="title-table-empty-row"]):not([data-ui="settings-user-table-row"]):not([data-ui="settings-plugin-table-row"]):not([data-ui="settings-table-row"]):not([data-ui="activity-row"]):not([data-ui="wanted-item-row"]):not([data-ui="pending-release-row"]):not([data-ui="media-info-row"]):not([data-ui="subtitle-search-result-row"]):not([data-ui="list-subscription-row"]):not([data-ui="list-catalog-row"]):not([data-ui="list-catalog-preview"]):not([data-ui="episode-row"]):hover > :is([data-slot="table-cell"], [data-slot="table-checkbox-cell"], [data-slot="table-code-cell"], [data-slot="table-actions-cell"]) {
+  background: var(--scry-table-hover-bg);
 }
 
 .dark [data-slot="table-body"] [data-ui="title-table-row"]:hover,
@@ -746,14 +748,14 @@ body {
 .dark [data-slot="table-body"] [data-ui="wanted-item-row"]:hover,
 .dark [data-slot="table-body"] [data-ui="pending-release-row"]:hover,
 .dark [data-slot="table-body"] [data-ui="media-info-row"]:hover,
+.dark [data-slot="table-body"] [data-ui="episode-row"]:hover,
 .dark [data-slot="table-body"] [data-ui="subtitle-search-result-row"]:hover,
 .dark [data-slot="table-body"] [data-ui="list-subscription-row"]:hover,
 .dark [data-slot="table-body"] [data-ui="list-catalog-row"]:hover,
 .dark [data-slot="table-body"] [data-ui="list-catalog-row"]:has(+ [data-ui="list-catalog-preview"]:hover),
 .dark [data-slot="table-body"] [data-ui="list-catalog-row"]:hover + [data-ui="list-catalog-preview"],
 .dark [data-slot="table-body"] [data-ui="list-catalog-preview"]:hover {
-  background:
-    linear-gradient(90deg, rgba(91, 100, 255, 0.02), rgba(56, 189, 248, 0.012) 72%, transparent 100%);
+  background: var(--scry-table-hover-bg);
 }
 
 /* Settings tables are scoped at their page shells so every current and future
@@ -762,8 +764,7 @@ body {
  * their independently tuned row treatment. */
 .dark [data-slot="settings-main-scroll"] [data-slot="table-body"] [data-slot="table-row"]:has(> [data-slot="table-cell"] + [data-slot="table-cell"]):hover,
 .dark [data-slot="facet-settings-scroll"] [data-slot="table-body"] [data-slot="table-row"]:has(> [data-slot="table-cell"] + [data-slot="table-cell"]):hover {
-  background:
-    linear-gradient(90deg, rgba(91, 100, 255, 0.02), rgba(56, 189, 248, 0.012) 72%, transparent 100%);
+  background: var(--scry-table-hover-bg);
 }
 
 .dark [data-slot="settings-main-scroll"] [data-slot="table-body"] [data-slot="table-row"]:has(> [data-slot="table-cell"] + [data-slot="table-cell"]):hover > [data-slot="table-cell"],
@@ -775,7 +776,7 @@ body {
   border-color: rgba(123, 140, 255, 0.22);
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.016), rgba(255, 255, 255, 0.004)),
-    linear-gradient(110deg, rgba(91, 100, 255, 0.04), rgba(56, 189, 248, 0.02) 68%, rgba(16, 185, 129, 0.014) 100%),
+    linear-gradient(110deg, rgba(var(--scry-accent-rgb), 0.04), rgba(var(--scry-accent-rgb), 0.02) 68%, rgba(var(--scry-accent-rgb), 0.014) 100%),
     rgba(8, 13, 25, 0.955);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
@@ -785,7 +786,7 @@ body {
 .dark [data-slot="global-search-panel"] {
   background:
     linear-gradient(180deg, rgba(14, 20, 36, 0.972), rgba(8, 13, 26, 0.992)),
-    linear-gradient(130deg, rgba(91, 100, 255, 0.045), rgba(56, 189, 248, 0.024) 68%, rgba(16, 185, 129, 0.016) 100%);
+    linear-gradient(130deg, rgba(var(--scry-accent-rgb), 0.045), rgba(var(--scry-accent-rgb), 0.024) 68%, rgba(var(--scry-accent-rgb), 0.016) 100%);
   box-shadow:
     0 40px 120px rgba(0, 0, 0, 0.58),
     inset 0 1px 0 rgba(255, 255, 255, 0.055);
@@ -809,8 +810,38 @@ body {
 .dark [data-slot="mobile-global-search-tabs"] {
   background:
     linear-gradient(180deg, rgba(11, 17, 33, 0.94), rgba(6, 11, 23, 0.92)),
-    linear-gradient(90deg, rgba(91, 100, 255, 0.04), rgba(56, 189, 248, 0.018) 100%);
+    linear-gradient(90deg, rgba(var(--scry-accent-rgb), 0.04), rgba(var(--scry-accent-rgb), 0.018) 100%);
   backdrop-filter: blur(16px) saturate(124%);
+}
+
+/* The glow preference off: the accent-colored atmospheres and spread
+   shadows go, and the plain surfaces under them stay. */
+:root[data-glow="off"] {
+  --scry-glow: 0;
+  --scry-shell-bg: linear-gradient(180deg, var(--scry-page1) 0%, var(--scry-page2) 42%, var(--scry-page3) 100%);
+  --scry-shell-side-bg: linear-gradient(180deg, var(--scry-side1), var(--scry-side2));
+  --scry-search-panel-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--card) 96%, var(--background) 4%) 0%,
+    var(--card) 56%,
+    color-mix(in srgb, var(--background) 90%, var(--card) 10%) 100%
+  );
+  --scry-search-overlay-bg: color-mix(in srgb, var(--background) 78%, transparent);
+  --scry-mobile-search-bg: linear-gradient(180deg, var(--background) 0%, color-mix(in srgb, var(--muted) 38%, transparent) 100%);
+  --dark-atmo-indigo: transparent;
+  --dark-atmo-cyan: transparent;
+}
+
+:root[data-glow="off"] [data-slot="sidebar-inner"]::before {
+  display: none;
+}
+
+:root.dark[data-glow="off"] [data-slot="global-search-overlay"] {
+  background: rgba(2, 4, 10, 0.66);
+}
+
+:root[data-glow="off"] .fc-scryer-hover-card-image-wrap {
+  background: var(--muted);
 }
 
 @keyframes scryer-progress-indeterminate {
@@ -941,7 +972,7 @@ body {
 .dark [data-slot="select-content"] {
   background:
     linear-gradient(180deg, rgba(14, 20, 36, 0.965), rgba(8, 13, 26, 0.98)),
-    linear-gradient(130deg, rgba(91, 100, 255, 0.034), rgba(56, 189, 248, 0.018) 68%, rgba(16, 185, 129, 0.012) 100%);
+    linear-gradient(130deg, rgba(var(--scry-accent-rgb), 0.034), rgba(var(--scry-accent-rgb), 0.018) 68%, rgba(var(--scry-accent-rgb), 0.012) 100%);
   box-shadow:
     0 24px 56px rgba(2, 6, 23, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);

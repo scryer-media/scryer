@@ -21,6 +21,12 @@ const KEYED: &str = "keylists";
 const GOOD_KEY: &str = "synthetic-member-key-7Q";
 const NEXT_KEY: &str = "synthetic-member-key-9Z";
 const ORIGIN: &str = "https://instance.invalid";
+/// Refused keys the fixture provider answers with a shared open code instead
+/// of `auth_failed`.
+const OPEN_CODE_KEYS: &[(&str, &str)] = &[
+    ("synthetic-open-api-key-2K", "invalid_api_key"),
+    ("synthetic-open-cookie-3J", "invalid_cookie"),
+];
 
 struct KeyClient {
     descriptor: PluginDescriptor,
@@ -46,8 +52,14 @@ impl ListProviderClient for KeyClient {
     ) -> AppResult<PluginResult<ListPluginAccountResponse>> {
         self.seen.lock().unwrap().push(input.clone());
         if !self.accepted.is_empty() && !self.accepted.contains(&input.access_token.as_str()) {
+            let code = OPEN_CODE_KEYS
+                .iter()
+                .find(|(key, _)| *key == input.access_token)
+                .map_or(PluginErrorCode::AuthFailed, |(_, code)| {
+                    PluginErrorCode::from(*code)
+                });
             return Ok(PluginResult::Err(PluginError {
-                code: PluginErrorCode::AuthFailed,
+                code,
                 public_message: "the provider refused the key".into(),
                 debug_message: None,
                 retry_after_seconds: None,
@@ -381,6 +393,22 @@ async fn a_key_the_provider_refuses_names_the_key_and_stores_nothing() {
     let fixture = harness().await;
     let reason = refusal_reason(fixture.link(KEYED, "synthetic-wrong-key-4M").await);
     assert_eq!(reason, refusal::ACCOUNT_KEY_REJECTED);
+    assert!(fixture.accounts().await.is_empty());
+}
+
+#[tokio::test]
+async fn an_invalid_api_key_code_names_the_key_and_stores_nothing() {
+    let fixture = harness().await;
+    let reason = refusal_reason(fixture.link(KEYED, "synthetic-open-api-key-2K").await);
+    assert_eq!(reason, refusal::ACCOUNT_KEY_REJECTED);
+    assert!(fixture.accounts().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_credential_code_for_another_credential_type_is_not_a_key_refusal() {
+    let fixture = harness().await;
+    let reason = refusal_reason(fixture.link(KEYED, "synthetic-open-cookie-3J").await);
+    assert_eq!(reason, refusal::ACCOUNT_IDENTITY_UNVERIFIED);
     assert!(fixture.accounts().await.is_empty());
 }
 

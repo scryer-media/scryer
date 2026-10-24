@@ -954,6 +954,67 @@ impl ImportRepository for ImportStore {
         .await
     }
 
+    async fn delete_manual_import_selections_for_title(&self, title_id: &str) -> AppResult<()> {
+        let title_id = title_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_manual_import_selections_for_title",
+            move |tx| {
+                let title_id = title_id.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM manual_import_selection_candidates
+                         WHERE selection_id IN (
+                           SELECT id FROM manual_import_selections WHERE title_id = {}
+                         )",
+                        &[SqlArg::Text(title_id.clone())],
+                    )
+                    .await?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM manual_import_selections WHERE title_id = {}",
+                        &[SqlArg::Text(title_id)],
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn delete_unfinished_imports(&self, import_ids: &[String]) -> AppResult<u64> {
+        let mut import_ids = import_ids.to_vec();
+        import_ids.sort_unstable();
+        import_ids.dedup();
+        if import_ids.is_empty() {
+            return Ok(0);
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "delete_unfinished_imports", move |tx| {
+            let import_ids = import_ids.clone();
+            Box::pin(async move {
+                let mut deleted = 0u64;
+                for chunk in import_ids.chunks(256) {
+                    let placeholders = vec!["{}"; chunk.len()].join(", ");
+                    let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+                    deleted += SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        &format!(
+                            "DELETE FROM imports
+                             WHERE id IN ({placeholders})
+                               AND status IN ('queued', 'pending', 'running', 'processing')"
+                        ),
+                        &args,
+                    )
+                    .await?;
+                }
+                Ok(deleted)
+            })
+        })
+        .await
+    }
+
     async fn list_imports(&self, limit: usize) -> AppResult<Vec<ImportRecord>> {
         fetch_imports(
             self.datastore.read_exec(),
@@ -1613,5 +1674,89 @@ mod tests {
             .expect("canonical selection should be found");
         assert_eq!(selection.id, "canonical-selection");
         assert_eq!(selection.canonical_download_id, Some(canonical_download_id));
+    }
+
+    async fn candidate_count(store: &ImportStore, selection_id: &str) -> i64 {
+        SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT COUNT(*) AS count FROM manual_import_selection_candidates
+             WHERE selection_id = {}",
+            &[SqlArg::Text(selection_id.to_string())],
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .i64("count")
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn deleted_title_cleanup_removes_only_listed_unfinished_imports_and_its_selections() {
+        let store = store().await;
+        let mut ids = Vec::new();
+        for (item, status) in [
+            ("pending", ImportStatus::Pending),
+            ("running", ImportStatus::Running),
+            ("processing", ImportStatus::Processing),
+            ("completed", ImportStatus::Completed),
+            ("failed", ImportStatus::Failed),
+            ("unlisted", ImportStatus::Pending),
+        ] {
+            let id = store
+                .queue_import_request(
+                    source_identity(item),
+                    "manual_import".to_string(),
+                    "{}".to_string(),
+                )
+                .await
+                .unwrap();
+            if status != ImportStatus::Pending {
+                store.update_import_status(&id, status, None).await.unwrap();
+            }
+            ids.push(id);
+        }
+        let listed = ids[..5].to_vec();
+        assert_eq!(store.delete_unfinished_imports(&listed).await.unwrap(), 3);
+        for (index, id) in ids.iter().enumerate() {
+            let survives = store.get_import_by_id(id).await.unwrap().is_some();
+            assert_eq!(survives, index >= 3, "import {index}");
+        }
+        assert_eq!(store.delete_unfinished_imports(&[]).await.unwrap(), 0);
+
+        let mut deleted = selection("deleted-title-selection", source_identity("sel-a"));
+        deleted.candidates = vec![ManualImportSelectionCandidate {
+            id: "candidate-a".to_string(),
+            canonical_path: "/downloads/release/a.mkv".to_string(),
+        }];
+        let mut kept = selection("kept-title-selection", source_identity("sel-b"));
+        kept.title_id = "title-2".to_string();
+        kept.candidates = vec![ManualImportSelectionCandidate {
+            id: "candidate-b".to_string(),
+            canonical_path: "/downloads/release/b.mkv".to_string(),
+        }];
+        store
+            .replace_manual_import_selection(deleted)
+            .await
+            .unwrap();
+        store.replace_manual_import_selection(kept).await.unwrap();
+        store
+            .delete_manual_import_selections_for_title("title-1")
+            .await
+            .unwrap();
+        assert!(
+            store
+                .get_manual_import_selection("deleted-title-selection", "user-1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(candidate_count(&store, "deleted-title-selection").await, 0);
+        let kept = store
+            .get_manual_import_selection("kept-title-selection", "user-1")
+            .await
+            .unwrap()
+            .expect("another title's selection survives");
+        assert_eq!(kept.candidates.len(), 1);
+        assert_eq!(candidate_count(&store, "kept-title-selection").await, 1);
     }
 }

@@ -2,10 +2,9 @@
 import * as React from "react";
 import { ManualDiscSelectionControl } from "./manual-disc-selection";
 import type { ManualDiscSelection } from "@/lib/utils/manual-import-video-facts";
-import { Check, ChevronsUpDown, FileVideo, Search } from "lucide-react";
+import { FileVideo } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import {
   MediaInfoBadges,
   type MediaInfoFile,
@@ -18,7 +17,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Table,
   TableBody,
@@ -35,9 +33,22 @@ import {
   queueManualImportMutation,
 } from "@/lib/graphql/mutations";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { compareManualImportSeasonLabels } from "@/lib/utils/manual-import-actions";
 import { type ManualImportVideoFacts } from "@/lib/utils/manual-import-video-facts";
-import { episodeTitleOrTba } from "@/lib/utils/episode-title";
+import {
+  EpisodeTargetSelect,
+  type EpisodeTargetPickerLabels,
+} from "@/components/common/episode-target-picker";
+import {
+  EPISODE_TARGET_PREFIX,
+  SERIES_MOVIE_TARGET_PREFIX,
+  UNASSIGNED_TARGET,
+  episodeTargetIds,
+  episodeTargetLabel,
+  episodeTargetValue,
+  groupEpisodesBySeason,
+  seriesMovieTargetLabel,
+  seriesMovieTargetValue,
+} from "@/lib/utils/episode-target";
 import { buildViewPath } from "@/lib/utils/routing";
 import { useNavigate } from "react-router";
 import { useClient } from "urql";
@@ -125,76 +136,6 @@ function formatFileSize(bytes: number) {
   return `${val.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-/**
- * The picker label for an episode. Without `t` (search matching) an untitled
- * episode contributes only its numbers, so searching "TBA" matches nothing.
- */
-function episodeLabel(ep: AvailableEpisode, t?: (key: string) => string): string {
-  const season = ep.seasonNumber?.replace(/\D/g, "") ?? "";
-  const episode = ep.episodeNumber?.replace(/\D/g, "") ?? "";
-  const seasonTag = season ? season.padStart(2, "0") : "??";
-  const episodeTag = episode ? episode.padStart(2, "0") : "??";
-  const tag = `S${seasonTag}E${episodeTag}`;
-  const absolute = ep.absoluteNumber?.trim();
-  const title = t ? episodeTitleOrTba(ep.title, t) : ep.title?.trim();
-  if (absolute) {
-    return title ? `${tag} (${absolute}) ${title}` : `${tag} (${absolute})`;
-  }
-  return title ? `${tag} - ${title}` : tag;
-}
-
-function seriesMovieLabel(movie: AvailableSeriesMovie): string {
-  const year = movie.year ? ` (${movie.year})` : "";
-  const runtime = movie.runtimeMinutes ? ` • ${movie.runtimeMinutes} min` : "";
-  return `${movie.movieTitle}${year}${runtime}`;
-}
-
-function groupEpisodesBySeason(episodes: AvailableEpisode[]): Map<string, AvailableEpisode[]> {
-  const groups = new Map<string, AvailableEpisode[]>();
-  for (const ep of episodes) {
-    const season = ep.seasonNumber?.replace(/\D/g, "") ?? "0";
-    const key = `Season ${season.padStart(2, "0")}`;
-    const group = groups.get(key) ?? [];
-    group.push(ep);
-    groups.set(key, group);
-  }
-  // Sort episodes within each season
-  for (const [key, group] of groups) {
-    groups.set(
-      key,
-      group.sort((a, b) => {
-        const aNum = Number.parseInt(a.episodeNumber?.replace(/\D/g, "") ?? "0", 10);
-        const bNum = Number.parseInt(b.episodeNumber?.replace(/\D/g, "") ?? "0", 10);
-        return aNum - bNum;
-      }),
-    );
-  }
-  return new Map(
-    Array.from(groups.entries()).sort(([left], [right]) =>
-      compareManualImportSeasonLabels(left, right),
-    ),
-  );
-}
-
-const UNASSIGNED = "__unassigned__";
-const EPISODE_TARGET_PREFIX = "episode:";
-const SERIES_MOVIE_TARGET_PREFIX = "series-movie:";
-
-// One file can cover several episodes (`Show.S01E27E28...`), so an episode
-// target carries the whole set. A single id keeps the value it always had.
-function episodeTargetValue(episodeIds: readonly string[]): string {
-  return `${EPISODE_TARGET_PREFIX}${episodeIds.join(",")}`;
-}
-
-function episodeTargetIds(value: string): string[] {
-  if (!value.startsWith(EPISODE_TARGET_PREFIX)) return [];
-  return value
-    .slice(EPISODE_TARGET_PREFIX.length)
-    .split(",")
-    .map((id) => id.trim())
-    .filter((id) => id.length > 0);
-}
-
 // The target a file's preview suggests, or "unassigned" when it suggests none.
 function suggestedTargetValue(file: FilePreview): string {
   if (file.fileName.toLowerCase().endsWith(".iso")) return UNASSIGNED;
@@ -211,9 +152,20 @@ function suggestedTargetValue(file: FilePreview): string {
   return UNASSIGNED;
 }
 
-function seriesMovieTargetValue(seriesMovieLinkId: string): string {
-  return `${SERIES_MOVIE_TARGET_PREFIX}${seriesMovieLinkId}`;
-}
+const UNASSIGNED = UNASSIGNED_TARGET;
+
+// The manual-import picker's copy and element ids are unchanged by the move
+// to the shared picker.
+const MANUAL_IMPORT_TARGET_LABELS: EpisodeTargetPickerLabels = {
+  unassigned: "Skip (unassigned)",
+  seriesMovies: "Series movies",
+  seasonGroup: (groupKey) => groupKey,
+  filterPlaceholder: "Filter episodes...",
+  filterLabel: "Filter import targets",
+  listLabel: "Import target",
+  noMatches: "No matching targets.",
+  selectPlaceholder: "Select target...",
+};
 
 type ManualImportTargetSelectProps = {
   candidateId: string;
@@ -224,254 +176,23 @@ type ManualImportTargetSelectProps = {
   onChange: (candidateId: string, value: string) => void;
 };
 
-type ManualImportTargetListRow =
-  | { kind: "group"; key: string; label: string }
-  | { kind: "option"; key: string; label: string; value: string };
-
-function buildManualImportTargetRows(
-  groupedEpisodes: ReadonlyMap<string, AvailableEpisode[]>,
-  seriesMovies: readonly AvailableSeriesMovie[],
-  query: string,
-  t: (key: string) => string,
-): ManualImportTargetListRow[] {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const matches = (label: string, groupLabel = "") =>
-    normalizedQuery.length === 0 ||
-    `${groupLabel} ${label}`.toLocaleLowerCase().includes(normalizedQuery);
-  const rows: ManualImportTargetListRow[] = [];
-
-  const unassignedLabel = "Skip (unassigned)";
-  if (matches(unassignedLabel)) {
-    rows.push({
-      kind: "option",
-      key: UNASSIGNED,
-      label: unassignedLabel,
-      value: UNASSIGNED,
-    });
-  }
-
-  const matchingSeriesMovies = seriesMovies.filter((movie) =>
-    matches(seriesMovieLabel(movie), "Series movies"),
-  );
-  if (matchingSeriesMovies.length > 0) {
-    rows.push({ kind: "group", key: "group:series-movies", label: "Series movies" });
-    matchingSeriesMovies.forEach((movie) => {
-      const value = seriesMovieTargetValue(movie.seriesMovieLinkId);
-      rows.push({ kind: "option", key: value, label: seriesMovieLabel(movie), value });
-    });
-  }
-
-  groupedEpisodes.forEach((episodesInSeason, seasonLabel) => {
-    const matchingEpisodes = episodesInSeason.filter((episode) =>
-      matches(episodeLabel(episode), seasonLabel),
-    );
-    if (matchingEpisodes.length === 0) {
-      return;
-    }
-    rows.push({ kind: "group", key: `group:${seasonLabel}`, label: seasonLabel });
-    matchingEpisodes.forEach((episode) => {
-      const value = episodeTargetValue([episode.id]);
-      rows.push({ kind: "option", key: value, label: episodeLabel(episode, t), value });
-    });
-  });
-
-  return rows;
-}
-
-function ManualImportTargetPickerContent({
-  value,
-  groupedEpisodes,
-  seriesMovies,
-  multiple,
-  onMultipleChange,
-  onSelect,
-}: {
-  value: string;
-  groupedEpisodes: ReadonlyMap<string, AvailableEpisode[]>;
-  seriesMovies: readonly AvailableSeriesMovie[];
-  multiple: boolean;
-  onMultipleChange: (multiple: boolean) => void;
-  onSelect: (value: string) => void;
-}) {
-  const t = useTranslate();
-  const [query, setQuery] = React.useState("");
-  const searchRef = React.useRef<HTMLInputElement>(null);
-  const selectedEpisodeIds = React.useMemo(() => new Set(episodeTargetIds(value)), [value]);
-  const isSelected = (rowValue: string) => {
-    const ids = episodeTargetIds(rowValue);
-    if (ids.length === 0) return rowValue === value;
-    return ids.every((id) => selectedEpisodeIds.has(id));
-  };
-  // A file that holds two episodes must be assignable to both at once; the
-  // single-target picker stays the default so the common case is unchanged.
-  const toggleEpisode = (rowValue: string) => {
-    const [episodeId] = episodeTargetIds(rowValue);
-    if (!episodeId) {
-      onSelect(rowValue);
-      return;
-    }
-    const next = new Set(selectedEpisodeIds);
-    if (next.has(episodeId)) next.delete(episodeId);
-    else next.add(episodeId);
-    onSelect(next.size === 0 ? UNASSIGNED : episodeTargetValue(Array.from(next)));
-  };
-  const scrollRef = React.useRef<HTMLDivElement>(null);
-  const rows = React.useMemo(
-    () => buildManualImportTargetRows(groupedEpisodes, seriesMovies, query, t),
-    [groupedEpisodes, query, seriesMovies, t],
-  );
-  React.useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 });
-  }, [query]);
-
-  return (
-    <PopoverContent
-      align="start"
-      className="z-[90] w-[var(--radix-popover-trigger-width)] min-w-[280px] p-2"
-      onOpenAutoFocus={(event) => {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }}
-    >
-      <label className="mb-2 flex items-center gap-2 px-1 text-xs text-muted-foreground">
-        <input
-          type="checkbox"
-          checked={multiple}
-          onChange={(event) => onMultipleChange(event.target.checked)}
-          aria-label={t("queue.manualImportMultipleEpisodesLabel")}
-        />
-        <span>{t("queue.manualImportMultipleEpisodes")}</span>
-      </label>
-      <div className="relative mb-2">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          ref={searchRef}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter episodes..."
-          aria-label="Filter import targets"
-          className="h-8 pl-8 text-xs"
-        />
-      </div>
-      {rows.length === 0 ? (
-        <div className="px-2 py-6 text-center text-xs text-muted-foreground">
-          No matching targets.
-        </div>
-      ) : (
-        <div
-          ref={scrollRef}
-          role="listbox"
-          aria-label="Import target"
-          className="h-[280px] overflow-y-auto overscroll-contain"
-        >
-          <div className="w-full">
-            {rows.map((row) => (
-              <div key={row.key}>
-                {row.kind === "group" ? (
-                    <div className="px-2 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                      {row.label}
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={isSelected(row.value)}
-                      id={
-                        row.value === UNASSIGNED
-                          ? selectorId("activity-manual-import-skip-option")
-                          : row.value.startsWith(SERIES_MOVIE_TARGET_PREFIX)
-                            ? selectorId(
-                                "activity-manual-import-series-movie-option",
-                                row.value.slice(SERIES_MOVIE_TARGET_PREFIX.length),
-                              )
-                            : selectorId(
-                                "activity-manual-import-episode-option",
-                                row.value.slice(EPISODE_TARGET_PREFIX.length),
-                              )
-                      }
-                      className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-                      onClick={() => {
-                        if (multiple) toggleEpisode(row.value);
-                        else onSelect(row.value);
-                      }}
-                    >
-                      <Check
-                        className={`h-3.5 w-3.5 shrink-0 ${
-                          isSelected(row.value) ? "opacity-100" : "opacity-0"
-                        }`}
-                      />
-                      <span className="truncate">{row.label}</span>
-                    </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </PopoverContent>
-  );
-}
-
 const ManualImportTargetSelect = React.memo(function ManualImportTargetSelect({
   candidateId,
-  value,
-  groupedEpisodes,
-  seriesMovies,
-  targetLabels,
   onChange,
+  ...rest
 }: ManualImportTargetSelectProps) {
-  const [open, setOpen] = React.useState(false);
-  const selectedEpisodeIds = React.useMemo(() => episodeTargetIds(value), [value]);
-  // A preview that resolved several episodes opens the picker already in
-  // multi-select mode, so "change" edits the set instead of replacing it.
-  const [multiple, setMultiple] = React.useState(selectedEpisodeIds.length > 1);
-  React.useEffect(() => {
-    if (selectedEpisodeIds.length > 1) setMultiple(true);
-  }, [selectedEpisodeIds.length]);
-
+  const handleChange = React.useCallback(
+    (value: string) => onChange(candidateId, value),
+    [candidateId, onChange],
+  );
   return (
-    <Popover modal open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          id={selectorId("activity-manual-import-assign", candidateId)}
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          className="h-auto min-h-8 w-full justify-between gap-2 px-3 py-1 text-xs font-normal"
-        >
-          {selectedEpisodeIds.length > 1 ? (
-            <span className="flex min-w-0 flex-wrap items-center gap-1">
-              {selectedEpisodeIds.map((episodeId) => (
-                <Badge key={episodeId} tone="info" className="max-w-full px-1.5 text-[10px]">
-                  <span className="truncate">
-                    {targetLabels.get(episodeTargetValue([episodeId])) ?? episodeId}
-                  </span>
-                </Badge>
-              ))}
-            </span>
-          ) : (
-            <span className="truncate">
-              {targetLabels.get(value) ?? "Select target..."}
-            </span>
-          )}
-          <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
-        </Button>
-      </PopoverTrigger>
-      {open ? (
-        <ManualImportTargetPickerContent
-          value={value}
-          groupedEpisodes={groupedEpisodes}
-          seriesMovies={seriesMovies}
-          multiple={multiple}
-          onMultipleChange={setMultiple}
-          onSelect={(nextValue) => {
-            onChange(candidateId, nextValue);
-            if (!multiple) setOpen(false);
-          }}
-        />
-      ) : null}
-    </Popover>
+    <EpisodeTargetSelect
+      triggerId={selectorId("activity-manual-import-assign", candidateId)}
+      idPrefix="activity-manual-import"
+      labels={MANUAL_IMPORT_TARGET_LABELS}
+      onChange={handleChange}
+      {...rest}
+    />
   );
 });
 
@@ -596,11 +317,11 @@ export function ManualImportDialog({
     seriesMovies.forEach((movie) => {
       labels.set(
         seriesMovieTargetValue(movie.seriesMovieLinkId),
-        seriesMovieLabel(movie),
+        seriesMovieTargetLabel(movie),
       );
     });
     episodes.forEach((episode) => {
-      labels.set(episodeTargetValue([episode.id]), episodeLabel(episode, t));
+      labels.set(episodeTargetValue([episode.id]), episodeTargetLabel(episode, t));
     });
     return labels;
   }, [episodes, seriesMovies, t]);
@@ -805,7 +526,7 @@ export function ManualImportDialog({
                             disc={file.videoFacts?.disc ?? null}
                             report={file.videoFacts?.report}
                             isMovie={facet === "MOVIE"}
-                            episodes={episodes.map((episode) => ({ id: episode.id, label: episodeLabel(episode, t) }))}
+                            episodes={episodes.map((episode) => ({ id: episode.id, label: episodeTargetLabel(episode, t) }))}
                             value={discSelections[file.candidateId] ?? null}
                             onChange={(selection) => {
                               setDiscSelections((previous) => {

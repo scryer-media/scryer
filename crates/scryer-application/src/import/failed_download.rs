@@ -105,7 +105,6 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
                 .clone()
                 .unwrap_or_else(|| td.client_item.title_name.clone()),
             reason: failure_reason.to_string(),
-            remove_from_client_if_configured: false,
             // Only the import gate routes a download here with this flag set
             // (a download holding nothing but unwanted executables); the
             // blocklist then names the import's verdict, not the client.

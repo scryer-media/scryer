@@ -1,6 +1,8 @@
 #![recursion_limit = "256"]
 
-use async_graphql::{Context, Enum, ID, MergedObject, Object, Result as GqlResult, SimpleObject};
+use async_graphql::{
+    Context, Enum, ID, MaybeUndefined, MergedObject, Object, Result as GqlResult, SimpleObject,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 use chrono::{DateTime, Utc};
@@ -4313,7 +4315,8 @@ impl AcquisitionQueries {
         Ok(provider_types
             .into_iter()
             .map(|(pt, name, fields, default_base_url)| {
-                from_provider_type(
+                let trigger_keys = app.indexer_dynamic_config_trigger_keys(&pt);
+                let mut payload = from_provider_type(
                     pt,
                     name,
                     fields,
@@ -4322,9 +4325,68 @@ impl AcquisitionQueries {
                     Vec::new(),
                     Vec::new(),
                     false,
-                )
+                );
+                payload.dynamic_config_trigger_keys = trigger_keys;
+                payload
             })
             .collect())
+    }
+
+    /// Return the extra config fields an indexer plugin adds for the values
+    /// entered so far, and the static fields it hides; requires
+    /// system-settings permission. Only the provider's trigger-key values are
+    /// sent to the plugin for fields. Empty when the provider adds no fields.
+    /// Selecting `loginChallenge` also runs the whole draft, the way a
+    /// connection test does, to fetch the sign-in challenge it asks for.
+    async fn plugin_config_fields(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Indexer provider type whose plugin is asked.")] provider_type: String,
+        #[graphql(
+            desc = "Current form values. Fields use only the provider's trigger keys; a login challenge uses them all."
+        )]
+        values: Vec<ProviderConfigValueInput>,
+        #[graphql(
+            desc = "Existing indexer whose stored secrets fill the draft's blank ones for a login challenge."
+        )]
+        indexer_id: Option<ID>,
+        #[graphql(
+            desc = "Proxy for a login challenge: omission keeps the stored association, null clears it, and a value replaces it."
+        )]
+        proxy_config_id: MaybeUndefined<ID>,
+    ) -> GqlResult<PluginDynamicConfigFieldsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = require_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let wants_challenge = ctx.look_ahead().field("loginChallenge").exists();
+        let draft_json = if wants_challenge {
+            Some(mappers::provider_config_values_to_json(values.clone()).map_err(to_gql_error)?)
+        } else {
+            None
+        };
+        let values = mappers::provider_config_values_to_string_map(values).map_err(to_gql_error)?;
+        let dynamic = app
+            .indexer_dynamic_config_fields(&actor, &provider_type, &values)
+            .await
+            .map_err(to_gql_error)?;
+        let mut payload = mappers::from_plugin_dynamic_config_fields(dynamic);
+        if let Some(draft_json) = draft_json {
+            payload.login_challenge = app
+                .indexer_login_challenge(
+                    &actor,
+                    &provider_type,
+                    Some(&draft_json),
+                    indexer_id.as_ref().map(|id| id.as_str()),
+                    match &proxy_config_id {
+                        MaybeUndefined::Undefined => None,
+                        MaybeUndefined::Null => Some(None),
+                        MaybeUndefined::Value(id) => Some(Some(id.as_str())),
+                    },
+                )
+                .await
+                .map_err(to_gql_error)?
+                .map(mappers::from_indexer_login_challenge);
+        }
+        Ok(payload)
     }
 
     /// Return available download-client provider types and their configuration fields; requires system-settings permission.

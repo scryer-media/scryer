@@ -178,6 +178,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ui_palettes_round_trip() {
+        for palette in [
+            UiPaletteValue::Classic,
+            UiPaletteValue::ScryerDefault,
+            UiPaletteValue::Slate,
+            UiPaletteValue::Ocean,
+            UiPaletteValue::Forest,
+            UiPaletteValue::Plum,
+            UiPaletteValue::Ember,
+            UiPaletteValue::Graphite,
+            UiPaletteValue::Papyrus,
+        ] {
+            let app = to_app_ui_palette(palette);
+            assert!(from_ui_palette(app) == palette);
+            assert_eq!(
+                scryer_application::UiPalette::parse(app.as_str()),
+                Some(app)
+            );
+        }
+        assert_eq!(scryer_application::UiPalette::parse("CUSTOM"), None);
+    }
+
+    #[test]
     fn retired_ui_theme_inputs_normalize_to_dark() {
         assert_eq!(
             to_app_ui_theme(UiThemeValue::Pride),
@@ -516,15 +539,45 @@ fn to_app_ui_catalog_view_mode(
     }
 }
 
+fn from_ui_palette(value: scryer_application::UiPalette) -> UiPaletteValue {
+    match value {
+        scryer_application::UiPalette::Classic => UiPaletteValue::Classic,
+        scryer_application::UiPalette::ScryerDefault => UiPaletteValue::ScryerDefault,
+        scryer_application::UiPalette::Slate => UiPaletteValue::Slate,
+        scryer_application::UiPalette::Ocean => UiPaletteValue::Ocean,
+        scryer_application::UiPalette::Forest => UiPaletteValue::Forest,
+        scryer_application::UiPalette::Plum => UiPaletteValue::Plum,
+        scryer_application::UiPalette::Ember => UiPaletteValue::Ember,
+        scryer_application::UiPalette::Graphite => UiPaletteValue::Graphite,
+        scryer_application::UiPalette::Papyrus => UiPaletteValue::Papyrus,
+    }
+}
+
+fn to_app_ui_palette(value: UiPaletteValue) -> scryer_application::UiPalette {
+    match value {
+        UiPaletteValue::Classic => scryer_application::UiPalette::Classic,
+        UiPaletteValue::ScryerDefault => scryer_application::UiPalette::ScryerDefault,
+        UiPaletteValue::Slate => scryer_application::UiPalette::Slate,
+        UiPaletteValue::Ocean => scryer_application::UiPalette::Ocean,
+        UiPaletteValue::Forest => scryer_application::UiPalette::Forest,
+        UiPaletteValue::Plum => scryer_application::UiPalette::Plum,
+        UiPaletteValue::Ember => scryer_application::UiPalette::Ember,
+        UiPaletteValue::Graphite => scryer_application::UiPalette::Graphite,
+        UiPaletteValue::Papyrus => scryer_application::UiPalette::Papyrus,
+    }
+}
+
 pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSettingsPayload {
     UiSettingsPayload {
         theme: from_ui_theme(settings.theme),
+        palette: from_ui_palette(settings.palette),
         date_time_format: from_ui_date_time_format(settings.date_time_format),
         highlight_color: settings.highlight_color,
         secondary_color: settings.secondary_color,
         high_contrast_mode: settings.high_contrast_mode,
         reduce_motion: settings.reduce_motion,
         hide_sponsor_button: settings.hide_sponsor_button,
+        no_glow: settings.no_glow,
         density: from_ui_density(settings.density),
         sidebar_mode: from_ui_sidebar_mode(settings.sidebar_mode),
         default_landing_view: from_ui_default_landing_view(settings.default_landing_view),
@@ -555,19 +608,24 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
 
 pub(crate) fn ui_settings_update_from_input(
     input: SetMyUiSettingsInput,
-    current_date_time_format: scryer_application::UiDateTimeFormat,
+    current: &scryer_application::UiSettings,
 ) -> scryer_application::UiSettingsUpdate {
     scryer_application::UiSettingsUpdate {
         theme: to_app_ui_theme(input.theme),
+        palette: input
+            .palette
+            .map(to_app_ui_palette)
+            .unwrap_or(current.palette),
         date_time_format: input
             .date_time_format
             .map(to_app_ui_date_time_format)
-            .unwrap_or(current_date_time_format),
+            .unwrap_or(current.date_time_format),
         highlight_color: input.highlight_color,
         secondary_color: input.secondary_color,
         high_contrast_mode: input.high_contrast_mode,
         reduce_motion: input.reduce_motion,
         hide_sponsor_button: input.hide_sponsor_button,
+        no_glow: input.no_glow.unwrap_or(current.no_glow),
         density: to_app_ui_density(input.density),
         sidebar_mode: to_app_ui_sidebar_mode(input.sidebar_mode),
         default_landing_view: to_app_ui_default_landing_view(input.default_landing_view),
@@ -1249,9 +1307,7 @@ impl SettingsQueries {
             .map_err(to_gql_error)?;
         let mut payloads = Vec::with_capacity(configs.len());
         for config in configs {
-            let config_fields = app
-                .indexer_config_fields_for_provider_type(&config.provider_type)
-                .unwrap_or_default();
+            let config_fields = app.indexer_config_fields_for_config(&config).await;
             payloads.push(from_indexer_config_with_fields(config, &config_fields));
         }
         for payload in &mut payloads {

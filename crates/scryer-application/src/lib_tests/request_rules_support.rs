@@ -302,30 +302,12 @@ impl InMemoryLifecycleClaimRepo {
     }
 }
 
-/// The stored live operator keep that `claim` would duplicate, if it is one.
-fn live_operator_keep_index(claims: &[LifecycleClaim], claim: &LifecycleClaim) -> Option<usize> {
-    if claim.producer != LifecycleClaimProducer::OperatorKeep || !claim.state.is_live() {
-        return None;
-    }
-    claims.iter().position(|stored| {
-        stored.producer == LifecycleClaimProducer::OperatorKeep
-            && stored.title_id == claim.title_id
-            && stored.state.is_live()
-    })
-}
-
 #[async_trait]
 impl crate::ports::LifecycleClaimRepository for InMemoryLifecycleClaimRepo {
-    /// Enforces the partial unique indexes: one live claim per
-    /// (producer, producer_ref), and one live operator keep per title.
+    /// Enforces the partial unique index: one live claim per
+    /// (producer, producer_ref).
     async fn create(&self, claim: &LifecycleClaim) -> AppResult<()> {
         let mut claims = self.claims.lock().await;
-        if live_operator_keep_index(&claims, claim).is_some() {
-            return Err(AppError::Repository(format!(
-                "a live operator keep already exists for {}",
-                claim.title_id
-            )));
-        }
         if let Some(producer_ref) = claim.producer_ref.as_ref()
             && claim.state.is_live()
             && claims.iter().any(|stored| {
@@ -594,12 +576,7 @@ impl crate::ports::LifecycleClaimRepository for InMemoryLifecycleClaimRepo {
         Ok(())
     }
 
-    async fn convert_to_permanent(
-        &self,
-        id: &str,
-        replacement: &LifecycleClaim,
-        now: DateTime<Utc>,
-    ) -> AppResult<String> {
+    async fn convert_to_permanent(&self, id: &str, now: DateTime<Utc>) -> AppResult<()> {
         let mut claims = self.claims.lock().await;
         let Some(claim) = claims
             .iter_mut()
@@ -612,11 +589,7 @@ impl crate::ports::LifecycleClaimRepository for InMemoryLifecycleClaimRepo {
         claim.state = LifecycleClaimState::Converted;
         claim.released_reason = Some("converted_to_permanent".to_string());
         claim.updated_at = now;
-        if let Some(index) = live_operator_keep_index(&claims, replacement) {
-            return Ok(claims[index].id.clone());
-        }
-        claims.push(replacement.clone());
-        Ok(replacement.id.clone())
+        Ok(())
     }
 
     async fn count_live_for_user(&self, user_id: &str) -> AppResult<u64> {

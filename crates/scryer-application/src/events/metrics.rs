@@ -280,6 +280,7 @@ fn payload_title(payload: &DomainEventPayload) -> Option<&TitleContextSnapshot> 
         DomainEventPayload::MediaFileImported(data) => Some(&data.title),
         DomainEventPayload::MediaFileAnalyzed(data) => Some(&data.title),
         DomainEventPayload::MediaFileRenamed(data) => Some(&data.title),
+        DomainEventPayload::MediaFileReassigned(data) => Some(&data.title),
         DomainEventPayload::MediaFileDeleted(data) => Some(&data.title),
         DomainEventPayload::MediaFileRestored(data) => Some(&data.title),
         DomainEventPayload::MediaFileUpgraded(data) => Some(&data.title),

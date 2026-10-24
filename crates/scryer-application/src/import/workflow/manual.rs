@@ -8,10 +8,6 @@ const MANUAL_IMPORT_RECOVERY_WINDOW_HOURS: i64 = 24;
 const MANUAL_IMPORT_SOURCE_UNAVAILABLE: &str = "download is no longer available for manual import";
 const MANUAL_MOVIE_NO_PRIMARY_FILE: &str =
     "no primary movie file to import: every mapped video is named as a sample";
-// Opaque files have no release-name semantics for the manual candidate UI.
-// Keep small samples and sidecars out of that expanded discovery surface while
-// leaving known video files (including legitimate short specials) untouched.
-const OPAQUE_MANUAL_IMPORT_PROBE_MIN_BYTES: u64 = 16 * 1024 * 1024;
 pub async fn start_background_manual_import_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -982,7 +978,6 @@ pub(crate) async fn qualify_manual_import_video_candidate(
         ))
     })?;
     let has_known_video_extension = is_video_file(source_path);
-    let has_file_extension = source_path.extension().is_some();
     if metadata.len() == 0 {
         return Ok(None);
     }
@@ -997,76 +992,32 @@ pub(crate) async fn qualify_manual_import_video_candidate(
         }));
     }
 
-    if !is_disc_image
-        && (has_file_extension || metadata.len() < OPAQUE_MANUAL_IMPORT_PROBE_MIN_BYTES)
-    {
+    if !is_disc_image && !opaque_video_probe_applies(source_path, metadata.len()) {
         return Ok(None);
     }
 
-    #[cfg(feature = "runtime-media-analysis")]
-    let video_facts = {
-        let probe_path = canonical_path.clone();
-        let analysis = tokio::task::spawn_blocking(move || {
-            crate::nice_thread();
-            let started = std::time::Instant::now();
-            let result = if is_disc_image {
-                scryer_mediainfo::analyze_disc_file(&probe_path, Default::default())
-            } else {
-                scryer_mediainfo::analyze_file_with_options(
-                    &probe_path,
-                    scryer_mediainfo::AnalyzeOptions {
-                        profile: scryer_mediainfo::AnalysisProfile::ContentProbe,
-                    },
-                )
-            };
-            crate::media::metrics::record_probe(
-                crate::media::metrics::ProbeOperation::Discovery,
-                started.elapsed(),
-                result
-                    .as_ref()
-                    .ok()
-                    .map(|analysis| &analysis.details.report),
-            );
-            result
-        })
-        .await
-        .map_err(|error| {
-            AppError::Repository(format!("manual import media probe failed: {error}"))
-        })?;
-
-        match analysis {
-            Ok(analysis) if is_disc_image || scryer_mediainfo::is_valid_video(&analysis) => {
-                Some(ManualImportVideoFacts {
-                    container_format: analysis.container_format,
-                    video_codec: analysis.video_codec,
-                    audio_codec: analysis.audio_codec,
-                    video_width: analysis.video_width,
-                    video_height: analysis.video_height,
-                    duration_seconds: analysis.duration_seconds,
-                    disc: analysis.details.disc,
-                    report: analysis.details.report,
-                })
-            }
-            Ok(_) | Err(scryer_mediainfo::MediaInfoError::Parse(_)) => return Ok(None),
-            Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)) => return Ok(None),
-            Err(scryer_mediainfo::MediaInfoError::Io(error)) => {
-                return Err(AppError::Validation(format!(
-                    "manual import file is not accessible: {} ({error})",
-                    source_path.display()
-                )));
-            }
-        }
+    let probe_path = canonical_path.clone();
+    let video_facts = tokio::task::spawn_blocking(move || {
+        crate::nice_thread();
+        probe_video_content(&probe_path, is_disc_image)
+    })
+    .await
+    .map_err(|error| AppError::Repository(format!("manual import media probe failed: {error}")))?
+    .map_err(|error| {
+        AppError::Validation(format!(
+            "manual import file is not accessible: {} ({error})",
+            source_path.display()
+        ))
+    })?;
+    let Some(video_facts) = video_facts else {
+        return Ok(None);
     };
 
-    #[cfg(not(feature = "runtime-media-analysis"))]
-    return Ok(None);
-
-    #[cfg(feature = "runtime-media-analysis")]
     Ok(Some(QualifiedManualImportVideo {
         source_entry_path: source_path.to_path_buf(),
         canonical_path,
         size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
-        video_facts,
+        video_facts: Some(video_facts),
     }))
 }
 
@@ -1186,6 +1137,9 @@ async fn preview_manual_import(
         available_episodes,
         anime_numbering_bridge.as_ref(),
         Some(&grabbed_episode_ids),
+        // The preview has no download completion time in hand; each member
+        // below reads its own file's mtime instead.
+        None,
     );
     let unresolved_pack = matches!(&pack_verification, EpisodePackVerification::Unresolved);
     let verified_pack = match pack_verification {
@@ -3333,6 +3287,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                 import_id,
                 &subtitle_videos,
                 &subtitle_roots,
+                &[],
             )
             .await
         }

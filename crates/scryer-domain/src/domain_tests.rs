@@ -313,6 +313,8 @@ fn config_field_type_supports_multiline() {
     assert_eq!(ConfigFieldType::Path.as_str(), "path");
     assert_eq!(ConfigFieldType::parse("tag"), Some(ConfigFieldType::Tag));
     assert_eq!(ConfigFieldType::Tag.as_str(), "tag");
+    assert_eq!(ConfigFieldType::parse("info"), Some(ConfigFieldType::Info));
+    assert_eq!(ConfigFieldType::Info.as_str(), "info");
 }
 
 #[test]

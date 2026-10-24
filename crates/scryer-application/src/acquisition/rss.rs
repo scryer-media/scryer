@@ -393,6 +393,7 @@ fn pending_release_as_rss_result(pending: &PendingRelease) -> IndexerSearchResul
 
     let response_attributes = external::restore_announcement(pending, &mut extra);
     IndexerSearchResult {
+        http: None,
         indexer_id: pending.indexer_id.clone(),
         source: pending
             .indexer_source
@@ -3349,6 +3350,7 @@ impl AppUseCase {
                     }
                     .to_rfc3339();
                 let pending = PendingRelease {
+                    http_release: candidate.http.clone(),
                     id: Id::new().0,
                     wanted_item_id: wanted.id.clone(),
                     title_id: title.id.clone(),
@@ -3580,7 +3582,9 @@ impl AppUseCase {
         grabbed_episode_ids.dedup();
         let canonical_result = self
             .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                http_release: best.http.clone(),
                 request: DownloadClientAddRequest {
+                    http: None,
                     title: title.clone(),
                     search_facet: Some(subject.search_facet.clone()),
                     purpose: crate::DownloadSubmissionPurpose::Standard,
@@ -4233,6 +4237,7 @@ mod tests {
             .unwrap();
         let raw = "Score.Movie.2024.1080p.WEB-DL.H.264-GROUP";
         let release = IndexerSearchResult {
+            http: None,
             indexer_id: None,
             source: "fixture".into(),
             title: raw.into(),
@@ -5698,6 +5703,7 @@ mod tests {
     #[test]
     fn rss_unknown_listing_identity_matches_a_hydrated_candidate() {
         let pending = PendingRelease {
+            http_release: None,
             id: "pending-1".to_string(),
             wanted_item_id: "wanted-1".to_string(),
             title_id: "title-1".to_string(),
@@ -5770,6 +5776,7 @@ mod tests {
 
     fn listing_pending(release_listing_json: Option<&str>) -> PendingRelease {
         PendingRelease {
+            http_release: None,
             id: "pending-listing".to_string(),
             wanted_item_id: "wanted-1".to_string(),
             title_id: "title-1".to_string(),

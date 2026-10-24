@@ -580,6 +580,28 @@ async fn a_rate_limit_pauses_until_retry_after_capped_at_a_day() {
 }
 
 #[tokio::test]
+async fn an_exceeded_quota_pauses_until_the_plugins_retry_after() {
+    let mut list = subscription("list-a");
+    list.interval_seconds = 60;
+    let harness = Harness::new(vec![list]);
+    harness.lists.fail(
+        "list-a",
+        PluginError {
+            code: PluginErrorCode::from("quota_exceeded"),
+            ..rate_limited(Some(3600))
+        },
+    );
+
+    harness.sync_at(at(0)).await;
+
+    let list = harness.store.subscription("list-a");
+    assert_eq!(
+        list.sync.paused_until,
+        Some(at(0) + chrono::Duration::seconds(3600))
+    );
+}
+
+#[tokio::test]
 async fn a_sync_reports_only_the_adds_it_made() {
     let mut list = subscription("list-a");
     list.interval_seconds = 60;

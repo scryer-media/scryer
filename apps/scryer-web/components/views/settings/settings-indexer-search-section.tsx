@@ -64,6 +64,7 @@ import {
   RAW_SEARCH_MAX_PAGE_SIZE,
   releaseAgeMs,
   releaseProtocol,
+  type ReleaseProtocol,
   summarizeIndexerHealth,
   totalReleaseBytes,
   type IndexerHealthTone,
@@ -188,6 +189,12 @@ function ReleaseBadge({ text, tone }: { text: string; tone: BadgeTone }) {
   );
 }
 
+const PROTOCOL_LABEL_KEYS: Record<ReleaseProtocol, string> = {
+  usenet: "indexerSearch.protocol.nzb",
+  torrent: "indexerSearch.protocol.torrent",
+  http: "indexerSearch.protocol.http",
+};
+
 function ProtocolBadge({ release }: { release: Release }) {
   const t = useTranslate();
   const protocol = releaseProtocol(release);
@@ -203,11 +210,7 @@ function ProtocolBadge({ release }: { release: Release }) {
           : "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text-soft)]",
       )}
     >
-      {t(
-        protocol === "usenet"
-          ? "indexerSearch.protocol.nzb"
-          : "indexerSearch.protocol.torrent",
-      )}
+      {t(PROTOCOL_LABEL_KEYS[protocol])}
     </span>
   );
 }
@@ -384,7 +387,7 @@ function QueryCard({
             type="button"
             disabled={query.trim().length === 0}
             onClick={onSearch}
-            className="h-[46px] rounded-[11px] border-0 bg-[linear-gradient(135deg,var(--scry-accent),var(--scry-accent2))] px-[22px] text-[13.5px] font-semibold text-white shadow-[0_8px_20px_rgba(var(--scry-accent-rgb),0.32)] hover:opacity-90"
+            className="h-[46px] rounded-[11px] border-0 bg-[linear-gradient(135deg,var(--scry-accent),var(--scry-accent2))] px-[22px] text-[13.5px] font-semibold text-white shadow-[0_8px_20px_rgba(var(--scry-accent-rgb),calc(0.32*var(--scry-glow)))] hover:opacity-90"
           >
             <ScanSearch className="h-4 w-4" />
             {t("label.search")}

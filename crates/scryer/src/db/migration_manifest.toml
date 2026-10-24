@@ -3376,18 +3376,138 @@ scope = "all"
 
 [[migration]]
 version = 304
-description = "rules disabled unless experimental"
+description = "pending release http release"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0304_rules_disabled_unless_experimental.sql"
+file = "migrations/0304_pending_release_http_release.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0304_rules_disabled_unless_experimental.sql"
+file = "postgres/migrations/0304_pending_release_http_release.sql"
+engine = "postgres"
+scope = "all"
+
+
+[[migration]]
+version = 305
+description = "rules disabled unless experimental"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0305_rules_disabled_unless_experimental.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0305_rules_disabled_unless_experimental.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 306
+description = "user ui no glow"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0306_user_ui_no_glow.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0306_user_ui_no_glow.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 307
+description = "lifecycle claims remove operator keeps"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0307_lifecycle_claims_remove_operator_keeps.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0307_lifecycle_claims_remove_operator_keeps.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 308
+description = "lifecycle claims ttl only"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0308_lifecycle_claims_ttl_only.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0308_lifecycle_claims_ttl_only.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 309
+description = "user ui palette"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0309_user_ui_palette.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0309_user_ui_palette.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 310
+description = "graphite palette"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0310_graphite_palette.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0310_graphite_palette.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 311
+description = "papyrus palette"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0311_papyrus_palette.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0311_papyrus_palette.sql"
 engine = "postgres"
 scope = "all"
 

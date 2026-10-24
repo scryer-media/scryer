@@ -108,6 +108,7 @@ fn root_folder_entries_to_library_root_drafts(
         entries
             .iter()
             .map(|entry| LibraryRootDraft {
+                id: None,
                 path: entry.path.clone(),
                 is_default: entry.is_default,
             })

@@ -122,3 +122,21 @@ test("a search that could not run is reported as an error whatever the server sa
     ["category_mismatch: indexer category 'TV > HD' contradicts the movie subject", "ERROR"],
   ]);
 });
+
+test("a search a plugin refused names the plugin's reason in the reader's language", () => {
+  const reported: Array<[string, string | undefined]> = [];
+  reportAutomaticSearchFailure(
+    (status, options) => reported.push([status, options?.level]),
+    t,
+    {
+      graphQLErrors: [
+        {
+          message: "indexer grab: plugin error Other(\"item_not_found\"): release is gone",
+          extensions: { code: "PLUGIN_FAILED", reason: "PLUGIN_ITEM_NOT_FOUND" },
+        },
+      ],
+    },
+    "Silver Horizon",
+  );
+  assert.deepEqual(reported, [["plugins.failure.itemNotFound", "ERROR"]]);
+});

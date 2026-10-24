@@ -1992,8 +1992,8 @@ enum ConvergenceStateValue {
 }
 
 """
-Replaces a live claim with a permanent operator keep. The original stays as
-history in the `CONVERTED` state.
+Ends a live lease so the title carries no expiry. The lease stays as history
+in the `CONVERTED` state.
 """
 input ConvertTitleClaimToPermanentInput {
 	"""
@@ -3653,6 +3653,22 @@ type DeleteTitlePayload {
 	Deleted title identity.
 	"""
 	id: ID!
+	"""
+	Recycle entries purged during this deletion.
+	"""
+	recyclePurged: Int!
+	"""
+	Recycle entries preserved after revalidation.
+	"""
+	recyclePreserved: Int!
+	"""
+	Recycle entries held by another operation.
+	"""
+	recycleBusy: Int!
+	"""
+	Recycle cleanup failures; catalog deletion still succeeded.
+	"""
+	recycleFailed: Int!
 }
 
 """
@@ -4782,6 +4798,10 @@ enum DomainEventTypeValue {
 	"""
 	MEDIA_FILE_RENAMED
 	"""
+	An operator assigned a media file to different episodes of its title.
+	"""
+	MEDIA_FILE_REASSIGNED
+	"""
 	A media file was deleted.
 	"""
 	MEDIA_FILE_DELETED
@@ -5875,6 +5895,10 @@ enum DownloadSourceKindValue {
 	Torrent supplied as a magnet URI.
 	"""
 	MAGNET_URI
+	"""
+	HTTP-family release: a provider page, direct file, or streaming manifest.
+	"""
+	HTTP_RESOURCE
 }
 
 """
@@ -10230,17 +10254,14 @@ type LibrarySettingsPayload {
 }
 
 """
-What a lifecycle claim holds.
+What a lifecycle claim is.
 """
 enum LifecycleClaimKindValue {
 	"""
-	Holds until `expiresAt`, whose clock starts at the title's first import.
+	A time to delete: `expiresAt`, whose clock starts at the title's first
+	import.
 	"""
 	RETAIN_UNTIL
-	"""
-	Holds indefinitely.
-	"""
-	KEEP
 }
 
 """
@@ -10251,19 +10272,11 @@ enum LifecycleClaimProducerValue {
 	A finite lease approved on a media request.
 	"""
 	REQUEST_LEASE
-	"""
-	A request approved as "forever": a permanent keep.
-	"""
-	REQUEST_PERMANENT
-	"""
-	An administrator pinned the title by hand.
-	"""
-	OPERATOR_KEEP
 }
 
 """
-Lifecycle state of one claim. Claims are released, never deleted, so the
-terminal states are history and only `DORMANT` and `ACTIVE` hold anything.
+Lifecycle state of one claim. The terminal states are history, and only
+`DORMANT` and `ACTIVE` are live.
 """
 enum LifecycleClaimStateValue {
 	"""
@@ -10283,7 +10296,8 @@ enum LifecycleClaimStateValue {
 	"""
 	RELEASED
 	"""
-	Superseded by a permanent keep.
+	Ended by an administrator keeping the title permanently, which leaves
+	it with no expiry.
 	"""
 	CONVERTED
 }
@@ -14803,10 +14817,6 @@ type MaintenanceCandidate {
 	"""
 	storageRootTotalSizeBytes: Int
 	"""
-	The live operator keep on the subject's title, or null when it is not kept.
-	"""
-	operatorKeepClaimId: ID
-	"""
 	Exact subject display label, falling back to its ID if unavailable.
 	"""
 	subjectLabel: String!
@@ -16784,8 +16794,9 @@ type MediaRequestExternalRatingPayload {
 }
 
 """
-The lease one media request holds, derived from the live claim it produced.
-Null on the request payload until an approval creates that claim.
+The lease one media request holds, derived from the claim it produced. Null
+on the request payload until an approval creates that claim, and for a
+request approved without a lease, which has none.
 """
 type MediaRequestLease {
 	"""
@@ -16797,7 +16808,7 @@ type MediaRequestLease {
 	"""
 	approvedDays: Int
 	"""
-	State of the claim holding the title.
+	State of the lease's claim.
 	"""
 	state: LifecycleClaimStateValue!
 	"""
@@ -16806,7 +16817,7 @@ type MediaRequestLease {
 	"""
 	startsAt: DateTime
 	"""
-	When the lease runs out. Null while dormant and for a forever request.
+	When the lease runs out. Null while dormant.
 	"""
 	expiresAt: DateTime
 }
@@ -18962,7 +18973,7 @@ type MutationRoot {
 	"""
 	setMyUiSettings(
 		"""
-		Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value.
+		Complete UI settings to save; omitted or null date_time_format, no_glow, language or table_columns keeps its current value.
 		"""
 		input: SetMyUiSettingsInput!
 	): UiSettingsPayload!
@@ -19783,6 +19794,20 @@ type MutationRoot {
 		input: DeleteMediaFileInput!
 	): DeleteMediaFilePayload!
 	"""
+	Assign an imported series file to different episodes of its own title.
+	
+	The links move and the file is renamed on disk to the new episodes'
+	name, in one operation. A target with a primary file is refused unless
+	`replace` is set, which demotes that file to additional; no file is
+	ever deleted.
+	"""
+	reassignEpisodeFile(
+		"""
+		Media-file identity, target episodes, and conflict handling.
+		"""
+		input: ReassignEpisodeFileInput!
+	): ReassignEpisodeFilePayload!
+	"""
 	Accept a background job deleting every media file linked to the supplied
 	episodes of one title.
 	
@@ -20399,27 +20424,17 @@ type MutationRoot {
 		input: ExtendTitleClaimInput!
 	): TitleClaim!
 	"""
-	Replace a live claim with a permanent operator keep.
+	Keep a title permanently by ending its lease, so it carries no expiry.
 	
-	The replacement is a new claim rather than a mutated one, so the original
-	stays as history and the trail still says a request produced the hold and
-	an administrator chose to make it permanent.
+	The lease stays as history in the `CONVERTED` state, so the trail still
+	says a request produced it and an administrator chose to drop the
+	expiry.
 	"""
 	convertTitleClaimToPermanent(
 		"""
 		Claim identity to convert.
 		"""
 		input: ConvertTitleClaimToPermanentInput!
-	): TitleClaim!
-	"""
-	Keep a title: place an operator keep on it, or return the live one it
-	already has. Requires title management on the title's own library.
-	"""
-	createOperatorKeepClaim(
-		"""
-		Title to keep.
-		"""
-		titleId: ID!
 	): TitleClaim!
 	"""
 	Withdraw a claim by hand. The reason is required and kept as history.
@@ -22194,6 +22209,10 @@ enum PluginConfigFieldRoleValue {
 	Field contains a connection URL.
 	"""
 	CONNECTION_URL
+	"""
+	Field takes the answer to the sign-in challenge shown beside it.
+	"""
+	LOGIN_CHALLENGE_ANSWER
 }
 
 """
@@ -22236,6 +22255,10 @@ enum PluginConfigFieldTypeValue {
 	Tag value.
 	"""
 	TAG
+	"""
+	Read-only guidance shown as plain text; never an input, never saved.
+	"""
+	INFO
 }
 
 """
@@ -22250,6 +22273,26 @@ enum PluginConfigValueSourceValue {
 	Value supplied by a host binding.
 	"""
 	HOST_BINDING
+}
+
+"""
+Config fields a plugin adds for the values entered so far.
+"""
+type PluginDynamicConfigFieldsPayload {
+	"""
+	Extra fields, shown after the provider's static fields.
+	"""
+	fields: [PluginConfigFieldPayload!]!
+	"""
+	Static field keys to hide; hidden fields are never required.
+	"""
+	hiddenFieldKeys: [String!]!
+	"""
+	The image challenge the plugin's sign-in asks for under the submitted
+	draft, fetched only when selected; null when it asks for nothing.
+	Shown once and never stored.
+	"""
+	loginChallenge: PluginLoginChallengePayload
 }
 
 """
@@ -22454,6 +22497,24 @@ type PluginInstallationPayload {
 	UTC last-update time.
 	"""
 	updatedAt: DateTime!
+}
+
+"""
+An image challenge an indexer's sign-in asks the operator to solve.
+"""
+type PluginLoginChallengePayload {
+	"""
+	Key of the field that takes the answer.
+	"""
+	answerFieldKey: String!
+	"""
+	The image's media type: a raster image type.
+	"""
+	contentType: String!
+	"""
+	The image bytes, standard base64.
+	"""
+	imageData: String!
 }
 
 """
@@ -22874,6 +22935,13 @@ type ProviderTypePayload {
 	Whether a connection test is supported.
 	"""
 	supportsTest: Boolean!
+	"""
+	Static field keys whose values decide extra fields the plugin adds.
+	When this is non-empty the form asks `pluginConfigFields` again
+	whenever one of these values changes. Empty when the provider adds no
+	fields.
+	"""
+	dynamicConfigTriggerKeys: [String!]!
 }
 
 """
@@ -24945,6 +25013,32 @@ type QueryRoot {
 	"""
 	indexerProviderTypes: [ProviderTypePayload!]!
 	"""
+	Return the extra config fields an indexer plugin adds for the values
+	entered so far, and the static fields it hides; requires
+	system-settings permission. Only the provider's trigger-key values are
+	sent to the plugin for fields. Empty when the provider adds no fields.
+	Selecting `loginChallenge` also runs the whole draft, the way a
+	connection test does, to fetch the sign-in challenge it asks for.
+	"""
+	pluginConfigFields(
+		"""
+		Indexer provider type whose plugin is asked.
+		"""
+		providerType: String!,
+		"""
+		Current form values. Fields use only the provider's trigger keys; a login challenge uses them all.
+		"""
+		values: [ProviderConfigValueInput!]!,
+		"""
+		Existing indexer whose stored secrets fill the draft's blank ones for a login challenge.
+		"""
+		indexerId: ID,
+		"""
+		Proxy for a login challenge: omission keeps the stored association, null clears it, and a value replaces it.
+		"""
+		proxyConfigId: ID
+	): PluginDynamicConfigFieldsPayload!
+	"""
 	Return available download-client provider types and their configuration fields; requires system-settings permission.
 	"""
 	downloadClientProviderTypes: [ProviderTypePayload!]!
@@ -25535,6 +25629,56 @@ type QueueUnlinkedReleasePayload {
 	Release name as the indexer announced it.
 	"""
 	sourceTitle: String!
+}
+
+"""
+Operator request to assign an imported series file to different episodes of
+its own title. The file is renamed on disk to the new episodes' name.
+"""
+input ReassignEpisodeFileInput {
+	"""
+	Media-file identity to reassign.
+	"""
+	fileId: ID!
+	"""
+	Episodes of the file's own title the file represents after the change.
+	"""
+	episodeIds: [ID!]!
+	"""
+	Whether a primary file already on a target episode is demoted to an
+	additional file. When false, such a conflict refuses the request.
+	"""
+	replace: Boolean
+}
+
+"""
+Result of assigning an imported file to different episodes of its title.
+"""
+type ReassignEpisodeFilePayload {
+	"""
+	The file after the change, at its new path.
+	"""
+	file: TitleMediaFilePayload!
+	"""
+	Absolute path the file had before the change.
+	"""
+	previousPath: String!
+	"""
+	Episodes the file was linked to before the change.
+	"""
+	previousEpisodeIds: [ID!]!
+	"""
+	Episodes the file is linked to now, as their primary file.
+	"""
+	episodeIds: [ID!]!
+	"""
+	Files that were primary on a target episode and are now additional.
+	"""
+	demotedFileIds: [ID!]!
+	"""
+	Files that became primary on an episode this file left.
+	"""
+	promotedFileIds: [ID!]!
 }
 
 """
@@ -28264,6 +28408,10 @@ Complete caller presentation-preferences update.
 """
 input SetMyUiSettingsInput {
 	"""
+	Curated color palette; omitted or null preserves the existing selection.
+	"""
+	palette: UiPaletteValue
+	"""
 	Selected theme.
 	"""
 	theme: UiThemeValue!
@@ -28291,6 +28439,10 @@ input SetMyUiSettingsInput {
 	Whether the sponsor button should be hidden.
 	"""
 	hideSponsorButton: Boolean!
+	"""
+	Optional glow preference; true turns the decorative accent glow off and null preserves the existing value.
+	"""
+	noGlow: Boolean
 	"""
 	Selected density.
 	"""
@@ -29914,7 +30066,7 @@ enum TitleCatalogSortKeyValue {
 }
 
 """
-One hold on one title.
+One request lease on one title: a time to delete that rules read.
 """
 type TitleClaim {
 	"""
@@ -29922,7 +30074,7 @@ type TitleClaim {
 	"""
 	id: ID!
 	"""
-	Title the claim holds.
+	Title the claim is on.
 	"""
 	titleId: ID!
 	"""
@@ -29934,11 +30086,11 @@ type TitleClaim {
 	"""
 	producer: LifecycleClaimProducerValue!
 	"""
-	The producing media request's ID, or null for an operator pin.
+	The producing media request's ID.
 	"""
 	producerRef: String
 	"""
-	What the claim holds.
+	What the claim is.
 	"""
 	kind: LifecycleClaimKindValue!
 	"""
@@ -29946,7 +30098,7 @@ type TitleClaim {
 	"""
 	state: LifecycleClaimStateValue!
 	"""
-	Requested window in days for a retention claim; null for a keep.
+	Requested window in days.
 	"""
 	durationDays: Int
 	"""
@@ -29955,7 +30107,7 @@ type TitleClaim {
 	"""
 	startsAt: DateTime
 	"""
-	When the window closes. Null while dormant and for a keep.
+	When the window closes. Null while dormant.
 	"""
 	expiresAt: DateTime
 	"""
@@ -31703,6 +31855,45 @@ enum UiDeviceClassValue {
 }
 
 """
+Curated appearance saved on the caller's profile.
+"""
+enum UiPaletteValue {
+	"""
+	The original Scryer look, following the selected light or dark theme.
+	"""
+	CLASSIC
+	"""
+	The Scryer indigo palette, always dark.
+	"""
+	SCRYER_DEFAULT
+	"""
+	Cool grey with a blue accent, always light.
+	"""
+	SLATE
+	"""
+	Deep blue-green with a teal accent, always dark.
+	"""
+	OCEAN
+	"""
+	Dark green with a green accent, always dark.
+	"""
+	FOREST
+	"""
+	Dark purple with a violet accent, always dark.
+	"""
+	PLUM
+	"""
+	Warm cream with a burnt-orange accent, always light.
+	"""
+	EMBER
+	"""
+	Neutral charcoal with a sea-green accent, always dark.
+	"""
+	GRAPHITE
+	PAPYRUS
+}
+
+"""
 Media facet used by table-column settings.
 """
 enum UiSettingsFacetValue {
@@ -31724,6 +31915,10 @@ enum UiSettingsFacetValue {
 Persisted caller presentation preferences and table-column settings.
 """
 type UiSettingsPayload {
+	"""
+	Selected curated color palette.
+	"""
+	palette: UiPaletteValue!
 	"""
 	Selected theme.
 	"""
@@ -31752,6 +31947,10 @@ type UiSettingsPayload {
 	Whether the sponsor button is hidden.
 	"""
 	hideSponsorButton: Boolean!
+	"""
+	Whether the decorative accent glow is turned off.
+	"""
+	noGlow: Boolean!
 	"""
 	Selected density.
 	"""
@@ -32202,6 +32401,12 @@ input UpdateLibraryPathsInput {
 Replacement library root path and default marker.
 """
 input UpdateLibraryRootInput {
+	"""
+	Id of the stored root this entry edits. A root keeps its identity, and the
+	titles under it keep their root, when its path changes under the same id.
+	Omit it for a new root; an entry without one is matched by path.
+	"""
+	id: ID
 	"""
 	Absolute filesystem path for the root.
 	"""

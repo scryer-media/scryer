@@ -19,7 +19,7 @@ pub(super) type PausedDownloadRequest = (Option<String>, String);
 pub(super) type PausedDownloadRequests = Arc<Mutex<Vec<PausedDownloadRequest>>>;
 
 #[derive(Default)]
-pub(super) struct MockTitleRepo {
+pub(crate) struct MockTitleRepo {
     pub(super) store: Arc<Mutex<Vec<Title>>>,
     pub(super) fail_monitoring_for: Mutex<HashSet<String>>,
     /// The title tag registry, in definition order. Mirrors the store's
@@ -27,6 +27,8 @@ pub(super) struct MockTitleRepo {
     /// every bag carrying the old label, and a delete that strips it.
     pub(super) title_tag_definitions: Arc<Mutex<Vec<scryer_domain::TitleTagDefinition>>>,
     pub(super) fail_tag_reads: AtomicBool,
+    pub(crate) fail_get_by_id: AtomicBool,
+    pub(super) lose_folder_claim: AtomicBool,
     pub(super) smg_identity_backfill_attempts: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) metadata_hydration_due: Mutex<HashSet<String>>,
     pub(super) create_or_get_existing_error: Arc<Mutex<Option<String>>>,
@@ -34,6 +36,8 @@ pub(super) struct MockTitleRepo {
     /// compensating transaction can be exercised at the exact commit that fails.
     pub(super) folder_path_write_error: Arc<Mutex<Option<(String, String)>>>,
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
+    /// Explicit per-title arrival signal, recorded before any injected delete barrier.
+    pub(super) delete_started: Mutex<HashSet<String>>,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
     /// How many times a caller asked for the whole catalog to match against.
@@ -885,6 +889,9 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<Title>> {
+        if self.fail_get_by_id.load(Ordering::SeqCst) {
+            return Err(AppError::Repository("synthetic title read failure".into()));
+        }
         let list = self.store.lock().await;
         Ok(list.iter().find(|title| title.id == id).cloned())
     }
@@ -1392,6 +1399,7 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
+        self.delete_started.lock().await.insert(id.to_owned());
         if let Some(operation_log) = self.delete_operation_log.lock().await.clone() {
             operation_log
                 .lock()
@@ -1405,6 +1413,28 @@ impl TitleRepository for MockTitleRepo {
             .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
         list.remove(position);
         Ok(())
+    }
+
+    async fn claim_missing_folder_path(&self, id: &str, folder_path: &str) -> AppResult<bool> {
+        if self.lose_folder_claim.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        if let Some(error) = self.folder_path_write_failure(id).await {
+            return Err(error);
+        }
+        let mut list = self.store.lock().await;
+        let Some(title) = list.iter_mut().find(|entry| entry.id == id) else {
+            return Ok(false);
+        };
+        if title
+            .folder_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
+        {
+            return Ok(false);
+        }
+        title.folder_path = Some(folder_path.to_owned());
+        Ok(true)
     }
 
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {

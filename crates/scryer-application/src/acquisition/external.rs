@@ -175,6 +175,7 @@ impl ExternalReleaseInput {
             extra.insert(flag, serde_json::Value::Bool(true));
         }
         Ok(IndexerSearchResult {
+            http: None,
             indexer_id: None,
             source: source.to_owned(),
             title: name.to_owned(),

@@ -132,6 +132,7 @@ async fn seed_pending_release(
         active => active,
     };
     let mut pr = scryer_application::PendingRelease {
+        http_release: None,
         id: scryer_domain::Id::new().0,
         wanted_item_id: wanted_item_id.to_string(),
         title_id: title_id.to_string(),
@@ -212,6 +213,7 @@ async fn direct_wanted_item_lookup_requires_access_to_item_library() {
             updated_at: now,
         },
         vec![LibraryRootDraft {
+            id: None,
             path: adult_root.path().to_string_lossy().to_string(),
             is_default: true,
         }],
@@ -333,6 +335,7 @@ async fn pending_release_roundtrips_indexer_provenance() {
     .await;
     let now = Utc::now();
     let release = scryer_application::PendingRelease {
+        http_release: None,
         id: scryer_domain::Id::new().0,
         wanted_item_id: wanted.id,
         title_id: "title-indexer".to_string(),

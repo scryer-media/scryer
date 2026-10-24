@@ -837,15 +837,7 @@ const IMPORT_HISTORY_FIELDS = `
     finishedAt
     createdAt`;
 
-const PROVIDER_TYPE_FIELDS = `
-    providerType
-    name
-    defaultBaseUrl
-    availableHostBindings
-    recommendedFacets
-    supportedEvents
-    supportsTest
-    configFields {
+const CONFIG_FIELD_SELECTION = `
       key
       label
       fieldType
@@ -858,7 +850,18 @@ const PROVIDER_TYPE_FIELDS = `
       helpText
       visibleWhen { key op values }
       requiredWhen { key op values }
-      advanced
+      advanced`;
+
+const PROVIDER_TYPE_FIELDS = `
+    providerType
+    name
+    defaultBaseUrl
+    availableHostBindings
+    recommendedFacets
+    supportedEvents
+    supportsTest
+    dynamicConfigTriggerKeys
+    configFields {${CONFIG_FIELD_SELECTION}
     }`;
 
 export const SUBTITLE_SETTINGS_FIELDS = `
@@ -1101,6 +1104,24 @@ export const ruleSetTestTitleCollectionsQuery = `query RuleSetTestTitleCollectio
       label
       collectionIndex
       collectionType
+    }
+  }
+}`;
+
+/** Every episode of a title, for the episode target picker. */
+export const titleEpisodeTargetsQuery = `query TitleEpisodeTargets($id: ID!) {
+  title(id: $id) {
+    id
+    collections {
+      id
+      episodes {
+        id
+        episodeType
+        seasonNumber
+        episodeNumber
+        absoluteNumber
+        title
+      }
     }
   }
 }`;
@@ -2371,6 +2392,25 @@ export const indexerProviderTypesQuery = `query IndexerProviderTypes {
   }
 }`;
 
+export const pluginConfigFieldsQuery = `query PluginConfigFields($providerType: String!, $values: [ProviderConfigValueInput!]!) {
+  pluginConfigFields(providerType: $providerType, values: $values) {
+    fields {${CONFIG_FIELD_SELECTION}
+    }
+    hiddenFieldKeys
+  }
+}`;
+
+/** The sign-in image for the draft settings; `values` is the whole draft. */
+export const pluginLoginChallengeQuery = `query PluginLoginChallenge($providerType: String!, $values: [ProviderConfigValueInput!]!, $indexerId: ID, $proxyConfigId: ID) {
+  pluginConfigFields(providerType: $providerType, values: $values, indexerId: $indexerId, proxyConfigId: $proxyConfigId) {
+    loginChallenge {
+      answerFieldKey
+      contentType
+      imageData
+    }
+  }
+}`;
+
 const proxyConfigFieldSelection = `
     id
     name
@@ -2982,12 +3022,14 @@ export const generalSettingsQuery = `query GeneralSettings {
 export const myUiSettingsQuery = `query MyUiSettings {
   myUiSettings {
     theme
+    palette
     dateTimeFormat
     highlightColor
     secondaryColor
     highContrastMode
     reduceMotion
     hideSponsorButton
+    noGlow
     density
     sidebarMode
     defaultLandingView
@@ -3905,7 +3947,6 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
       totalSizeBytes
       storageRootFileCount
       storageRootTotalSizeBytes
-    operatorKeepClaimId
     revisionNumber
     subjectKind
     subjectId
@@ -4412,6 +4453,7 @@ export const pendingImportBindingPreviewQuery = `query PendingImportBindingPrevi
       episodeType
       episodeNumber
       seasonNumber
+      absoluteNumber
       episodeLabel
       title
       monitored

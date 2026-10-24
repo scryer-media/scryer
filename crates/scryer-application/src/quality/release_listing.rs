@@ -513,6 +513,7 @@ mod tests {
 
     fn search_result() -> crate::IndexerSearchResult {
         crate::IndexerSearchResult {
+            http: None,
             indexer_id: None,
             source: "synthetic-indexer".to_string(),
             title: "Synthetic.Release.2020.1080p.WEB-DL-GRP".to_string(),
@@ -1073,6 +1074,7 @@ mod tests {
 
     fn pending_release(source_password: Option<&str>) -> crate::PendingRelease {
         crate::PendingRelease {
+            http_release: None,
             id: "pending-1".to_string(),
             wanted_item_id: "wanted-1".to_string(),
             title_id: "title-1".to_string(),

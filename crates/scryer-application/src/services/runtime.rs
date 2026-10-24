@@ -219,6 +219,12 @@ impl DownloadQueueReadModel {
 pub(crate) struct DownloadQueueReadModelCache {
     pub(crate) current: Arc<tokio::sync::RwLock<Option<Arc<DownloadQueueReadModel>>>>,
     pub(crate) build_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Set when the last build found no durable password-retry recovery rows.
+    /// A new fence is only written by a retry claim, which invalidates this
+    /// cache, so native-revision-only rebuilds skip the submission query until
+    /// then. A non-empty result is never reused: the poller can retire those
+    /// rows (terminal download, ended binding) without invalidating.
+    pub(crate) password_retry_recovery_known_empty: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct PendingDownloadQueueSnapshot {
@@ -1031,6 +1037,7 @@ pub(crate) struct CachedWantedProjection {
 
 #[derive(Clone)]
 pub struct AppRuntimeAcquisitionState {
+    pub(crate) titles_in_deletion: Arc<std::sync::RwLock<HashSet<String>>>,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     /// Set when failure handling re-opens a scope; the next background pass
     /// walks even if its own walk is not due, so the scope's saved results are
@@ -1509,6 +1516,7 @@ pub(crate) struct ReleaseCandidateListingTicket {
     pub source_hint: String,
     pub source_title: String,
     pub listing: crate::quality::release_listing::ReleaseListingSnapshot,
+    pub http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -2309,6 +2317,8 @@ pub struct AppRuntimePluginState {
     pub plugin_operation_guards: PluginOperationGuardTable,
     pub plugin_install_orchestrator: PluginInstallOrchestrator,
     pub(crate) compatibility_blockers: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
+    pub(crate) dynamic_config_fields_cache:
+        Arc<crate::integration::dynamic_config_fields::DynamicConfigFieldsCache>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2575,6 +2585,7 @@ impl AppRuntimeState {
                 title_hydration_scan_yields: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
             acquisition: AppRuntimeAcquisitionState {
+                titles_in_deletion: Arc::default(),
                 acquisition_wake: Arc::new(tokio::sync::Notify::new()),
                 scope_reopened_since_walk: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 process_started_at: chrono::Utc::now(),
@@ -2658,6 +2669,7 @@ impl AppRuntimeState {
                 plugin_operation_guards: PluginOperationGuardTable::default(),
                 plugin_install_orchestrator: PluginInstallOrchestrator::default(),
                 compatibility_blockers: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+                dynamic_config_fields_cache: Arc::default(),
             },
             integrations: AppRuntimeIntegrationState {
                 managed_indexer_sync_lock: Arc::new(tokio::sync::Mutex::new(())),

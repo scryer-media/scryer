@@ -427,3 +427,104 @@ async fn the_failure_check_pass_releases_unconfirmed_grabs() {
     assert_eq!(fixture.released().await, vec![download_id]);
     assert_eq!(fixture.unbound().await, 0);
 }
+
+#[tokio::test]
+async fn an_unconfirmed_grab_is_kept_while_its_clients_history_window_is_full() {
+    let fixture = unconfirmed_grab_fixture(false).await;
+    fixture
+        .record_intent(
+            Some(CLIENT_ID),
+            UnconfirmedGrabFixture::twenty_minutes_ago(),
+        )
+        .await;
+    // The client returned as many history rows as were asked for, with no
+    // telling how far back they reach: the job may sit just past the window.
+    fixture
+        .download_client
+        .set_snapshot_saturated_activity_window(CLIENT_ID, None)
+        .await;
+
+    fixture.release().await;
+
+    assert!(
+        fixture.released().await.is_empty(),
+        "a filled history window does not prove the job absent"
+    );
+    assert_eq!(fixture.unbound().await, 1);
+    assert!(fixture.download_failures().await.is_empty());
+
+    // An intent that never learned its client is kept for the same reason.
+    fixture
+        .record_intent(None, UnconfirmedGrabFixture::twenty_minutes_ago())
+        .await;
+    fixture.release().await;
+    assert!(fixture.released().await.is_empty());
+    assert_eq!(fixture.unbound().await, 2);
+}
+
+#[tokio::test]
+async fn an_unconfirmed_grab_is_released_when_its_clients_history_window_is_partial() {
+    let fixture = unconfirmed_grab_fixture(false).await;
+    let download_id = fixture
+        .record_intent(
+            Some(CLIENT_ID),
+            UnconfirmedGrabFixture::twenty_minutes_ago(),
+        )
+        .await;
+    // Fewer rows than the limit came back, so that history is the client's
+    // whole history; another client's filled window is no concern of it.
+    fixture
+        .download_client
+        .set_snapshot_saturated_activity_window("other", None)
+        .await;
+
+    fixture.release().await;
+
+    assert_eq!(fixture.released().await, vec![download_id]);
+    assert_eq!(fixture.unbound().await, 0);
+}
+
+#[tokio::test]
+async fn an_unconfirmed_grab_is_kept_while_a_full_window_is_newer_than_its_submission() {
+    let fixture = unconfirmed_grab_fixture(false).await;
+    let submitted_at = Utc::now() - chrono::Duration::hours(3);
+    let download_id = fixture.record_intent(Some(CLIENT_ID), submitted_at).await;
+    // The full window only reaches back to an hour after the submission, so
+    // the job could have finished and aged out of it.
+    fixture
+        .download_client
+        .set_snapshot_saturated_activity_window(
+            CLIENT_ID,
+            Some(submitted_at + chrono::Duration::hours(1)),
+        )
+        .await;
+
+    fixture.release().await;
+    assert!(
+        fixture.released().await.is_empty(),
+        "a full window newer than the submission does not cover it"
+    );
+
+    // Within the clock-skew margin is still not coverage.
+    fixture
+        .download_client
+        .set_snapshot_saturated_activity_window(
+            CLIENT_ID,
+            Some(submitted_at - chrono::Duration::minutes(30)),
+        )
+        .await;
+    fixture.release().await;
+    assert!(fixture.released().await.is_empty());
+
+    // A busy client whose full window reaches well before the submission
+    // does cover it, so the intent is released rather than held forever.
+    fixture
+        .download_client
+        .set_snapshot_saturated_activity_window(
+            CLIENT_ID,
+            Some(submitted_at - chrono::Duration::hours(2)),
+        )
+        .await;
+    fixture.release().await;
+    assert_eq!(fixture.released().await, vec![download_id]);
+}

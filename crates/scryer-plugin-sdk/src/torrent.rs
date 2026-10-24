@@ -140,6 +140,9 @@ fn source_kind_available(kind: DownloadInputKind, source: &PluginDownloadSource)
         DownloadInputKind::NzbUrl => {
             source.kind == DownloadInputKind::NzbUrl && has_value(source.download_url.as_deref())
         }
+        DownloadInputKind::HttpResource => {
+            source.kind == DownloadInputKind::HttpResource && source.http.is_some()
+        }
     }
 }
 

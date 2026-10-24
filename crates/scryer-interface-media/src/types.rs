@@ -932,6 +932,23 @@ pub struct FixTitleMatchPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// Result of assigning an imported file to different episodes of its title.
+pub struct ReassignEpisodeFilePayload {
+    /// The file after the change, at its new path.
+    pub file: TitleMediaFilePayload,
+    /// Absolute path the file had before the change.
+    pub previous_path: String,
+    /// Episodes the file was linked to before the change.
+    pub previous_episode_ids: Vec<ID>,
+    /// Episodes the file is linked to now, as their primary file.
+    pub episode_ids: Vec<ID>,
+    /// Files that were primary on a target episode and are now additional.
+    pub demoted_file_ids: Vec<ID>,
+    /// Files that became primary on an episode this file left.
+    pub promoted_file_ids: Vec<ID>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Preview of binding an unmatched imported file to a title and episode.
 pub struct PendingImportBindingPreviewPayload {
     /// Title selected for the pending import.

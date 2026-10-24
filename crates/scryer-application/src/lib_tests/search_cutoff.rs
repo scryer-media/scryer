@@ -65,6 +65,7 @@ async fn related_revision_survives_the_search_result_cap() {
         }
         let candidates = (0..=200)
             .map(|index| IndexerSearchResult {
+                http: None,
                 title: if index == 200 {
                     format!("Revision.Movie.2024.{quality}.PROPER.WEB-DL.H.264-GRP")
                 } else {

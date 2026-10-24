@@ -284,6 +284,7 @@ impl AppUseCase {
         source_hint: &str,
         source_title: &str,
         listing: Option<ReleaseListingSnapshot>,
+        http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
         now: DateTime<Utc>,
         expires_at: DateTime<Utc>,
     ) -> Option<String> {
@@ -305,6 +306,7 @@ impl AppUseCase {
                 source_hint: source_hint.to_string(),
                 source_title: source_title.to_string(),
                 listing,
+                http_release,
                 expires_at,
             },
             now,
@@ -321,7 +323,10 @@ impl AppUseCase {
         title_id: &str,
         claims: &ReleaseCandidateTokenClaims,
         claimed_scope: &SubmissionScope,
-    ) -> Option<ReleaseListingSnapshot> {
+    ) -> Option<(
+        ReleaseListingSnapshot,
+        Option<scryer_plugin_sdk::PluginHttpRelease>,
+    )> {
         let listing_ref = claims
             .listing_ref
             .as_deref()
@@ -341,7 +346,7 @@ impl AppUseCase {
             && ticket.scope_id == scope_id
             && ticket.source_hint == claims.source_hint
             && ticket.source_title == claims.source_title;
-        bound.then(|| ticket.listing.clone())
+        bound.then(|| (ticket.listing.clone(), ticket.http_release.clone()))
     }
 
     pub async fn apply_login_failure_timing(class: LoginFailureTimingClass, started_at: Instant) {
@@ -1125,6 +1130,7 @@ impl AppUseCase {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn issue_release_candidate_token_with_signing_key(
         &self,
         actor: &User,
@@ -1132,6 +1138,7 @@ impl AppUseCase {
         scope: &SubmissionScope,
         selection: &QueuedReleaseSelection,
         listing: Option<ReleaseListingSnapshot>,
+        http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
         signing_key: &[u8],
     ) -> AppResult<String> {
         let source_hint = selection
@@ -1174,6 +1181,7 @@ impl AppUseCase {
             source_hint,
             source_title,
             listing,
+            http_release,
             now,
             expires_at,
         );
@@ -1256,6 +1264,7 @@ impl AppUseCase {
             scope,
             selection,
             // No indexer listing in hand, so the token carries no ticket.
+            None,
             None,
             &signing_key,
         )
@@ -1428,8 +1437,11 @@ impl AppUseCase {
             &claimed_scope,
         )?;
 
-        let listing =
-            self.resolve_release_candidate_listing_ticket(actor, title_id, &claims, &claimed_scope);
+        let (listing, http_release) = self
+            .resolve_release_candidate_listing_ticket(actor, title_id, &claims, &claimed_scope)
+            .map_or((None, None), |(listing, http_release)| {
+                (Some(listing), http_release)
+            });
 
         Ok(VerifiedReleaseCandidate {
             selection: QueuedReleaseSelection {
@@ -1444,6 +1456,7 @@ impl AppUseCase {
             },
             scope: claimed_scope,
             listing,
+            http_release,
         })
     }
 
@@ -1726,4 +1739,6 @@ pub(crate) struct VerifiedReleaseCandidate {
     pub selection: QueuedReleaseSelection,
     pub scope: SubmissionScope,
     pub listing: Option<ReleaseListingSnapshot>,
+    /// The HTTP-family release the offered result carried, when any.
+    pub http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
 }

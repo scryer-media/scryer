@@ -432,7 +432,7 @@ fn overlap_keys_related(left: &str, right: &str) -> bool {
 
 /// Keys for comparing one move candidate against every recorded owner while
 /// resolving the candidate and each library root only once.
-struct FolderMoveOverlapKeys {
+pub(crate) struct FolderOverlapKeys {
     candidate: Vec<String>,
     /// Library root keys with their resolved spelling, or `None` when the
     /// root could not be resolved.
@@ -442,17 +442,8 @@ struct FolderMoveOverlapKeys {
     links: std::collections::HashMap<std::path::PathBuf, bool>,
 }
 
-impl FolderMoveOverlapKeys {
+impl FolderOverlapKeys {
     async fn load(app: &AppUseCase, folder_path: &str) -> AppResult<Self> {
-        let resolved = resolved_folder_identity(&stored_path_to_path_buf(folder_path))?;
-        let mut candidate: Vec<String> = [
-            overlap_prefilter_key(folder_path),
-            overlap_prefilter_key(&path_to_stored_string(&resolved)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        candidate.dedup();
         let root_paths = match SCAN_FOLDER_ROOTS.try_with(|snapshot| snapshot.all.clone()) {
             Ok(roots) => roots,
             Err(_) => app
@@ -462,6 +453,19 @@ impl FolderMoveOverlapKeys {
                 .map(|root| root.path)
                 .collect(),
         };
+        Self::from_roots(folder_path, &root_paths)
+    }
+
+    pub(crate) fn from_roots(folder_path: &str, root_paths: &[String]) -> AppResult<Self> {
+        let resolved = resolved_folder_identity(&stored_path_to_path_buf(folder_path))?;
+        let mut candidate: Vec<String> = [
+            overlap_prefilter_key(folder_path),
+            overlap_prefilter_key(&path_to_stored_string(&resolved)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        candidate.dedup();
         let roots = root_paths
             .iter()
             .filter_map(|root| {
@@ -482,7 +486,7 @@ impl FolderMoveOverlapKeys {
     /// Whether `owned_path` needs the exact, resolving overlap comparison.
     /// An owner unrelated by key, also after substituting its resolved library
     /// root, with no link between that root and its folder, cannot overlap.
-    fn needs_exact_comparison(&mut self, owned_path: &str) -> AppResult<bool> {
+    pub(crate) fn needs_exact_comparison(&mut self, owned_path: &str) -> AppResult<bool> {
         let Some(owner) = overlap_prefilter_key(owned_path) else {
             return Ok(true);
         };
@@ -509,7 +513,7 @@ impl FolderMoveOverlapKeys {
         }
         let path = stored_path_to_path_buf(owned_path);
         if !path.is_absolute() {
-            return Ok(false);
+            return Ok(true);
         }
         for ancestor in path.ancestors() {
             let is_resolved_root = overlap_prefilter_key(&path_to_stored_string(ancestor))
@@ -569,7 +573,7 @@ pub(crate) async fn ensure_folder_move_available_to_title(
             continue;
         }
         if keys.is_none() {
-            keys = Some(FolderMoveOverlapKeys::load(app, &folder_path).await?);
+            keys = Some(FolderOverlapKeys::load(app, &folder_path).await?);
         }
         if !keys
             .as_mut()
@@ -671,6 +675,54 @@ pub(crate) async fn ensure_folder_available_to_title(
         )));
     }
 
+    Ok(())
+}
+
+/// Recheck catalog ownership immediately before an explicit destructive action.
+pub(crate) async fn claim_title_folder_for_delete(
+    app: &AppUseCase,
+    title: &mut Title,
+    folder_path: &Path,
+) -> AppResult<()> {
+    ensure_folder_available_to_title(app, title, folder_path).await?;
+    if non_empty_folder_path(title.folder_path.as_deref()).is_some() {
+        return Ok(());
+    }
+    let stored = path_to_stored_string(folder_path);
+    for owner in app
+        .services
+        .catalog
+        .titles
+        .list_delete_preview_info()
+        .await?
+    {
+        if owner.title_id == title.id {
+            continue;
+        }
+        if let Some(other) = owner.folder_path.as_deref().filter(|path| !path.is_empty())
+            && title_folders_overlap(&stored, other)?
+        {
+            return Err(AppError::validation_refused(
+                crate::title_delete::FOLDER_OVERLAPS_TITLE,
+                "title folder overlaps another title's recorded folder",
+            ));
+        }
+    }
+    ensure_unowned_folder_claimable(app, title, folder_path, TitleFolderClaimLayout::Configured)
+        .await?;
+    if !app
+        .services
+        .catalog
+        .titles
+        .claim_missing_folder_path(&title.id, &stored)
+        .await?
+    {
+        return Err(AppError::validation_refused(
+            crate::title_delete::FOLDER_CLAIM_LOST,
+            "title folder ownership changed before deletion",
+        ));
+    }
+    title.folder_path = Some(stored);
     Ok(())
 }
 
@@ -905,6 +957,60 @@ mod tests {
     use scryer_domain::MediaFacet;
 
     #[test]
+    fn title_delete_overlap_prefilter_matches_exact_comparison() {
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("Bucket/Title");
+        std::fs::create_dir_all(&candidate).unwrap();
+        let candidate = path_to_stored_string(candidate);
+        let roots = vec![path_to_stored_string(root.path())];
+        let mut keys = FolderOverlapKeys::from_roots(&candidate, &roots).unwrap();
+        let owners = [
+            "relative/unknown".into(),
+            path_to_stored_string(root.path().join("Bucket")),
+            path_to_stored_string(root.path().join("Bucket/Title/Season 01")),
+            path_to_stored_string(root.path().join("Bucket/Other")),
+            path_to_stored_string(root.path().join("Bucket/title")),
+            path_to_stored_string(root.path().join("Bucket/../Invalid")),
+        ];
+        for owner in owners {
+            let exact = title_folders_overlap(&candidate, &owner);
+            let filtered = if keys.needs_exact_comparison(&owner).unwrap_or(true) {
+                title_folders_overlap(&candidate, &owner)
+            } else {
+                Ok(false)
+            };
+            assert_eq!(exact.as_ref().ok(), filtered.as_ref().ok(), "{owner}");
+            assert_eq!(exact.is_err(), filtered.is_err(), "{owner}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn title_delete_overlap_prefilter_falls_back_for_links_and_resolution_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("Title");
+        std::fs::create_dir(&candidate).unwrap();
+        let alias = root.path().join("Alias");
+        std::os::unix::fs::symlink(&candidate, &alias).unwrap();
+        let looping = root.path().join("Loop");
+        std::os::unix::fs::symlink(&looping, &looping).unwrap();
+        let candidate = path_to_stored_string(candidate);
+        let mut keys =
+            FolderOverlapKeys::from_roots(&candidate, &[path_to_stored_string(root.path())])
+                .unwrap();
+        for owner in [alias, looping] {
+            let owner = path_to_stored_string(owner);
+            assert!(keys.needs_exact_comparison(&owner).unwrap_or(true));
+            let exact = title_folders_overlap(&candidate, &owner);
+            if owner.ends_with("Loop") {
+                assert!(exact.is_err());
+            } else {
+                assert!(exact.unwrap());
+            }
+        }
+    }
+
+    #[test]
     fn nested_title_overlap_checks_missing_destinations_and_shared_buckets() {
         let root = tempfile::tempdir().unwrap();
         let first = root.path().join("E/Emberfall");
@@ -1006,6 +1112,7 @@ mod tests {
                 library.name,
                 library.slug,
                 vec![crate::LibraryRootDraft {
+                    id: None,
                     path: path_to_stored_string(root),
                     is_default: true,
                 }],

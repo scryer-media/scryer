@@ -249,11 +249,11 @@ impl RequestRuleMutations {
         Ok(crate::mappers::from_title_claim(claim))
     }
 
-    /// Replace a live claim with a permanent operator keep.
+    /// Keep a title permanently by ending its lease, so it carries no expiry.
     ///
-    /// The replacement is a new claim rather than a mutated one, so the original
-    /// stays as history and the trail still says a request produced the hold and
-    /// an administrator chose to make it permanent.
+    /// The lease stays as history in the `CONVERTED` state, so the trail still
+    /// says a request produced it and an administrator chose to drop the
+    /// expiry.
     async fn convert_title_claim_to_permanent(
         &self,
         ctx: &Context<'_>,
@@ -264,23 +264,6 @@ impl RequestRuleMutations {
 
         let claim = app
             .convert_title_claim_to_permanent(&actor, input.claim_id.as_ref())
-            .await
-            .map_err(to_gql_error)?;
-        Ok(crate::mappers::from_title_claim(claim))
-    }
-
-    /// Keep a title: place an operator keep on it, or return the live one it
-    /// already has. Requires title management on the title's own library.
-    async fn create_operator_keep_claim(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(desc = "Title to keep.")] title_id: ID,
-    ) -> GqlResult<TitleClaim> {
-        let app = app_from_ctx(ctx)?;
-        let actor = crate::context::actor_from_ctx(ctx)?;
-
-        let claim = app
-            .create_operator_keep_claim(&actor, title_id.as_ref())
             .await
             .map_err(to_gql_error)?;
         Ok(crate::mappers::from_title_claim(claim))

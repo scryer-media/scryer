@@ -47,6 +47,7 @@ enum FetchFailure {
     Quota(u16, String),
     Validation(String),
     Canceled(String),
+    Plugin(String, crate::PluginFailure),
     Repository(String),
 }
 
@@ -61,6 +62,7 @@ impl FetchFailure {
             AppError::NewznabQuotaExceeded { code, message } => Self::Quota(code, message),
             AppError::Validation(message) => Self::Validation(message),
             AppError::Canceled(message) => Self::Canceled(message),
+            AppError::PluginFailed { message, failure } => Self::Plugin(message, failure),
             AppError::Repository(message) => Self::Repository(message),
             other => Self::Repository(other.to_string()),
         }
@@ -78,6 +80,7 @@ impl FetchFailure {
             Self::Quota(code, message) => AppError::NewznabQuotaExceeded { code, message },
             Self::Validation(message) => AppError::Validation(message),
             Self::Canceled(message) => AppError::Canceled(message),
+            Self::Plugin(message, failure) => AppError::PluginFailed { message, failure },
             Self::Repository(message) => AppError::Repository(message),
         }
     }

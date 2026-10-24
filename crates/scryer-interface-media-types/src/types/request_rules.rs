@@ -61,24 +61,19 @@ pub enum RequestVoteValue {
 pub enum LifecycleClaimProducerValue {
     /// A finite lease approved on a media request.
     RequestLease,
-    /// A request approved as "forever": a permanent keep.
-    RequestPermanent,
-    /// An administrator pinned the title by hand.
-    OperatorKeep,
 }
 
-/// What a lifecycle claim holds.
+/// What a lifecycle claim is.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum LifecycleClaimKindValue {
-    /// Holds until `expiresAt`, whose clock starts at the title's first import.
+    /// A time to delete: `expiresAt`, whose clock starts at the title's first
+    /// import.
     RetainUntil,
-    /// Holds indefinitely.
-    Keep,
 }
 
-/// Lifecycle state of one claim. Claims are released, never deleted, so the
-/// terminal states are history and only `DORMANT` and `ACTIVE` hold anything.
+/// Lifecycle state of one claim. The terminal states are history, and only
+/// `DORMANT` and `ACTIVE` are live.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum LifecycleClaimStateValue {
@@ -90,7 +85,8 @@ pub enum LifecycleClaimStateValue {
     Expired,
     /// Withdrawn before it ran out.
     Released,
-    /// Superseded by a permanent keep.
+    /// Ended by an administrator keeping the title permanently, which leaves
+    /// it with no expiry.
     Converted,
 }
 
@@ -296,29 +292,29 @@ pub struct RequestPreflightPayload {
     pub fallback_reason: Option<String>,
 }
 
-/// One hold on one title.
+/// One request lease on one title: a time to delete that rules read.
 #[derive(SimpleObject, Clone)]
 pub struct TitleClaim {
     /// Claim ID.
     pub id: ID,
-    /// Title the claim holds.
+    /// Title the claim is on.
     pub title_id: ID,
     /// Library that title belongs to.
     pub library_id: ID,
     /// What produced the claim.
     pub producer: LifecycleClaimProducerValue,
-    /// The producing media request's ID, or null for an operator pin.
+    /// The producing media request's ID.
     pub producer_ref: Option<String>,
-    /// What the claim holds.
+    /// What the claim is.
     pub kind: LifecycleClaimKindValue,
     /// Current lifecycle state.
     pub state: LifecycleClaimStateValue,
-    /// Requested window in days for a retention claim; null for a keep.
+    /// Requested window in days.
     pub duration_days: Option<i32>,
     /// When the claim started running, which is the title's first import. Null
     /// while dormant.
     pub starts_at: Option<DateTime<Utc>>,
-    /// When the window closes. Null while dormant and for a keep.
+    /// When the window closes. Null while dormant.
     pub expires_at: Option<DateTime<Utc>>,
     /// ID of the user the claim is attributed to, or null when unattributed.
     pub created_by: Option<ID>,
@@ -330,20 +326,21 @@ pub struct TitleClaim {
     pub released_reason: Option<String>,
 }
 
-/// The lease one media request holds, derived from the live claim it produced.
-/// Null on the request payload until an approval creates that claim.
+/// The lease one media request holds, derived from the claim it produced. Null
+/// on the request payload until an approval creates that claim, and for a
+/// request approved without a lease, which has none.
 #[derive(SimpleObject, Clone)]
 pub struct MediaRequestLease {
     /// Days the requester asked for; null means forever.
     pub requested_days: Option<i32>,
     /// Days the approver granted; null means forever.
     pub approved_days: Option<i32>,
-    /// State of the claim holding the title.
+    /// State of the lease's claim.
     pub state: LifecycleClaimStateValue,
     /// When the lease started running, which is the title's first import. Null
     /// while the claim is dormant.
     pub starts_at: Option<DateTime<Utc>>,
-    /// When the lease runs out. Null while dormant and for a forever request.
+    /// When the lease runs out. Null while dormant.
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -482,8 +479,8 @@ pub struct ExtendTitleClaimInput {
     pub expires_at: DateTime<Utc>,
 }
 
-/// Replaces a live claim with a permanent operator keep. The original stays as
-/// history in the `CONVERTED` state.
+/// Ends a live lease so the title carries no expiry. The lease stays as history
+/// in the `CONVERTED` state.
 #[derive(InputObject)]
 pub struct ConvertTitleClaimToPermanentInput {
     /// Claim to convert.

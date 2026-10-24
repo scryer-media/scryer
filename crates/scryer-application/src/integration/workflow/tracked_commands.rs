@@ -113,6 +113,9 @@ struct TrackedDownloadRuntimeState {
     previous_items_by_projection:
         HashMap<DownloadQueueProjectionSource, HashMap<String, DownloadQueueItem>>,
     tracked_work_in_flight: HashSet<String>,
+    deferred_work_results: Vec<TrackedDownloadBackgroundWorkResult>,
+    reconciled_registry_generation: Option<u64>,
+    reconciled_tracker_ids: HashSet<scryer_domain::download_identity::DownloadId>,
     tracked_work_drain: TrackedDownloadWorkDrain,
     /// Identity resolutions for the completed-history rows this poller keeps
     /// re-reading. Held across ticks and retired by registry changes.
@@ -130,8 +133,53 @@ impl TrackedDownloadRuntimeState {
             tracker: crate::tracked_downloads::TrackedDownloadService::new(),
             previous_items_by_projection: HashMap::new(),
             tracked_work_in_flight: HashSet::new(),
+            deferred_work_results: Vec::new(),
+            reconciled_registry_generation: None,
+            reconciled_tracker_ids: HashSet::new(),
             tracked_work_drain: TrackedDownloadWorkDrain::empty(),
             completed_download_resolutions: Default::default(),
+        }
+    }
+}
+
+async fn reconcile_retired_tracked_downloads(
+    app: &AppUseCase,
+    runtime: &mut TrackedDownloadRuntimeState,
+) {
+    let generation = app.runtime.acquisition.download_registry_generation();
+    let mut current_ids = runtime
+        .tracker
+        .get_all()
+        .iter()
+        .map(|row| row.download_id)
+        .collect::<HashSet<_>>();
+    if runtime.reconciled_registry_generation == Some(generation)
+        && current_ids == runtime.reconciled_tracker_ids
+    {
+        return;
+    }
+    // Forget notifications are lossy; durable bindings remain authoritative.
+    // Newly observed IDs also need a check, even at an unchanged generation.
+    let ids = current_ids.iter().copied().collect::<Vec<_>>();
+    match app
+        .services
+        .workflow
+        .download_registry
+        .ended_bindings(&ids)
+        .await
+    {
+        Ok(ended) => {
+            for id in ended {
+                runtime.tracker.stop_tracking_download(id);
+                current_ids.remove(&id);
+            }
+            runtime.reconciled_registry_generation = Some(generation);
+            runtime.reconciled_tracker_ids = current_ids;
+        }
+        Err(error) => {
+            // Preserve observations and completed work. Dispatch still checks
+            // each worker's durable ownership, and the next tick retries this read.
+            tracing::warn!(%error, "cannot reconcile retired downloads; retrying next refresh");
         }
     }
 }
@@ -1073,6 +1121,8 @@ async fn process_tracked_download_snapshot(
         }
     }
 
+    reconcile_retired_tracked_downloads(app, runtime).await;
+
     // Phase 1 served most rows from the observation memo, so the binding
     // freshness writes those rows came due for are written here as one
     // transaction rather than one per row inside a resolution transaction.
@@ -1624,6 +1674,39 @@ async fn process_external_tracked_download_snapshot_update(
     .await;
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "collection shares the poller's command and runtime state"
+)]
+async fn await_snapshot_servicing_commands<T>(
+    app: &AppUseCase,
+    actor: &User,
+    runtime: &mut TrackedDownloadRuntimeState,
+    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
+    command_rx: &mut tokio::sync::mpsc::Receiver<crate::tracked_downloads::TrackedDownloadCommand>,
+    commands_open: &mut bool,
+    token: &tokio_util::sync::CancellationToken,
+    collection: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::pin!(collection);
+    loop {
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => return None,
+            command = command_rx.recv(), if *commands_open => {
+                match command {
+                    Some(command) => handle_tracked_download_command(
+                        app, actor, &mut runtime.tracker, &mut runtime.tracked_work_in_flight,
+                        result_tx, command,
+                    ).await,
+                    None => *commands_open = false,
+                }
+            }
+            result = &mut collection => return Some(result),
+        }
+    }
+}
+
 pub async fn start_download_queue_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -1726,13 +1809,15 @@ pub async fn start_download_queue_poller_with_options(
                 if let Some(event) = maybe_result {
                     match event {
                         TrackedDownloadBackgroundWorkEvent::Finished(result) => {
-                            handle_tracked_download_background_work_result(
+                            if let Some(result) = handle_tracked_download_background_work_result(
                                 &app,
                                 &mut runtime.tracker,
                                 &mut runtime.tracked_work_in_flight,
                                 result,
                             )
-                            .await;
+                            .await {
+                                runtime.deferred_work_results.push(result);
+                            }
                             let mut dispatched = false;
                             while try_dispatch_next_tracked_download_background_work(
                                 &app,
@@ -1752,6 +1837,7 @@ pub async fn start_download_queue_poller_with_options(
                 }
             }
             _ = interval.tick() => {
+                retry_deferred_tracked_download_work_results(&app, &mut runtime).await;
                 crate::import_workflow::schedule_import_retry_recovery(&app);
                 let active_bridged_client_types = bridged_client_types.snapshot();
                 remove_ended_bridge_projections(
@@ -1781,15 +1867,17 @@ pub async fn start_download_queue_poller_with_options(
                 // and it makes the tick self-sufficient rather than a
                 // best-effort sighting that history occasionally repairs.
                 let client_refresh_started_at = Instant::now();
-                let (snapshot, collection_error) = match app
-                    .collect_download_snapshot_items_excluding_client_types(
-                        true,
-                        true,
-                        false,
-                        &excluded_client_type_refs,
-                    )
-                    .await
-                {
+                let collection = app.collect_download_snapshot_items_excluding_client_types(
+                    true, true, false, &excluded_client_type_refs,
+                );
+                let Some(collected) = await_snapshot_servicing_commands(
+                    &app, &actor, &mut runtime, &tracked_work_result_tx,
+                    &mut command_rx, &mut commands_open, &token, collection,
+                ).await else { return; };
+                // Process healthy client results even when unrelated grabs or
+                // completions changed the registry during collection. Canonical
+                // binding reconciliation excludes retired entries individually.
+                let (snapshot, collection_error) = match collected {
                     Ok(snapshot) => (snapshot, None),
                     Err(error) => {
                         tracing::warn!(error = %error, "download queue poll collected no client snapshot");
@@ -2500,6 +2588,34 @@ async fn handle_tracked_download_command(
             publish_runtime_tracked_download_snapshot_cache(app, tracker).await;
             let _ = reply.send(Ok(()));
         }
+        TrackedDownloadCommand::ForgetMany {
+            title_ids,
+            download_ids,
+        } => {
+            app.runtime
+                .acquisition
+                .invalidate_download_registry_observations();
+            let title_ids = title_ids.into_iter().collect::<HashSet<_>>();
+            let download_ids = download_ids.into_iter().collect::<HashSet<_>>();
+            let removed = tracker
+                .get_all()
+                .into_iter()
+                .filter(|tracked| {
+                    tracked
+                        .title_id
+                        .as_ref()
+                        .is_some_and(|id| title_ids.contains(id))
+                        || download_ids.contains(&tracked.download_id)
+                })
+                .map(|tracked| tracked.download_id)
+                .collect::<Vec<_>>();
+            for id in &removed {
+                tracker.stop_tracking_download(*id);
+            }
+            if !removed.is_empty() {
+                publish_runtime_tracked_download_snapshot_cache(app, tracker).await;
+            }
+        }
         TrackedDownloadCommand::ForgetForTitle {
             title_id,
             download_ids,
@@ -3034,6 +3150,14 @@ fn try_dispatch_next_tracked_download_background_work(
         return false;
     };
 
+    if tracked
+        .title_id
+        .as_deref()
+        .is_some_and(|id| app.title_is_being_deleted(id))
+    {
+        return false;
+    }
+
     let preparation_permit = if kind == TrackedDownloadBackgroundWorkKind::Import {
         let Some(permit) = app
             .runtime
@@ -3091,6 +3215,14 @@ fn try_dispatch_tracked_download_background_work(
     if kind == TrackedDownloadBackgroundWorkKind::Failed
         && failed_tracked_download_work_count(tracker, tracked_work_in_flight)
             >= TRACKED_DOWNLOAD_FAILED_WORKER_LIMIT
+    {
+        return false;
+    }
+
+    if tracked
+        .title_id
+        .as_deref()
+        .is_some_and(|id| app.title_is_being_deleted(id))
     {
         return false;
     }
@@ -3159,6 +3291,28 @@ fn dispatch_prepared_tracked_download_background_work(
         preparation_permit,
     );
 }
+async fn tracked_work_is_retired(app: &AppUseCase, tracked: &TrackedDownload) -> AppResult<bool> {
+    if let Some(title_id) = tracked.title_id.as_deref() {
+        if app
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .is_none()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(app
+        .services
+        .workflow
+        .download_registry
+        .load_binding(&tracked.download_id)
+        .await?
+        .is_some_and(|binding| binding.ended_at.is_some()))
+}
+
 fn dispatch_tracked_download_background_work(
     app: AppUseCase,
     actor: User,
@@ -3174,6 +3328,28 @@ fn dispatch_tracked_download_background_work(
         let tracked_download_id = tracked.download_id;
         let worker = std::panic::AssertUnwindSafe(async move {
             let mut tracked = tracked;
+            if tracked.title_id.as_deref().is_some_and(|id| app.title_is_being_deleted(id)) {
+                if kind == TrackedDownloadBackgroundWorkKind::Import {
+                    tracked.state = TrackedDownloadState::ImportPending;
+                }
+                return tracked;
+            }
+            // A queued drain item may predate deletion even when the forget
+            // command could not be delivered. Recheck before starting work.
+            match tracked_work_is_retired(&app, &tracked).await {
+                Ok(true) => {
+                    tracked.state = TrackedDownloadState::Ignored;
+                    return tracked;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, download_id = %tracked.download_id, "cannot verify download ownership before background work");
+                    if kind == TrackedDownloadBackgroundWorkKind::Import {
+                        tracked.state = TrackedDownloadState::ImportPending;
+                    }
+                    return tracked;
+                }
+                Ok(false) => {}
+            }
 
             match kind {
                 TrackedDownloadBackgroundWorkKind::Import => {
@@ -3243,14 +3419,51 @@ fn dispatch_tracked_download_background_work(
         }
     });
 }
+async fn retry_deferred_tracked_download_work_results(
+    app: &AppUseCase,
+    runtime: &mut TrackedDownloadRuntimeState,
+) {
+    // Retain the finished work while ownership reads are unavailable. Keeping
+    // its in-flight reservation prevents another worker from repeating it.
+    for result in std::mem::take(&mut runtime.deferred_work_results) {
+        if let Some(result) = handle_tracked_download_background_work_result(
+            app,
+            &mut runtime.tracker,
+            &mut runtime.tracked_work_in_flight,
+            result,
+        )
+        .await
+        {
+            runtime.deferred_work_results.push(result);
+        }
+    }
+}
+
 async fn handle_tracked_download_background_work_result(
     app: &AppUseCase,
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
     tracked_work_in_flight: &mut HashSet<String>,
     result: TrackedDownloadBackgroundWorkResult,
-) {
+) -> Option<TrackedDownloadBackgroundWorkResult> {
+    if let Some(tracked) = tracker.get_by_download_id(result.download_id) {
+        match tracked_work_is_retired(app, tracked).await {
+            Ok(true) => {
+                tracked_work_in_flight.remove(&result.id);
+                tracker.stop_tracking_download(result.download_id);
+                crate::tracked_downloads::publish_runtime_tracked_download_snapshot_cache(
+                    app, tracker,
+                )
+                .await;
+                return None;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cannot verify ownership of completed background work");
+                return Some(result);
+            }
+            Ok(false) => {}
+        }
+    }
     tracked_work_in_flight.remove(&result.id);
-
     let Some(tracked) = tracker.get_mut_by_download_id(result.download_id) else {
         tracing::debug!(
             id = %result.id,
@@ -3258,7 +3471,7 @@ async fn handle_tracked_download_background_work_result(
             elapsed_ms = result.elapsed.as_millis() as u64,
             "tracked background work finished after tracker entry disappeared"
         );
-        return;
+        return None;
     };
 
     let state = match result.outcome {
@@ -3321,6 +3534,7 @@ async fn handle_tracked_download_background_work_result(
     }
 
     publish_runtime_tracked_download_and_activity_item(app, tracker, Some(activity_item)).await;
+    None
 }
 /// Why a terminal settle is running.
 ///

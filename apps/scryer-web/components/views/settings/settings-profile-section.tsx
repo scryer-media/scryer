@@ -1,3 +1,5 @@
+import { PalettePicker } from "./palette-picker";
+import { getPalette } from "@/lib/palettes";
 import { Button } from "@/components/ui/button";
 import { TotpCodeForm } from "@/components/auth/totp-code-form";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -31,7 +33,7 @@ import { useTheme } from "next-themes";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
 import { isVisibleExternalAccountProvider } from "@/lib/constants/integration-providers";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { useUiDateTimeFormat, useUiSettings } from "@/lib/context/ui-settings-context";
 import type {
   ExternalAccountProvider,
   ExternalAuthRuntimeConnection,
@@ -63,10 +65,13 @@ type Props = {
   username?: string;
   highlightColor: string | null;
   savingHighlightColor: string | null;
-  onSelectHighlightColor: (value: string) => void;
+  onSelectHighlightColor: (value: string | null) => void;
   hideSponsorButton: boolean;
   savingSponsorPreference: boolean;
   onHideSponsorButtonChange: (value: boolean) => void;
+  noGlow: boolean;
+  savingGlowPreference: boolean;
+  onNoGlowChange: (value: boolean) => void;
   currentPassword: string;
   newPassword: string;
   confirmPassword: string;
@@ -198,6 +203,9 @@ export function SettingsProfileSection({
   hideSponsorButton,
   savingSponsorPreference,
   onHideSponsorButtonChange,
+  noGlow,
+  savingGlowPreference,
+  onNoGlowChange,
   currentPassword,
   newPassword,
   confirmPassword,
@@ -271,9 +279,10 @@ export function SettingsProfileSection({
   const [previewHighlightColor, setPreviewHighlightColor] = useState<
     string | null
   >(null);
+  const { uiSettings, appearanceSaving } = useUiSettings();
   const darkThemeActive = isDarkTheme(resolvedTheme ?? theme);
   const savedHighlightColor =
-    highlightColor ?? HIGHLIGHT_COLOR_PRESETS[0].value;
+    highlightColor ?? getPalette(uiSettings.palette).accent;
   const selectedHighlightColor =
     previewHighlightColor ?? savedHighlightColor;
 
@@ -389,6 +398,11 @@ export function SettingsProfileSection({
             {t("profile.appearanceDescription")}
           </p>
         </div>
+        <div className="space-y-3">
+          <div className="font-medium">{t("palette.title")}</div>
+          <p className={PROFILE_MUTED_TEXT_CLASS}>{t("palette.description")}</p>
+          <PalettePicker />
+        </div>
         <div className={PROFILE_ROW_CARD_CLASS}>
           <div className="space-y-1">
             <div className="font-medium text-[var(--scry-ink2)]">
@@ -404,6 +418,9 @@ export function SettingsProfileSection({
             aria-label={t("profile.highlightColor")}
             className="flex flex-wrap items-center gap-2.5"
           >
+            <Button type="button" variant="outline" size="sm"
+              disabled={savingHighlightColor !== null || appearanceSaving || highlightColor === null}
+              onClick={() => onSelectHighlightColor(null)}>{t("label.default")}</Button>
             {HIGHLIGHT_COLOR_PRESETS.map((preset) => {
               const selected = selectedHighlightColor === preset.value;
               const savingThis = savingHighlightColor === preset.value;
@@ -418,7 +435,7 @@ export function SettingsProfileSection({
                   title={t(preset.labelKey)}
                   aria-label={t(preset.labelKey)}
                   aria-pressed={selected}
-                  disabled={savingHighlightColor !== null}
+                  disabled={savingHighlightColor !== null || appearanceSaving}
                   onClick={() => onSelectHighlightColor(preset.value)}
                   className={cn(
                     "relative size-8 shrink-0 rounded-[9px] border-0 outline-none transition",
@@ -456,7 +473,7 @@ export function SettingsProfileSection({
                   size="icon-sm"
                   title={`${t("profile.highlightColorCustom")}: ${selectedHighlightColor}`}
                   aria-label={`${t("profile.highlightColorCustom")}: ${selectedHighlightColor}`}
-                  disabled={savingHighlightColor !== null}
+                  disabled={savingHighlightColor !== null || appearanceSaving}
                   className="rounded-[9px] border-0 p-0 text-white shadow-none hover:brightness-110 hover:text-white"
                   style={{ backgroundColor: selectedHighlightColor }}
                 >
@@ -511,6 +528,28 @@ export function SettingsProfileSection({
               disabled={savingSponsorPreference}
               onChange={(visible) => onHideSponsorButtonChange(!visible)}
               ariaLabel="Show Sponsor button"
+            />
+          </div>
+        </div>
+        <div className={PROFILE_ROW_CARD_CLASS}>
+          <div className="space-y-1">
+            <div className="font-medium text-[var(--scry-ink2)]">
+              {t("profile.glow")}
+            </div>
+            <p className={`${PROFILE_MUTED_TEXT_CLASS} max-w-xs`}>
+              {t("profile.glowDescription")}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {savingGlowPreference ? (
+              <LoadingMark className="h-4 w-4 text-[var(--scry-muted3)]" />
+            ) : null}
+            <SettingsToggleSwitch
+              id="settings-profile-glow"
+              checked={!noGlow}
+              disabled={savingGlowPreference}
+              onChange={(glow) => onNoGlowChange(!glow)}
+              ariaLabel={t("profile.glowToggle")}
             />
           </div>
         </div>

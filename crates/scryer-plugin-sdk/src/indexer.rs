@@ -13,6 +13,9 @@ use crate::{
 pub enum IndexerProtocol {
     Usenet,
     Torrent,
+    /// Releases fetched over plain HTTP(S): provider pages, direct files,
+    /// HLS or DASH manifests. Carried in `PluginSearchResult.http`.
+    Http,
     Mixed,
     #[default]
     Unknown,

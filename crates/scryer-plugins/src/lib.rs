@@ -5,6 +5,7 @@ mod embedded_descriptor;
 mod indexer_adapter;
 mod list_adapter;
 mod loader;
+mod login_session_carry;
 pub mod newznab_profiles;
 mod notification_adapter;
 mod plugin_http_host;

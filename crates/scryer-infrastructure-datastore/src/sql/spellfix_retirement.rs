@@ -38,7 +38,7 @@
 //! already passed 0252.
 
 use scryer_application::{AppError, AppResult};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqliteConnection, SqlitePool};
 
 /// The migration that drops the stand-in table and the 0236 trigger. A
 /// database at or past this version needs neither step below.
@@ -53,24 +53,35 @@ fn repo_err(error: impl std::fmt::Display) -> AppError {
 /// Remove any `spellfix1` virtual table, then install the plain stand-in the
 /// pre-removal migrations need, if they still have to run.
 pub async fn retire_spellfix_virtual_table(pool: &SqlitePool) -> AppResult<()> {
-    if let Some(sql) = spellfix_object_sql(pool).await?
+    let mut connection = pool.acquire().await.map_err(repo_err)?;
+    retire_spellfix_virtual_table_on(&mut connection).await
+}
+
+/// [`retire_spellfix_virtual_table`] on a connection the caller already holds.
+/// The migration runner applies every pending migration on one connection,
+/// and this has to run on that same connection so the schema it leaves behind
+/// is the schema the migrations after it parse against.
+pub(crate) async fn retire_spellfix_virtual_table_on(
+    connection: &mut SqliteConnection,
+) -> AppResult<()> {
+    if let Some(sql) = spellfix_object_sql(connection).await?
         && sql.to_ascii_lowercase().contains("using spellfix1")
     {
-        drop_virtual_table_via_writable_schema(pool).await?;
+        drop_virtual_table_via_writable_schema(connection).await?;
     }
 
-    if applied_migration_ceiling(pool).await? < SPELLFIX_REMOVAL_VERSION
-        && spellfix_object_sql(pool).await?.is_none()
+    if applied_migration_ceiling(connection).await? < SPELLFIX_REMOVAL_VERSION
+        && spellfix_object_sql(connection).await?.is_none()
     {
-        install_stand_in_table(pool).await?;
+        install_stand_in_table(connection).await?;
     }
     Ok(())
 }
 
-async fn spellfix_object_sql(pool: &SqlitePool) -> AppResult<Option<String>> {
+async fn spellfix_object_sql(connection: &mut SqliteConnection) -> AppResult<Option<String>> {
     let row = sqlx::query("SELECT COALESCE(sql, '') AS sql FROM sqlite_master WHERE name = ?1")
         .bind(SPELLFIX_TABLE)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await
         .map_err(repo_err)?;
     row.map(|row| row.try_get::<String, _>("sql").map_err(repo_err))
@@ -80,18 +91,18 @@ async fn spellfix_object_sql(pool: &SqlitePool) -> AppResult<Option<String>> {
 /// The highest migration version recorded as applied, or 0 when the ledger
 /// does not exist yet (a fresh database, which replays everything above the
 /// baseline it starts from).
-async fn applied_migration_ceiling(pool: &SqlitePool) -> AppResult<i64> {
+async fn applied_migration_ceiling(connection: &mut SqliteConnection) -> AppResult<i64> {
     let ledger_exists = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await
     .map_err(repo_err)?;
     if ledger_exists == 0 {
         return Ok(0);
     }
     sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations")
-        .fetch_one(pool)
+        .fetch_one(&mut *connection)
         .await
         .map(|value| value.unwrap_or(0))
         .map_err(repo_err)
@@ -113,9 +124,9 @@ async fn applied_migration_ceiling(pool: &SqlitePool) -> AppResult<i64> {
 /// `PRAGMA schema_version` for exactly this reason, and that is done here
 /// inside the same write transaction as the delete, so a crash leaves either
 /// both or neither.
-async fn drop_virtual_table_via_writable_schema(pool: &SqlitePool) -> AppResult<()> {
-    let mut connection = pool.acquire().await.map_err(repo_err)?;
-
+async fn drop_virtual_table_via_writable_schema(
+    connection: &mut SqliteConnection,
+) -> AppResult<()> {
     let result = async {
         sqlx::query("PRAGMA writable_schema = ON")
             .execute(&mut *connection)
@@ -205,7 +216,7 @@ fn next_schema_version(current: i64) -> i64 {
 /// trigger and its repair `DELETE`, and `word` because the old typo lane
 /// selected it. Nothing reads this table any more; it exists only so the
 /// replay of already-applied SQL does not need a module that is gone.
-async fn install_stand_in_table(pool: &SqlitePool) -> AppResult<()> {
+async fn install_stand_in_table(connection: &mut SqliteConnection) -> AppResult<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS title_search_spellfix (
              rowid INTEGER PRIMARY KEY NOT NULL,
@@ -214,7 +225,7 @@ async fn install_stand_in_table(pool: &SqlitePool) -> AppResult<()> {
              langid INTEGER
          )",
     )
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(repo_err)?;
     Ok(())

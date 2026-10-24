@@ -740,7 +740,7 @@ async fn an_enforced_approval_creates_the_title_with_the_policy_tags_and_a_dorma
 }
 
 #[tokio::test]
-async fn a_forever_request_becomes_an_active_keep_claim() {
+async fn a_forever_request_writes_no_claim() {
     let harness = bootstrap_media_request_app();
     let detail = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
     enable(&harness, &detail.rule_set.id).await;
@@ -748,12 +748,10 @@ async fn a_forever_request_becomes_an_active_keep_claim() {
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     submit(&harness, &library_id, 9046, None).await;
 
-    let claims = harness.lifecycle_claims.all().await;
-    assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0].producer, LifecycleClaimProducer::RequestPermanent);
-    assert_eq!(claims[0].kind, LifecycleClaimKind::Keep);
-    assert_eq!(claims[0].state, LifecycleClaimState::Active);
-    assert_eq!(claims[0].duration_days, None);
+    assert!(
+        harness.lifecycle_claims.all().await.is_empty(),
+        "a request without a lease has no time to delete"
+    );
 }
 
 #[tokio::test]
@@ -1686,11 +1684,6 @@ async fn administrator_claim_operations_require_manage_titles() {
             .release_title_claim(&harness.user, &claim_id, "no")
             .await
             .err(),
-        harness
-            .app
-            .create_operator_keep_claim(&harness.user, &title_id)
-            .await
-            .err(),
     ] {
         assert!(
             matches!(error, Some(AppError::Unauthorized(_))),
@@ -1737,32 +1730,41 @@ async fn an_administrator_can_extend_convert_and_release_a_claim() {
         Some(expires_at)
     );
 
-    // Converting leaves the original as history and produces an operator keep.
-    let replacement = harness
+    // Keeping it permanently ends the lease and adds nothing in its place:
+    // the title is left without an expiry, not with a new hold.
+    let converted = harness
         .app
         .convert_title_claim_to_permanent(&harness.manager, &claim_id)
         .await
         .expect("convert should succeed");
-    assert_eq!(replacement.producer, LifecycleClaimProducer::OperatorKeep);
-    assert_eq!(replacement.kind, LifecycleClaimKind::Keep);
-    assert_eq!(replacement.state, LifecycleClaimState::Active);
-    assert_eq!(replacement.producer_ref, None);
-    let original = harness
-        .lifecycle_claims
-        .all()
+    assert_eq!(converted.id, claim_id);
+    assert_eq!(converted.state, LifecycleClaimState::Converted);
+    assert_eq!(
+        converted.released_reason.as_deref(),
+        Some("converted_to_permanent")
+    );
+    let claims = harness.lifecycle_claims.all().await;
+    assert_eq!(claims.len(), 1, "converting must not write a replacement");
+    assert!(!claims[0].is_live());
+    let again = harness
+        .app
+        .convert_title_claim_to_permanent(&harness.manager, &claim_id)
         .await
-        .into_iter()
-        .find(|claim| claim.id == claim_id)
-        .expect("the original claim is kept as history");
-    assert_eq!(original.state, LifecycleClaimState::Converted);
+        .expect_err("a converted lease cannot convert again");
+    assert!(matches!(again, AppError::Validation(_)));
 
+    // Releasing withdraws a lease outright.
+    let harness = bootstrap_media_request_app();
+    let second = submit(&harness, &library_id, 9063, Some(30)).await;
+    harness
+        .app
+        .approve_media_request(&harness.manager, &second, "1080p", None, None, None, None)
+        .await
+        .expect("approval should succeed");
+    let lease_id = harness.lifecycle_claims.all().await[0].id.clone();
     let released = harness
         .app
-        .release_title_claim(
-            &harness.manager,
-            &replacement.id,
-            "operator changed their mind",
-        )
+        .release_title_claim(&harness.manager, &lease_id, "operator changed their mind")
         .await
         .expect("release should succeed");
     assert_eq!(released.state, LifecycleClaimState::Released);
@@ -1773,83 +1775,10 @@ async fn an_administrator_can_extend_convert_and_release_a_claim() {
 
     let blank = harness
         .app
-        .release_title_claim(&harness.manager, &replacement.id, "   ")
+        .release_title_claim(&harness.manager, &lease_id, "   ")
         .await
         .expect_err("a release reason is required");
     assert!(matches!(blank, AppError::Validation(_)));
-}
-
-#[tokio::test]
-async fn keeping_a_title_twice_returns_the_live_keep_instead_of_stacking_another() {
-    let harness = bootstrap_media_request_app();
-    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
-    let request_id = submit(&harness, &library_id, 9063, Some(30)).await;
-    harness
-        .app
-        .approve_media_request(
-            &harness.manager,
-            &request_id,
-            "1080p",
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .expect("approval should succeed");
-    let title_id = harness.titles.store.lock().await[0].id.clone();
-
-    let kept = harness
-        .app
-        .create_operator_keep_claim(&harness.manager, &title_id)
-        .await
-        .expect("a title manager may keep a title");
-    assert_eq!(kept.title_id, title_id);
-    assert_eq!(kept.producer, LifecycleClaimProducer::OperatorKeep);
-    assert_eq!(kept.kind, LifecycleClaimKind::Keep);
-    assert_eq!(kept.state, LifecycleClaimState::Active);
-    assert_eq!(kept.producer_ref, None);
-    assert_eq!(
-        kept.created_by.as_deref(),
-        Some(harness.manager.id.as_str())
-    );
-
-    let again = harness
-        .app
-        .create_operator_keep_claim(&harness.manager, &title_id)
-        .await
-        .expect("keeping a kept title succeeds");
-    assert_eq!(again.id, kept.id, "a second keep returns the first");
-    let operator_keeps = |claims: Vec<scryer_domain::LifecycleClaim>| {
-        claims
-            .into_iter()
-            .filter(|claim| claim.producer == LifecycleClaimProducer::OperatorKeep)
-            .count()
-    };
-    assert_eq!(operator_keeps(harness.lifecycle_claims.all().await), 1);
-
-    // Releasing goes through the existing release path; keeping again after
-    // that is a fresh hold, and the released one stays as history.
-    harness
-        .app
-        .release_title_claim(&harness.manager, &kept.id, "no longer needed")
-        .await
-        .expect("release should succeed");
-    let renewed = harness
-        .app
-        .create_operator_keep_claim(&harness.manager, &title_id)
-        .await
-        .expect("keep after release");
-    assert_ne!(renewed.id, kept.id);
-    assert_eq!(renewed.state, LifecycleClaimState::Active);
-    assert_eq!(operator_keeps(harness.lifecycle_claims.all().await), 2);
-
-    let missing = harness
-        .app
-        .create_operator_keep_claim(&harness.manager, "no-such-title")
-        .await
-        .expect_err("an unknown title cannot be kept");
-    assert!(matches!(missing, AppError::NotFound(_)), "{missing:?}");
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

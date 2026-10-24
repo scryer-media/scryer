@@ -125,11 +125,12 @@ const STDERR_CAPACITY_BYTES: usize = 4 * 1024 * 1024;
 /// It also records how large the Store's linear memory got: wasmtime reports
 /// every memory's creation (`current == 0`) and growth here, and linear memory
 /// never shrinks, so the sum of granted growth is the Store's resident linear
-/// memory and also its peak.
+/// memory and also its peak. The cap bounds that sum as well as each single
+/// memory, so a component with several core memories cannot multiply it.
 pub(crate) struct HostLimits {
     max_memory_bytes: usize,
     pub(crate) memory_denied: bool,
-    /// Largest single linear memory granted (the value the cap is checked on).
+    /// Largest single linear memory granted.
     largest_memory_bytes: usize,
     /// Linear memory granted across every memory in the Store.
     resident_memory_bytes: usize,
@@ -169,14 +170,18 @@ impl wasmtime::ResourceLimiter for HostLimits {
         desired: usize,
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        if desired > self.max_memory_bytes {
+        // The cap is per Store, not per memory: a component may instantiate
+        // several core memories, and checking each on its own would let N of
+        // them reach N times the cap. Deny growth that would take either one
+        // memory or the Store's total past it.
+        let growth = desired.saturating_sub(current);
+        let projected_resident = self.resident_memory_bytes.saturating_add(growth);
+        if desired > self.max_memory_bytes || projected_resident > self.max_memory_bytes {
             self.memory_denied = true;
             return Ok(false);
         }
         self.largest_memory_bytes = self.largest_memory_bytes.max(desired);
-        self.resident_memory_bytes = self
-            .resident_memory_bytes
-            .saturating_add(desired.saturating_sub(current));
+        self.resident_memory_bytes = projected_resident;
         Ok(true)
     }
 
@@ -365,6 +370,44 @@ mod tests {
         assert!(!limits.memory_denied);
         assert!(!limits.memory_growing(4096, 8192, None).unwrap());
         assert!(limits.memory_denied);
+    }
+
+    #[test]
+    fn limiter_caps_the_sum_of_every_memory_in_the_store() {
+        use wasmtime::ResourceLimiter;
+        const CAP: usize = 1 << 20;
+        let mut limits = HostLimits::with_cap(CAP);
+        // Two memories, each within the per-memory cap on its own.
+        assert!(limits.memory_growing(0, 3 * CAP / 4, None).unwrap());
+        assert!(limits.memory_growing(0, CAP / 8, None).unwrap());
+        assert!(!limits.memory_denied);
+        // A third memory whose creation would take the total past the cap is
+        // denied although it alone is far below it.
+        assert!(!limits.memory_growing(0, CAP / 4, None).unwrap());
+        assert!(limits.memory_denied);
+        // So is growing the second memory past the remaining headroom.
+        assert!(!limits.memory_growing(CAP / 8, CAP / 4 + 1, None).unwrap());
+        // Denials leave the accounting exactly at what was granted.
+        assert_eq!(limits.resident_memory_bytes(), 3 * CAP / 4 + CAP / 8);
+        assert_eq!(limits.largest_memory_bytes(), 3 * CAP / 4);
+        // Growth up to exactly the cap is still granted.
+        assert!(limits.memory_growing(CAP / 8, CAP / 4, None).unwrap());
+        assert_eq!(limits.resident_memory_bytes(), CAP);
+    }
+
+    #[test]
+    fn limiter_lets_a_single_memory_grow_to_exactly_the_cap() {
+        use wasmtime::ResourceLimiter;
+        const CAP: usize = 1 << 20;
+        let mut limits = HostLimits::with_cap(CAP);
+        assert!(limits.memory_growing(0, CAP / 2, None).unwrap());
+        assert!(limits.memory_growing(CAP / 2, CAP, None).unwrap());
+        assert!(!limits.memory_denied);
+        assert_eq!(limits.resident_memory_bytes(), CAP);
+        assert_eq!(limits.largest_memory_bytes(), CAP);
+        assert!(!limits.memory_growing(CAP, CAP + 65536, None).unwrap());
+        assert!(limits.memory_denied);
+        assert_eq!(limits.resident_memory_bytes(), CAP);
     }
 
     /// The component sandbox grants exactly the spec's preopens plus a private

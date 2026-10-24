@@ -298,6 +298,41 @@ struct RenameRollbackOutcome {
 /// keeps a large selection from monopolizing the database pool.
 const RENAME_PREVIEW_TITLE_CONCURRENCY: usize = 8;
 
+/// Where the rename half of an episode reassignment left the file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReassignedFileRename {
+    /// The file is at the name its new episodes render. `file_path` equals
+    /// `previous_path` when it already was.
+    Placed {
+        previous_path: String,
+        file_path: String,
+    },
+    /// The renamer would not move the file; it is where it was. `occupied`
+    /// means another file holds the target name.
+    Refused { reason_code: String, occupied: bool },
+    /// The move was attempted and failed; the renamer put the file back.
+    Failed {
+        reason_code: String,
+        message: String,
+    },
+}
+
+/// Move a planned target from the folder a full rename would use into the
+/// folder the title records, keeping everything below the title folder.
+fn rebase_rename_item_into_folder(item: &mut RenamePlanItem, planned: &Path, recorded: &Path) {
+    let Some(proposed) = item.proposed_path.as_deref().map(stored_path_to_path_buf) else {
+        return;
+    };
+    let Ok(relative) = proposed.strip_prefix(planned) else {
+        return;
+    };
+    let rebased = path_to_stored_string(recorded.join(relative));
+    if stored_path_to_path_buf(&rebased) == stored_path_to_path_buf(&item.current_path) {
+        item.write_action = RenameWriteAction::Noop;
+    }
+    item.proposed_path = Some(rebased);
+}
+
 #[derive(Clone)]
 struct RenamePlanSettings {
     template: String,
@@ -670,6 +705,149 @@ impl AppUseCase {
         }
 
         self.apply_rename_plan(actor, preview).await
+    }
+
+    /// Give one media file the name its current episode links render, the way
+    /// a fresh import of it into those episodes would place it, and move it
+    /// there through the library renamer.
+    ///
+    /// This is the rename half of an episode reassignment, so it runs whether
+    /// or not the renamer is switched on for the facet. Only this file and its
+    /// sidecars move. The file lands in the title's recorded folder (season
+    /// folder included when the title uses them), beside its siblings, even
+    /// when a full rename would also rename the title folder. A refused or
+    /// failed move leaves the file where it was.
+    pub(crate) async fn rename_reassigned_episode_file(
+        &self,
+        actor: &User,
+        title: &Title,
+        file_id: &str,
+    ) -> AppResult<ReassignedFileRename> {
+        let settings = self.read_rename_plan_settings(&title.facet).await?;
+        let effective_languages = self
+            .resolve_metadata_languages_for_titles(std::slice::from_ref(title))
+            .await;
+        let plan = self
+            .build_rename_plan_for_titles(
+                title.facet.clone(),
+                std::slice::from_ref(title),
+                Some(title.id.clone()),
+                settings,
+                &effective_languages,
+            )
+            .await?;
+        let Some(mut item) = plan
+            .items
+            .iter()
+            .find(|item| {
+                item.companion_of.is_none() && item.media_file_id.as_deref() == Some(file_id)
+            })
+            .cloned()
+        else {
+            return Ok(ReassignedFileRename::Refused {
+                reason_code: "not_planned".into(),
+                occupied: false,
+            });
+        };
+        match item.write_action {
+            RenameWriteAction::Noop => {
+                return Ok(ReassignedFileRename::Placed {
+                    previous_path: item.current_path.clone(),
+                    file_path: item.current_path,
+                });
+            }
+            RenameWriteAction::Move => {}
+            RenameWriteAction::Replace | RenameWriteAction::Skip | RenameWriteAction::Error => {
+                return Ok(ReassignedFileRename::Refused {
+                    occupied: item.collision
+                        || matches!(item.write_action, RenameWriteAction::Replace),
+                    reason_code: item.reason_code,
+                });
+            }
+        }
+        let mut companions = plan
+            .items
+            .iter()
+            .filter(|companion| companion.companion_of.as_deref() == Some(&item.current_path))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let recorded_folder = title
+            .folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|folder| !folder.is_empty())
+            .map(stored_path_to_path_buf);
+        let planned_folder = plan
+            .title_folders
+            .iter()
+            .find(|planned| planned.title_id == title.id)
+            .map(|planned| stored_path_to_path_buf(&planned.folder_path));
+        let mut title_folders = plan.title_folders.clone();
+        if let Some(recorded) = recorded_folder {
+            if let Some(planned) = planned_folder.filter(|planned| *planned != recorded) {
+                for planned_item in std::iter::once(&mut item).chain(companions.iter_mut()) {
+                    rebase_rename_item_into_folder(planned_item, &planned, &recorded);
+                }
+            }
+            // The title keeps the folder it records; only a full rename moves it.
+            title_folders.clear();
+        }
+        if item.write_action == RenameWriteAction::Noop {
+            return Ok(ReassignedFileRename::Placed {
+                previous_path: item.current_path.clone(),
+                file_path: item.current_path,
+            });
+        }
+
+        let previous_path = item.current_path.clone();
+        let mut items = vec![item];
+        items.extend(companions);
+        let mut reduced = build_rename_plan_from_items(
+            plan.facet.clone(),
+            plan.title_id.clone(),
+            plan.template.clone(),
+            plan.collision_policy.clone(),
+            plan.missing_metadata_policy.clone(),
+            items,
+        );
+        reduced.title_folders = title_folders;
+        let result = match self.apply_rename_plan(actor, reduced).await {
+            Ok(result) => result,
+            Err(error) => {
+                return Ok(ReassignedFileRename::Failed {
+                    reason_code: "rename_refused".into(),
+                    message: error.to_string(),
+                });
+            }
+        };
+        let Some(applied) = result
+            .items
+            .iter()
+            .find(|applied| applied.media_file_id.as_deref() == Some(file_id))
+        else {
+            return Ok(ReassignedFileRename::Failed {
+                reason_code: "missing_result".into(),
+                message: "the renamer reported nothing for the file".into(),
+            });
+        };
+        match (&applied.status, applied.final_path.as_deref()) {
+            (RenameApplyStatus::Applied, Some(final_path)) => Ok(ReassignedFileRename::Placed {
+                previous_path,
+                file_path: final_path.to_string(),
+            }),
+            _ if applied.reason_code == "target_exists" => Ok(ReassignedFileRename::Refused {
+                reason_code: applied.reason_code.clone(),
+                occupied: true,
+            }),
+            _ => Ok(ReassignedFileRename::Failed {
+                reason_code: applied.reason_code.clone(),
+                message: applied
+                    .error_message
+                    .clone()
+                    .unwrap_or_else(|| format!("rename {}", applied.status.as_str())),
+            }),
+        }
     }
 
     async fn apply_rename_plan(

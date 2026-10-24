@@ -89,6 +89,7 @@ const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 /** CSS custom properties derived from a single highlight color. */
 const ACCENT_CSS_VARS = [
+  "--primary-foreground",
   "--scry-accent",
   "--scry-accent-rgb",
   "--scry-accent2",
@@ -204,7 +205,13 @@ export function deriveAccentCssVars(
   const hsl = rgbToHsl(rgb);
   const accent = `#${highlightColor.replace("#", "").toLowerCase()}`;
   const accent2 = hslToHex(adjust(hsl, { rotate: 14, lighten: 2 }));
+  const linear = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
   return {
+    "--primary-foreground": luminance > 0.179 ? "#000000" : "#ffffff",
     "--scry-accent": accent,
     "--scry-accent-rgb": `${rgb.r}, ${rgb.g}, ${rgb.b}`,
     "--scry-accent2": accent2,

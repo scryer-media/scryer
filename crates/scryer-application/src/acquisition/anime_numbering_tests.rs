@@ -897,9 +897,10 @@ fn a_reading_with_no_catalog_episode_is_discarded() {
 fn a_wanted_tvdb_episode_translates_back_into_community_numbering() {
     let bridge = bridge();
 
-    let coordinates =
-        community_coordinates_for_tvdb_episode(&bridge, 1, 56).expect("community coordinates");
-    assert_eq!(coordinates.season, 4);
+    let coordinates = community_coordinates_for_tvdb_episode(&bridge, 1, 56, None)
+        .expect("community coordinates");
+    assert_eq!(coordinates.entry_index, 4);
+    assert_eq!(coordinates.season, Some(4));
     assert_eq!(coordinates.episode, 20);
     assert_eq!(
         coordinates.season_title.as_deref(),
@@ -907,13 +908,13 @@ fn a_wanted_tvdb_episode_translates_back_into_community_numbering() {
     );
 
     assert_eq!(
-        community_coordinates_for_tvdb_episode(&bridge, 1, 1)
+        community_coordinates_for_tvdb_episode(&bridge, 1, 1, None)
             .expect("first cour")
             .season,
-        1
+        Some(1)
     );
-    assert!(community_coordinates_for_tvdb_episode(&bridge, 2, 1).is_none());
-    assert!(community_coordinates_for_tvdb_episode(&bridge, 1, 99).is_none());
+    assert!(community_coordinates_for_tvdb_episode(&bridge, 2, 1, None).is_none());
+    assert!(community_coordinates_for_tvdb_episode(&bridge, 1, 99, None).is_none());
 }
 
 // ── fuzzy title anchoring ─────────────────────────────────────────────────
@@ -1906,9 +1907,9 @@ mod alternate_order {
         ));
     }
 
-    /// The regression that guards the anime lane: a community bridge resolves
-    /// with no corroboration at all, exactly as it did before alternate orders
-    /// existed.
+    /// The regression that guards the anime lane: a community reading whose
+    /// literal reading lands on no catalog episode resolves with no further
+    /// corroboration, exactly as it did before alternate orders existed.
     #[test]
     fn an_anime_community_bridge_still_resolves_without_corroboration() {
         let bridge = bridge();
@@ -2415,4 +2416,508 @@ fn a_franchise_stem_run_together_by_punctuation_is_still_the_stem() {
         ),
         Some(2)
     );
+}
+
+// ── contested community indexes ───────────────────────────────────────────
+//
+// A synthetic series whose community cours split TVDB seasons: TVDB carries
+// seasons of 23, 24 and 14 episodes, while the community numbers six cours.
+// Community index 3 is a real TVDB season too, but it lands in TVDB season 2,
+// so `S03E05` has two valid readings and only corroboration may move it off
+// the literal one.
+
+mod contested_community_index {
+    use super::*;
+
+    const CONTESTED_SERIES_NAME: &str = "Hollow Bell";
+    const COMMUNITY_TARGET_TITLE: &str = "Cinder Lighthouse Vigil";
+    const LITERAL_TARGET_TITLE: &str = "Paper Kite Armistice";
+
+    fn season_rows(season: u32, count: u32, first_aired: NaiveDate) -> Vec<Episode> {
+        (1..=count)
+            .map(|number| {
+                let aired = first_aired + chrono::Duration::days(i64::from(number - 1) * 7);
+                episode(
+                    &format!("hb-s{season}-e{number}"),
+                    season,
+                    number,
+                    None,
+                    &aired.format("%Y-%m-%d").to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).expect("valid date")
+    }
+
+    /// TVDB S1 (23, from 2016), S2 (24, from 2019), S3 (14, from 2023).
+    /// S2E5 aired 2019-02-03; S3E5 aired 2023-04-30.
+    fn contested_catalog() -> Vec<Episode> {
+        let mut rows = season_rows(1, 23, date(2016, 1, 3));
+        rows.extend(season_rows(2, 24, date(2019, 1, 6)));
+        rows.extend(season_rows(3, 14, date(2023, 4, 2)));
+        for row in &mut rows {
+            if row.id == "hb-s2-e5" {
+                row.title = Some(COMMUNITY_TARGET_TITLE.to_string());
+            } else if row.id == "hb-s3-e5" {
+                row.title = Some(LITERAL_TARGET_TITLE.to_string());
+            }
+        }
+        rows
+    }
+
+    fn range(
+        community_start: i32,
+        community_end: i32,
+        tvdb_season: i32,
+        tvdb_start: i32,
+        tvdb_end: i32,
+    ) -> AnimeCommunitySeasonRange {
+        AnimeCommunitySeasonRange {
+            community_episode_start: community_start,
+            community_episode_end: Some(community_end),
+            tvdb_season,
+            tvdb_episode_start: tvdb_start,
+            tvdb_episode_end: Some(tvdb_end),
+        }
+    }
+
+    fn cour(
+        index: i32,
+        anidb_id: Option<i64>,
+        anilist_id: Option<i64>,
+        title: &str,
+        ranges: Vec<AnimeCommunitySeasonRange>,
+        episode_count: i32,
+    ) -> AnimeCommunitySeason {
+        AnimeCommunitySeason {
+            index,
+            anidb_id,
+            anilist_id,
+            mal_id: anilist_id,
+            titles: vec![title.to_string()],
+            ranges,
+            absolute_start: None,
+            contiguous_absolute_start: None,
+            episode_count: Some(episode_count),
+        }
+    }
+
+    /// The production shape, including its warts: cour 3 carries two
+    /// overlapping ranges onto the same TVDB episodes and an episode count
+    /// that overstates them, and cours 5 and 6 cover the same TVDB season.
+    fn contested_bridge() -> AnimeNumberingBridge {
+        AnimeNumberingBridge {
+            source: Default::default(),
+            generated_on: "2026-10-23".to_string(),
+            corroborating_order: None,
+            seasons: vec![
+                cour(
+                    1,
+                    Some(81_001),
+                    Some(82_001),
+                    "Hollow Bell",
+                    vec![range(1, 11, 1, 1, 11)],
+                    11,
+                ),
+                cour(
+                    2,
+                    Some(81_002),
+                    Some(82_002),
+                    "Hollow Bell: Second Toll",
+                    vec![range(1, 12, 1, 12, 23)],
+                    12,
+                ),
+                cour(
+                    3,
+                    Some(81_003),
+                    Some(82_003),
+                    "Hollow Bell: Ashen Tide",
+                    vec![range(1, 12, 2, 1, 12), range(2, 13, 2, 1, 12)],
+                    24,
+                ),
+                cour(
+                    4,
+                    Some(81_004),
+                    Some(82_004),
+                    "Hollow Bell: Ashen Tide Part 2",
+                    vec![range(1, 12, 2, 13, 24)],
+                    12,
+                ),
+                cour(
+                    5,
+                    Some(81_005),
+                    None,
+                    "Hollow Bell: Quiet Belfry",
+                    vec![range(1, 12, 3, 1, 12)],
+                    12,
+                ),
+                cour(
+                    6,
+                    None,
+                    Some(82_006),
+                    "Hollow Bell: Quiet Belfry Season",
+                    vec![range(1, 14, 3, 1, 14)],
+                    14,
+                ),
+            ],
+        }
+    }
+
+    fn contested_parse(raw: &str, season: u32, episodes: &[u32]) -> ParsedEpisodeMetadata {
+        ParsedEpisodeMetadata {
+            season: Some(season),
+            episode_numbers: episodes.to_vec(),
+            raw: Some(raw.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn resolve_contested(
+        bridge: &AnimeNumberingBridge,
+        episodes: &[Episode],
+        parsed: &ParsedEpisodeMetadata,
+        reference_date: Option<NaiveDate>,
+    ) -> NumberingResolution {
+        resolve(
+            bridge,
+            &title(CONTESTED_SERIES_NAME),
+            episodes,
+            parsed,
+            &[CONTESTED_SERIES_NAME.to_string()],
+            reference_date,
+        )
+    }
+
+    #[test]
+    fn an_uncorroborated_contested_community_index_keeps_the_literal_episode() {
+        let episodes = contested_catalog();
+        let mut parsed = contested_parse("Hollow Bell S03E05 1080p WEB-DL-NOGROUP", 3, &[5]);
+
+        let resolution = resolve_contested(&contested_bridge(), &episodes, &parsed, None);
+        assert_eq!(resolution, NumberingResolution::Unchanged);
+
+        // Through the lane entry point the parse is left exactly as released.
+        let resolution = translate_parsed_episode_numbering(
+            &contested_bridge(),
+            &title(CONTESTED_SERIES_NAME),
+            &episodes,
+            &mut parsed,
+            &[CONTESTED_SERIES_NAME.to_string()],
+            None,
+        );
+        assert_eq!(resolution, NumberingResolution::Unchanged);
+        assert_eq!(parsed.season, Some(3));
+        assert_eq!(parsed.episode_numbers, vec![5]);
+    }
+
+    #[test]
+    fn a_reference_date_near_the_community_target_corroborates_it() {
+        let episodes = contested_catalog();
+        let parsed = contested_parse("Hollow Bell S03E05 1080p WEB-DL-NOGROUP", 3, &[5]);
+
+        // Posted two days after S2E5 aired, four years before S3E5.
+        let resolution = resolve_contested(
+            &contested_bridge(),
+            &episodes,
+            &parsed,
+            Some(date(2019, 2, 5)),
+        );
+        let candidate = resolution.resolved().expect("date-corroborated reading");
+        assert_eq!(candidate.kind, NumberingCandidateKind::Community);
+        assert_eq!(candidate.season, 2);
+        assert_eq!(candidate.episode_ids, vec!["hb-s2-e5".to_string()]);
+
+        // A date near the literal episode, or near neither, corroborates
+        // nothing.
+        for reference in [date(2023, 5, 2), date(2021, 6, 1)] {
+            assert_eq!(
+                resolve_contested(&contested_bridge(), &episodes, &parsed, Some(reference)),
+                NumberingResolution::Unchanged,
+                "reference date {reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn naming_the_community_targets_episode_title_corroborates_it() {
+        let episodes = contested_catalog();
+        let parsed = contested_parse(
+            "Hollow Bell S03E05 Cinder Lighthouse Vigil 1080p WEB-DL-NOGROUP",
+            3,
+            &[5],
+        );
+        let resolution = resolve_contested(&contested_bridge(), &episodes, &parsed, None);
+        let candidate = resolution.resolved().expect("title-corroborated reading");
+        assert_eq!(candidate.kind, NumberingCandidateKind::Community);
+        assert_eq!(candidate.episode_ids, vec!["hb-s2-e5".to_string()]);
+
+        // Naming the literal episode keeps the literal reading.
+        let literal = contested_parse(
+            "Hollow Bell S03E05 Paper Kite Armistice 1080p WEB-DL-NOGROUP",
+            3,
+            &[5],
+        );
+        assert_eq!(
+            resolve_contested(&contested_bridge(), &episodes, &literal, None),
+            NumberingResolution::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_contested_second_season_token_keeps_the_literal_episode() {
+        let parsed = contested_parse("Hollow Bell S02E03 1080p WEB-DL-NOGROUP", 2, &[3]);
+        assert_eq!(
+            resolve_contested(&contested_bridge(), &contested_catalog(), &parsed, None),
+            NumberingResolution::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_community_index_past_the_tvdb_seasons_still_resolves_on_its_own() {
+        // TVDB has no season 4, so community cour 4 competes with nothing.
+        let parsed = contested_parse("Hollow Bell S04E02 1080p WEB-DL-NOGROUP", 4, &[2]);
+        let resolution =
+            resolve_contested(&contested_bridge(), &contested_catalog(), &parsed, None);
+        let candidate = resolution.resolved().expect("uncontested reading");
+        assert_eq!(candidate.kind, NumberingCandidateKind::Community);
+        assert_eq!(candidate.episode_ids, vec!["hb-s2-e14".to_string()]);
+    }
+
+    #[test]
+    fn a_cour_title_still_anchors_a_contested_index_without_corroboration() {
+        let parsed = contested_parse("Hollow Bell Ashen Tide S03E05 1080p", 3, &[5]);
+        let resolution = resolve(
+            &contested_bridge(),
+            &title(CONTESTED_SERIES_NAME),
+            &contested_catalog(),
+            &parsed,
+            &["Hollow Bell Ashen Tide".to_string()],
+            None,
+        );
+        let candidate = resolution.resolved().expect("title-anchored reading");
+        assert_eq!(candidate.kind, NumberingCandidateKind::TitleAnchored);
+        assert_eq!(candidate.episode_ids, vec!["hb-s2-e5".to_string()]);
+    }
+
+    #[test]
+    fn duplicate_contested_indexes_keep_the_literal_episode_rather_than_holding() {
+        let mut duplicated = contested_bridge();
+        duplicated.seasons[3].index = 3;
+        let parsed = contested_parse("Hollow Bell S03E05 1080p WEB-DL-NOGROUP", 3, &[5]);
+        assert_eq!(
+            resolve_contested(&duplicated, &contested_catalog(), &parsed, None),
+            NumberingResolution::Unchanged
+        );
+    }
+
+    /// TVDB S1–S5 is the original run (26 episodes a season, 2001–2005) and
+    /// S17 a reboot (12 episodes, 2025); the bridge maps community cours 2–5
+    /// onto the reboot.
+    fn reboot_catalog() -> Vec<Episode> {
+        let mut rows = Vec::new();
+        for season in 1..=5u32 {
+            let first_aired = date(2000 + i32::try_from(season).expect("small season"), 1, 7);
+            rows.extend(season_rows(season, 26, first_aired));
+        }
+        rows.extend(season_rows(17, 12, date(2025, 4, 6)));
+        rows
+    }
+
+    fn reboot_bridge() -> AnimeNumberingBridge {
+        AnimeNumberingBridge {
+            source: Default::default(),
+            generated_on: "2026-10-23".to_string(),
+            corroborating_order: None,
+            seasons: vec![
+                cour(
+                    1,
+                    Some(83_001),
+                    None,
+                    "Hollow Bell",
+                    vec![range(1, 26, 1, 1, 26)],
+                    26,
+                ),
+                cour(
+                    2,
+                    Some(83_002),
+                    None,
+                    "Hollow Bell Reborn",
+                    vec![range(1, 3, 17, 1, 3)],
+                    3,
+                ),
+                cour(
+                    3,
+                    Some(83_003),
+                    None,
+                    "Hollow Bell Reborn Act 2",
+                    vec![range(1, 3, 17, 4, 6)],
+                    3,
+                ),
+                cour(
+                    4,
+                    Some(83_004),
+                    None,
+                    "Hollow Bell Reborn Act 3",
+                    vec![range(1, 3, 17, 7, 9)],
+                    3,
+                ),
+                cour(
+                    5,
+                    Some(83_005),
+                    None,
+                    "Hollow Bell Reborn Act 4",
+                    vec![range(1, 3, 17, 10, 12)],
+                    3,
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn an_original_run_file_is_not_moved_into_the_reboot_season() {
+        let episodes = reboot_catalog();
+        let parsed = contested_parse("Hollow Bell S02E01 DVDRip-NOGROUP", 2, &[1]);
+        assert_eq!(
+            resolve_contested(&reboot_bridge(), &episodes, &parsed, None),
+            NumberingResolution::Unchanged
+        );
+        // A file downloaded years after either aired corroborates nothing.
+        assert_eq!(
+            resolve_contested(
+                &reboot_bridge(),
+                &episodes,
+                &parsed,
+                Some(date(2026, 10, 1))
+            ),
+            NumberingResolution::Unchanged
+        );
+        // Posted the week the reboot's first episode aired, it is the reboot.
+        let resolution =
+            resolve_contested(&reboot_bridge(), &episodes, &parsed, Some(date(2025, 4, 7)));
+        let candidate = resolution
+            .resolved()
+            .expect("date-corroborated reboot reading");
+        assert_eq!(candidate.episode_ids, vec!["hb-s17-e1".to_string()]);
+    }
+
+    #[test]
+    fn an_identity_bridge_leaves_every_release_unchanged() {
+        let identity = AnimeNumberingBridge {
+            source: Default::default(),
+            generated_on: "2026-10-23".to_string(),
+            corroborating_order: None,
+            seasons: vec![
+                cour(
+                    1,
+                    Some(84_001),
+                    None,
+                    "Hollow Bell",
+                    vec![range(1, 23, 1, 1, 23)],
+                    23,
+                ),
+                cour(
+                    2,
+                    Some(84_002),
+                    None,
+                    "Hollow Bell II",
+                    vec![range(1, 24, 2, 1, 24)],
+                    24,
+                ),
+                cour(
+                    3,
+                    Some(84_003),
+                    None,
+                    "Hollow Bell III",
+                    vec![range(1, 14, 3, 1, 14)],
+                    14,
+                ),
+            ],
+        };
+        let episodes = contested_catalog();
+        for (season, number) in [(1, 4), (2, 3), (3, 5)] {
+            let parsed = contested_parse("Hollow Bell 1080p WEB-DL-NOGROUP", season, &[number]);
+            for reference in [None, Some(date(2019, 2, 5))] {
+                assert_eq!(
+                    resolve_contested(&identity, &episodes, &parsed, reference),
+                    NumberingResolution::Unchanged,
+                    "S{season:02}E{number:02} with {reference:?}"
+                );
+            }
+        }
+    }
+
+    /// A reference date corroborates a community reading only. An alternate
+    /// order's corroboration is unchanged: a date near the alternate target
+    /// and far from the literal one still leaves the literal reading.
+    #[test]
+    fn a_reference_date_does_not_corroborate_an_alternate_order_reading() {
+        let alternate = AnimeNumberingBridge {
+            source: scryer_domain::NumberingBridgeSource::TvdbAlternate,
+            ..contested_bridge()
+        };
+        let mut series = title(CONTESTED_SERIES_NAME);
+        series.facet = MediaFacet::Series;
+        let parsed = contested_parse("Hollow Bell S03E05 1080p WEB-DL-NOGROUP", 3, &[5]);
+        let episodes = contested_catalog();
+        let resolution = resolve_numbering(&NumberingInput {
+            bridge: &alternate,
+            title: &series,
+            episodes: &episodes,
+            parsed: &parsed,
+            parsed_title_variants: &[CONTESTED_SERIES_NAME.to_string()],
+            reference_date: Some(date(2019, 2, 5)),
+            forced_alternate_numbering: false,
+        });
+        assert_eq!(resolution, NumberingResolution::Unchanged);
+    }
+
+    /// The pending (delay-profile) lane hands the parked release's posted date
+    /// to the resolver: without it the contested release keeps its literal
+    /// numbering, and posted the week the community target aired it is
+    /// rewritten onto that episode.
+    #[test]
+    fn the_pending_lane_passes_the_posted_date_to_the_resolver() {
+        let series = title(CONTESTED_SERIES_NAME);
+        let episodes = contested_catalog();
+        let release_name = "Hollow.Bell.S03E05.1080p.WEB-DL-NOGROUP";
+
+        let mut unposted = crate::parse_release_metadata(release_name);
+        let resolution = crate::acquisition::pending::translate_pending_release_numbering(
+            Some(&contested_bridge()),
+            &series,
+            &episodes,
+            &mut unposted,
+            None,
+        );
+        assert_eq!(resolution, NumberingResolution::Unchanged);
+        let literal = unposted.episode.as_ref().expect("parsed episode");
+        assert_eq!(
+            (literal.season, literal.episode_numbers.clone()),
+            (Some(3), vec![5])
+        );
+
+        let mut posted = crate::parse_release_metadata(release_name);
+        let resolution = crate::acquisition::pending::translate_pending_release_numbering(
+            Some(&contested_bridge()),
+            &series,
+            &episodes,
+            &mut posted,
+            Some("2019-02-05T12:00:00Z"),
+        );
+        assert_eq!(
+            resolution
+                .resolved()
+                .expect("posted-date reading")
+                .episode_ids,
+            vec!["hb-s2-e5".to_string()]
+        );
+        let translated = posted.episode.as_ref().expect("translated episode");
+        assert_eq!(
+            (translated.season, translated.episode_numbers.clone()),
+            (Some(2), vec![5])
+        );
+    }
 }

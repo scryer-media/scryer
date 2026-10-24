@@ -35,6 +35,7 @@ export type EpisodePanelContentProps = {
   onClearReleaseBlocklistEntry?: (entryId: string) => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
+  onAssignFileToEpisode?: (fileId: string) => void;
   onRefreshSubtitles?: () => Promise<void> | void;
   onTabChange: (tab: EpisodePanelTab | "history") => void;
   showHistoryTab: boolean;
@@ -56,6 +57,7 @@ export const EpisodePanelContent = React.memo(function EpisodePanelContent({
   onClearReleaseBlocklistEntry,
   onDeleteFile,
   onMakePrimaryFile,
+  onAssignFileToEpisode,
   onRefreshSubtitles,
   onTabChange,
   showHistoryTab,
@@ -109,6 +111,7 @@ export const EpisodePanelContent = React.memo(function EpisodePanelContent({
           onRefreshSubtitles={onRefreshSubtitles}
           onDeleteFile={onDeleteFile}
           onMakePrimaryFile={onMakePrimaryFile}
+          onAssignFileToEpisode={onAssignFileToEpisode}
           primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
         />
       </TabsContent>

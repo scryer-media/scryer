@@ -121,6 +121,7 @@ type SeasonSectionProps = {
   onQueueFromSeasonSearch?: (collection: TitleCollection, release: Release) => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
+  onAssignFileToEpisode?: (fileId: string) => void;
   primaryMovieFileUpdatingId?: string | null;
   /**
    * Episode ids currently selected for the bulk file delete. Selection is only
@@ -236,6 +237,7 @@ function SeasonSectionImpl({
   onQueueFromSeasonSearch,
   onDeleteFile,
   onMakePrimaryFile,
+  onAssignFileToEpisode,
   primaryMovieFileUpdatingId = null,
   selectedEpisodeIds,
   pendingEpisodeIds,
@@ -692,6 +694,7 @@ function SeasonSectionImpl({
                       onClearReleaseBlocklistEntry={onClearReleaseBlocklistEntry}
                       onDeleteFile={onDeleteFile}
                       onMakePrimaryFile={onMakePrimaryFile}
+                      onAssignFileToEpisode={onAssignFileToEpisode}
                       onOpenHistory={onOpenEpisodeHistory}
                       onQueueFromEpisodeSearch={onQueueFromEpisodeSearch}
                       onQueueAdditionalFromEpisodeSearch={onQueueAdditionalFromEpisodeSearch}
@@ -754,6 +757,7 @@ function SeasonSectionImpl({
                         onClearReleaseBlocklistEntry={onClearReleaseBlocklistEntry}
                         onDeleteFile={onDeleteFile}
                         onMakePrimaryFile={onMakePrimaryFile}
+                        onAssignFileToEpisode={onAssignFileToEpisode}
                         onOpenHistory={onOpenEpisodeHistory}
                         onQueueFromEpisodeSearch={onQueueFromEpisodeSearch}
                         onQueueAdditionalFromEpisodeSearch={onQueueAdditionalFromEpisodeSearch}

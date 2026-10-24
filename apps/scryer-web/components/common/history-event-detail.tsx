@@ -153,7 +153,7 @@ export function HistoryEventDetailContent({ event }: { event: TitleHistoryEvent 
   }
 
   return (
-    <div className="space-y-1.5">
+    <div className="@container/history-detail min-w-0 space-y-3 [overflow-wrap:anywhere]">
       {scoring ? <div className="space-y-1 text-xs">
         <ScoreStat
           id={`history-event-score-${event.id}`}
@@ -173,16 +173,16 @@ export function HistoryEventDetailContent({ event }: { event: TitleHistoryEvent 
         </li>)}</ul> : null}
       </div> : null}
       {structuredDetails.map(({ key, value }) => (
-        <div key={key} className="grid grid-cols-[auto_1fr] gap-x-3 text-xs">
-          <span className="whitespace-nowrap text-muted-foreground">{formatKey(key)}</span>
-          <span className={cn("break-all text-foreground", key.endsWith("_path") && "font-[var(--font-code)]")}>
+        <div key={key} className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]">
+          <span className="text-muted-foreground">{formatKey(key)}</span>
+          <span className={cn("min-w-0 text-foreground", key.endsWith("_path") && "font-[var(--font-code)]")}>
             {formatValue(value, key)}
           </span>
         </div>
       ))}
       {rawDetails.map(([key, value]) =>
         key === "data" ? (
-          <div key={key} className="space-y-1.5 text-xs">
+          <div key={key} className="min-w-0 max-w-full space-y-1.5 overflow-hidden text-xs">
             <div className="text-muted-foreground">{formatKey(key)}</div>
             <LazyCodeEditor
               id={`history-event-data-${event.id}`}
@@ -194,9 +194,9 @@ export function HistoryEventDetailContent({ event }: { event: TitleHistoryEvent 
             />
           </div>
         ) : (
-          <div key={key} className="grid grid-cols-[auto_1fr] gap-x-3 text-xs">
-            <span className="whitespace-nowrap text-muted-foreground">{formatKey(key)}</span>
-            <span className="break-all text-foreground">{formatValue(value, key)}</span>
+          <div key={key} className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]">
+            <span className="text-muted-foreground">{formatKey(key)}</span>
+            <span className="min-w-0 text-foreground">{formatValue(value, key)}</span>
           </div>
         ),
       )}

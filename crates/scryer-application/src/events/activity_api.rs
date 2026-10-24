@@ -335,6 +335,7 @@ pub const SUPPORTED_TITLE_HISTORY_EVENT_TYPES: &[TitleHistoryEventType] = &[
 const TITLE_HISTORY_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
     DomainEventType::TitleMoved,
     DomainEventType::TitleRematched,
+    DomainEventType::MediaFileReassigned,
     DomainEventType::ReleaseGrabbed,
     DomainEventType::ImportCompleted,
     DomainEventType::ImportRejected,

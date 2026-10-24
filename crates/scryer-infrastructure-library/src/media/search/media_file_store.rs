@@ -2,13 +2,15 @@ use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, ClaimedMediaFile, CollectionEpisodeProgressSummary,
-    CollectionMediaSizeSummary, CutoffUnmetQualitySummary, EpisodeLinkReplacement,
+    CollectionMediaSizeSummary, CutoffUnmetQualitySummary, EpisodeFileReassignOutcome,
+    EpisodeFileReassignRequest, EpisodeFileReassignment, EpisodeLinkReplacement,
     EpisodeMediaAvailability, EpisodeMediaAvailabilityState, EpisodeMediaSizeSummary,
-    EpisodeScopedMediaFile, InsertMediaFileInput, MediaFileAnalysis, MediaFileAssociations,
-    MediaFileCatalogDisposition, MediaFileHashCandidate, MediaFileRepository,
-    MissingEpisodeCandidate, MissingScopeCandidates, MissingSeriesMovieLinkCandidate,
-    MissingTitleCandidate, TitleEpisodeProgressSummary, TitleMediaFile, TitleMediaSizeSummary,
-    TitleMovieMediaSummary, TitleQualitySummary, derive_primary_quality_label,
+    EpisodeScopedMediaFile, FileEpisodeLinkRecord, InsertMediaFileInput, MediaFileAnalysis,
+    MediaFileAssociations, MediaFileCatalogDisposition, MediaFileHashCandidate,
+    MediaFileRepository, MediaFileRole, MissingEpisodeCandidate, MissingScopeCandidates,
+    MissingSeriesMovieLinkCandidate, MissingTitleCandidate, TitleEpisodeProgressSummary,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary,
+    derive_primary_quality_label,
 };
 use scryer_domain::Id;
 use serde::de::DeserializeOwned;
@@ -257,6 +259,245 @@ async fn replace_file_episode_links_tx(
         .await?;
     }
     Ok(EpisodeLinkReplacement::Replaced)
+}
+
+const FILE_EPISODE_LINK_COLUMNS: &str = "file_id, episode_id, role, is_filler";
+
+fn row_to_file_episode_link(row: &SqlRow) -> AppResult<FileEpisodeLinkRecord> {
+    Ok(FileEpisodeLinkRecord {
+        file_id: row.text("file_id")?,
+        episode_id: row.text("episode_id")?,
+        role: MediaFileRole::from_label(&row.text("role")?),
+        is_filler: row.opt_bool("is_filler")?.unwrap_or(false),
+    })
+}
+
+async fn set_file_episode_link_role_tx(
+    tx: &mut SqlTx<'_>,
+    link: &FileEpisodeLinkRecord,
+    role: MediaFileRole,
+) -> AppResult<u64> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "UPDATE file_episode_map SET role = {} WHERE file_id = {} AND episode_id = {}",
+        &[
+            SqlArg::Text(role.as_str().to_string()),
+            SqlArg::Text(link.file_id.clone()),
+            SqlArg::Text(link.episode_id.clone()),
+        ],
+    )
+    .await
+}
+
+async fn insert_file_episode_link_tx(
+    tx: &mut SqlTx<'_>,
+    link: &FileEpisodeLinkRecord,
+) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO file_episode_map (file_id, episode_id, role, is_filler)
+         VALUES ({}, {}, {}, {})",
+        &[
+            SqlArg::Text(link.file_id.clone()),
+            SqlArg::Text(link.episode_id.clone()),
+            SqlArg::Text(link.role.as_str().to_string()),
+            SqlArg::Bool(link.is_filler),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// The store half of an operator reassignment. See
+/// [`MediaFileRepository::reassign_file_episode_links`]. Every refusal returns
+/// before the first write, so a refused request leaves the rows untouched.
+async fn reassign_file_episode_links_tx(
+    tx: &mut SqlTx<'_>,
+    dialect: SqlDialect,
+    request: &EpisodeFileReassignRequest,
+) -> AppResult<EpisodeFileReassignOutcome> {
+    let lock = if matches!(dialect, SqlDialect::Postgres) {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
+    let file_id = request.file_id.as_str();
+    let Some(file_row) = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        &format!("SELECT title_id FROM media_files WHERE id = {{}}{lock}"),
+        &[SqlArg::Text(file_id.to_string())],
+    )
+    .await?
+    else {
+        return Ok(EpisodeFileReassignOutcome::FileNotFound);
+    };
+    if file_row.text("title_id")? != request.title_id {
+        return Ok(EpisodeFileReassignOutcome::FileNotFound);
+    }
+    if SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT series_movie_link_id FROM file_series_movie_link_map WHERE file_id = {} LIMIT 1",
+        &[SqlArg::Text(file_id.to_string())],
+    )
+    .await?
+    .is_some()
+    {
+        return Ok(EpisodeFileReassignOutcome::SeriesMovieFile);
+    }
+
+    let mut episode_args = vec![SqlArg::Text(request.title_id.clone())];
+    episode_args.extend(request.episode_ids.iter().cloned().map(SqlArg::Text));
+    let episode_filler = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT id, is_filler FROM episodes WHERE title_id = {{}} AND id IN ({})",
+            placeholders(request.episode_ids.len())
+        ),
+        &episode_args,
+    )
+    .await?
+    .iter()
+    .map(|row| Ok((row.text("id")?, row.opt_bool("is_filler")?.unwrap_or(false))))
+    .collect::<AppResult<HashMap<String, bool>>>()?;
+    if let Some(episode_id) = request
+        .episode_ids
+        .iter()
+        .find(|episode_id| !episode_filler.contains_key(*episode_id))
+    {
+        return Ok(EpisodeFileReassignOutcome::EpisodeOutsideTitle {
+            episode_id: episode_id.clone(),
+        });
+    }
+
+    let previous_links = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT {FILE_EPISODE_LINK_COLUMNS} FROM file_episode_map
+              WHERE file_id = {{}} ORDER BY episode_id{lock}"
+        ),
+        &[SqlArg::Text(file_id.to_string())],
+    )
+    .await?
+    .iter()
+    .map(row_to_file_episode_link)
+    .collect::<AppResult<Vec<_>>>()?;
+
+    let mut contested_args = vec![SqlArg::Text(file_id.to_string())];
+    contested_args.extend(request.episode_ids.iter().cloned().map(SqlArg::Text));
+    let contested = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT {FILE_EPISODE_LINK_COLUMNS} FROM file_episode_map
+              WHERE file_id <> {{}} AND role = 'primary' AND episode_id IN ({})
+              ORDER BY episode_id, file_id{lock}",
+            placeholders(request.episode_ids.len())
+        ),
+        &contested_args,
+    )
+    .await?
+    .iter()
+    .map(row_to_file_episode_link)
+    .collect::<AppResult<Vec<_>>>()?;
+    if !request.replace
+        && let Some(conflict) = contested.first()
+    {
+        return Ok(EpisodeFileReassignOutcome::PrimaryConflict {
+            episode_id: conflict.episode_id.clone(),
+            file_id: conflict.file_id.clone(),
+        });
+    }
+
+    // Demote before the file takes the primary role: one primary per episode
+    // is a unique index, not a convention.
+    for link in &contested {
+        set_file_episode_link_role_tx(tx, link, MediaFileRole::Additional).await?;
+    }
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "DELETE FROM file_episode_map WHERE file_id = {}",
+        &[SqlArg::Text(file_id.to_string())],
+    )
+    .await?;
+    for episode_id in &request.episode_ids {
+        let is_filler = previous_links
+            .iter()
+            .find(|link| &link.episode_id == episode_id)
+            .map(|link| link.is_filler)
+            .unwrap_or_else(|| episode_filler.get(episode_id).copied().unwrap_or(false));
+        insert_file_episode_link_tx(
+            tx,
+            &FileEpisodeLinkRecord {
+                file_id: file_id.to_string(),
+                episode_id: episode_id.clone(),
+                role: MediaFileRole::Primary,
+                is_filler,
+            },
+        )
+        .await?;
+    }
+
+    // An episode the file served may be left with only an additional file;
+    // that file serves it now, as it would after the primary was deleted.
+    let mut promoted_links = Vec::new();
+    for left in previous_links
+        .iter()
+        .filter(|link| link.role.is_primary() && !request.episode_ids.contains(&link.episode_id))
+    {
+        let remaining = SqlRuntime::fetch_all(
+            SqlExec::Tx(tx),
+            &format!(
+                "SELECT {FILE_EPISODE_LINK_COLUMNS} FROM file_episode_map
+                  WHERE episode_id = {{}}{lock}"
+            ),
+            &[SqlArg::Text(left.episode_id.clone())],
+        )
+        .await?
+        .iter()
+        .map(row_to_file_episode_link)
+        .collect::<AppResult<Vec<_>>>()?;
+        if let [sole] = remaining.as_slice()
+            && sole.role.is_additional()
+        {
+            set_file_episode_link_role_tx(tx, sole, MediaFileRole::Primary).await?;
+            promoted_links.push(sole.clone());
+        }
+    }
+
+    Ok(EpisodeFileReassignOutcome::Reassigned(
+        EpisodeFileReassignment {
+            file_id: file_id.to_string(),
+            previous_links,
+            episode_ids: request.episode_ids.clone(),
+            demoted_links: contested,
+            promoted_links,
+        },
+    ))
+}
+
+/// Undo [`reassign_file_episode_links_tx`]. Roles go back in the order the
+/// one-primary-per-episode index needs: the file's new links leave first, then
+/// the promoted files step down, then the demoted files take their role back,
+/// and only then do the file's old links return.
+async fn restore_file_episode_links_tx(
+    tx: &mut SqlTx<'_>,
+    reassignment: &EpisodeFileReassignment,
+) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "DELETE FROM file_episode_map WHERE file_id = {}",
+        &[SqlArg::Text(reassignment.file_id.clone())],
+    )
+    .await?;
+    for link in &reassignment.promoted_links {
+        set_file_episode_link_role_tx(tx, link, MediaFileRole::Additional).await?;
+    }
+    for link in &reassignment.demoted_links {
+        set_file_episode_link_role_tx(tx, link, MediaFileRole::Primary).await?;
+    }
+    for link in &reassignment.previous_links {
+        insert_file_episode_link_tx(tx, link).await?;
+    }
+    Ok(())
 }
 
 struct StoredMediaFileOwnership {
@@ -580,6 +821,38 @@ impl MediaFileRepository for MediaFileStore {
                 )
                 .await
             })
+        })
+        .await
+    }
+
+    async fn reassign_file_episode_links(
+        &self,
+        request: &EpisodeFileReassignRequest,
+    ) -> AppResult<EpisodeFileReassignOutcome> {
+        let mut request = request.clone();
+        request.episode_ids.sort();
+        request.episode_ids.dedup();
+        if request.episode_ids.is_empty() {
+            return Err(AppError::Validation(
+                "a reassignment needs at least one episode".into(),
+            ));
+        }
+        let dialect = dialect_for_datastore(&self.datastore);
+        SqlRuntime::run_in_transaction(&self.datastore, "reassign_file_episode_links", move |tx| {
+            let request = request.clone();
+            Box::pin(async move { reassign_file_episode_links_tx(tx, dialect, &request).await })
+        })
+        .await
+    }
+
+    async fn restore_file_episode_links(
+        &self,
+        reassignment: &EpisodeFileReassignment,
+    ) -> AppResult<()> {
+        let reassignment = reassignment.clone();
+        SqlRuntime::run_in_transaction(&self.datastore, "restore_file_episode_links", move |tx| {
+            let reassignment = reassignment.clone();
+            Box::pin(async move { restore_file_episode_links_tx(tx, &reassignment).await })
         })
         .await
     }
@@ -5193,6 +5466,227 @@ mod tests {
             .await
             .expect("a missing file is not an error");
         assert_eq!(outcome, EpisodeLinkReplacement::Skipped);
+    }
+
+    fn synthetic_episode(title_id: &str, collection_id: &str, id: &str, number: u32) -> Episode {
+        Episode {
+            id: id.to_string(),
+            title_id: title_id.to_string(),
+            collection_id: Some(collection_id.to_string()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some(number.to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some(format!("S01E0{number}")),
+            title: Some(format!("Episode {number}")),
+            air_date: None,
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn reassigning_episode_links_moves_demotes_and_restores_in_one_transaction() {
+        use scryer_application::{EpisodeFileReassignOutcome, EpisodeFileReassignRequest};
+        let services = SqliteServices::new(":memory:")
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let shows = show_store(&services);
+        let media_files = media_file_store(&services);
+        for title_id in ["title-reassign", "title-elsewhere"] {
+            titles
+                .create(make_test_series_title(title_id))
+                .await
+                .expect("title should insert");
+            ShowRepository::create_collection(
+                &shows,
+                Collection {
+                    id: format!("{title_id}-season-1"),
+                    title_id: title_id.to_string(),
+                    collection_type: CollectionType::Season,
+                    collection_index: "1".to_string(),
+                    label: Some("Season 1".to_string()),
+                    ordered_path: None,
+                    narrative_order: None,
+                    first_episode_number: Some("1".to_string()),
+                    last_episode_number: Some("3".to_string()),
+                    monitored: true,
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("collection should insert");
+        }
+        for number in 1..=3 {
+            ShowRepository::create_episode(
+                &shows,
+                synthetic_episode(
+                    "title-reassign",
+                    "title-reassign-season-1",
+                    &format!("episode-reassign-{number}"),
+                    number,
+                ),
+            )
+            .await
+            .expect("episode should insert");
+        }
+        ShowRepository::create_episode(
+            &shows,
+            synthetic_episode(
+                "title-elsewhere",
+                "title-elsewhere-season-1",
+                "episode-elsewhere-1",
+                1,
+            ),
+        )
+        .await
+        .expect("episode should insert");
+        let insert = |path: &str| InsertMediaFileInput {
+            title_id: "title-reassign".to_string(),
+            file_path: path.to_string(),
+            size_bytes: 1_000,
+            ..Default::default()
+        };
+        let moving_id = media_files
+            .insert_media_file(&insert(
+                "/synthetic/Reassign Show/Reassign Show - S01E01.mkv",
+            ))
+            .await
+            .expect("moving file should insert");
+        let sibling_id = media_files
+            .insert_media_file(&insert(
+                "/synthetic/Reassign Show/Reassign Show - S01E01 v2.mkv",
+            ))
+            .await
+            .expect("sibling file should insert");
+        let holder_id = media_files
+            .insert_media_file(&insert(
+                "/synthetic/Reassign Show/Reassign Show - S01E02.mkv",
+            ))
+            .await
+            .expect("holder file should insert");
+        for (file_id, episode_id) in [
+            (&moving_id, "episode-reassign-1"),
+            (&sibling_id, "episode-reassign-1"),
+            (&holder_id, "episode-reassign-2"),
+        ] {
+            media_files
+                .link_file_to_episode(file_id, episode_id)
+                .await
+                .expect("seed link should insert");
+        }
+        for file_id in [&moving_id, &holder_id] {
+            sqlx::query("UPDATE file_episode_map SET role = 'primary' WHERE file_id = ?")
+                .bind(file_id)
+                .execute(services.pool())
+                .await
+                .expect("seed role should update");
+        }
+        let before = [
+            episode_link_rows(&services, &moving_id).await,
+            episode_link_rows(&services, &sibling_id).await,
+            episode_link_rows(&services, &holder_id).await,
+        ];
+        let rows_now = || async {
+            [
+                episode_link_rows(&services, &moving_id).await,
+                episode_link_rows(&services, &sibling_id).await,
+                episode_link_rows(&services, &holder_id).await,
+            ]
+        };
+        let request = |episode_id: &str, replace: bool| EpisodeFileReassignRequest {
+            file_id: moving_id.clone(),
+            title_id: "title-reassign".to_string(),
+            episode_ids: vec![episode_id.to_string()],
+            replace,
+        };
+
+        // An episode of another title is refused and nothing is written.
+        let outcome = media_files
+            .reassign_file_episode_links(&request("episode-elsewhere-1", false))
+            .await
+            .expect("refusal is not an error");
+        assert_eq!(
+            outcome,
+            EpisodeFileReassignOutcome::EpisodeOutsideTitle {
+                episode_id: "episode-elsewhere-1".to_string()
+            }
+        );
+        assert_eq!(rows_now().await, before);
+
+        // A primary on the target refuses without `replace` and names it.
+        let outcome = media_files
+            .reassign_file_episode_links(&request("episode-reassign-2", false))
+            .await
+            .expect("refusal is not an error");
+        assert_eq!(
+            outcome,
+            EpisodeFileReassignOutcome::PrimaryConflict {
+                episode_id: "episode-reassign-2".to_string(),
+                file_id: holder_id.clone(),
+            }
+        );
+        assert_eq!(rows_now().await, before);
+
+        // With `replace`, the holder is demoted, the sibling left behind on the
+        // first episode becomes its primary, and the file is primary on the target.
+        let EpisodeFileReassignOutcome::Reassigned(reassignment) = media_files
+            .reassign_file_episode_links(&request("episode-reassign-2", true))
+            .await
+            .expect("reassignment should commit")
+        else {
+            panic!("expected a reassignment");
+        };
+        assert_eq!(
+            reassignment.previous_episode_ids(),
+            vec!["episode-reassign-1"]
+        );
+        assert_eq!(reassignment.demoted_file_ids(), vec![holder_id.clone()]);
+        assert_eq!(
+            reassignment
+                .promoted_links
+                .iter()
+                .map(|link| link.file_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![sibling_id.as_str()]
+        );
+        let primary = |episode: &str| (episode.to_string(), "primary".to_string(), false);
+        let additional = |episode: &str| (episode.to_string(), "additional".to_string(), false);
+        assert_eq!(
+            rows_now().await,
+            [
+                vec![primary("episode-reassign-2")],
+                vec![primary("episode-reassign-1")],
+                vec![additional("episode-reassign-2")],
+            ]
+        );
+        // Restoring puts every link and role back exactly.
+        media_files
+            .restore_file_episode_links(&reassignment)
+            .await
+            .expect("restore should commit");
+        assert_eq!(rows_now().await, before);
+
+        // A file that is gone is reported, not invented.
+        let outcome = media_files
+            .reassign_file_episode_links(&EpisodeFileReassignRequest {
+                file_id: "media-file-missing".to_string(),
+                ..request("episode-reassign-3", false)
+            })
+            .await
+            .expect("a missing file is not an error");
+        assert_eq!(outcome, EpisodeFileReassignOutcome::FileNotFound);
     }
 
     async fn seed_series_movie_link(

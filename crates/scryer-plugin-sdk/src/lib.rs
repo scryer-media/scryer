@@ -44,7 +44,7 @@ pub use notification::{
     PluginNotificationTargetResult, coalesce_media_updates, rich_embed_from_request,
     to_script_environment, to_webhook_json,
 };
-pub const SDK_VERSION: &str = "3.16.0";
+pub const SDK_VERSION: &str = "3.19.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -362,6 +362,7 @@ pub enum IndexerSourceKind {
     Generic,
     Usenet,
     Torrent,
+    Http,
 }
 
 impl IndexerSourceKind {
@@ -370,6 +371,7 @@ impl IndexerSourceKind {
             Self::Generic => "indexer",
             Self::Usenet => "usenet_indexer",
             Self::Torrent => "torrent_indexer",
+            Self::Http => "http_indexer",
         }
     }
 }
@@ -780,6 +782,47 @@ pub struct IndexerCapabilities {
     pub torrent: Option<IndexerTorrentCapabilities>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_features: Option<IndexerResponseFeatures>,
+    /// Declared by indexers whose `protocols` include `Http`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<IndexerHttpCapabilities>,
+    /// The plugin answers the reserved
+    /// [`CONFIG_FIELDS_ACTION`](crate::command::CONFIG_FIELDS_ACTION) action
+    /// with config fields that depend on the values entered so far. Absent
+    /// keeps the static `config_fields` list as the whole form, and a host
+    /// older than SDK 3.18 ignores it the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_config_fields: Option<DynamicConfigFieldsCapability>,
+}
+
+/// Opt-in to config fields that depend on the values the operator has
+/// entered so far, such as the settings of a selected tracker definition.
+///
+/// The host asks the plugin through the reserved
+/// [`CONFIG_FIELDS_ACTION`](crate::command::CONFIG_FIELDS_ACTION) action,
+/// sending the current values of `trigger_keys` only. The answer must be a
+/// pure function of those values: the host caches it per plugin version and
+/// trigger values, and re-asks only when a trigger value changes. Values the
+/// operator types into dynamic fields are stored as ordinary config entries
+/// keyed by the field key, exactly like static fields.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct DynamicConfigFieldsCapability {
+    /// Keys of static `config_fields` whose values decide the dynamic
+    /// fields. Must be non-empty; keys that do not name a static field are
+    /// ignored by the host.
+    pub trigger_keys: Vec<String>,
+}
+
+/// What an HTTP-family indexer's releases offer, so Scryer can tell before
+/// any search whether a download client can take them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct IndexerHttpCapabilities {
+    /// Every transport this indexer's releases may offer. An indexer that
+    /// only ever emits provider pages lists just `provider_page`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transports: Vec<HttpTransport>,
+    /// Provider slugs this indexer emits in `PluginHttpRelease.provider`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
 }
 
 impl Default for IndexerCapabilities {
@@ -805,6 +848,8 @@ impl Default for IndexerCapabilities {
             limits: None,
             torrent: None,
             response_features: None,
+            http: None,
+            dynamic_config_fields: None,
         }
     }
 }
@@ -871,6 +916,34 @@ pub struct DownloadClientCapabilities {
     pub test_connection: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub torrent: Option<DownloadTorrentCapabilities>,
+    /// Present only for clients that accept `DownloadInputKind::HttpResource`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<DownloadHttpCapabilities>,
+}
+
+/// What an HTTP-family download client can take from a `PluginHttpRelease`.
+///
+/// Scryer routes an `Http` release to a client only when at least one of the
+/// release's offered transports is in `transports`, so a client that cannot
+/// drive a provider page must not list `provider_page`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DownloadHttpCapabilities {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transports: Vec<HttpTransport>,
+    /// Providers this client is limited to. Empty means any provider.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
+    /// The client can combine separate audio and video resources itself.
+    #[serde(default)]
+    pub muxes_separate_tracks: bool,
+    /// The client writes subtitle sidecars next to the media file and
+    /// reports them in `PluginCompletedDownload.subtitle_paths`.
+    #[serde(default)]
+    pub writes_subtitle_sidecars: bool,
+    /// Completed downloads carry exact `content_paths`, so the host never has
+    /// to scan the destination directory.
+    #[serde(default)]
+    pub reports_final_paths: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -1016,6 +1089,12 @@ pub enum ConfigFieldType {
     Number,
     Path,
     Tag,
+    /// Read-only guidance for the operator, not a setting: the form shows the
+    /// `label` and `help_text` as plain text, never an input, and no value is
+    /// ever saved under its key. It is never required and carries no default
+    /// or options. Added in SDK 3.19.0; a host on an older SDK cannot read it,
+    /// so declare it only from a plugin whose SDK constraint requires 3.19.
+    Info,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1030,6 +1109,13 @@ pub enum ConfigFieldValueSource {
 #[serde(rename_all = "snake_case")]
 pub enum ConfigFieldRole {
     ConnectionUrl,
+    /// The field that takes the operator's answer to the image challenge the
+    /// plugin's sign-in asks for. While this field is shown, the host asks the
+    /// plugin for the challenge through the
+    /// [`LOGIN_CHALLENGE_ACTION`](crate::command::LOGIN_CHALLENGE_ACTION)
+    /// action and shows the image beside it. Declare it on at most one static
+    /// field. Added in SDK 3.19.0; a host on an older SDK cannot read it.
+    LoginChallengeAnswer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -1116,8 +1202,27 @@ pub struct ConfigFieldOption {
     pub config_overrides: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+/// What kind of failure a plugin is reporting.
+///
+/// The code is open: any snake_case string is a valid code. A plugin can start
+/// reporting a new kind of failure — say `invalid_username_password` — by
+/// returning `PluginErrorCode::from("invalid_username_password")`, with no SDK
+/// release; the host carries it through unchanged and clients key on it. Once
+/// a released plugin sends a code, that code is API: keep its meaning and its
+/// spelling. Use lower-case ASCII letters, digits, and underscores.
+///
+/// The seven named variants are the well-known codes the host itself acts on
+/// (retry, reconnect, fall back). They are frozen: a new code is an
+/// [`PluginErrorCode::Other`] string, never a new variant. Hosts treat a code
+/// they do not know like [`PluginErrorCode::Permanent`] — not retried, shown to
+/// the operator.
+///
+/// On JSON every code is its bare string (`"auth_failed"`). On binary formats
+/// such as the postcard host-call transport the well-known codes keep the
+/// variant encoding guests built before codes were open decode, and any other
+/// code is the next variant carrying its string. Compare codes with `==` or
+/// [`PluginErrorCode::as_str`]: `Other("auth_failed")` equals `AuthFailed`.
+#[derive(Clone)]
 pub enum PluginErrorCode {
     InvalidConfig,
     AuthFailed,
@@ -1126,6 +1231,185 @@ pub enum PluginErrorCode {
     Unsupported,
     Temporary,
     Permanent,
+    /// Any code beyond the well-known seven.
+    Other(String),
+}
+
+impl PluginErrorCode {
+    /// The well-known codes, in wire order.
+    pub const KNOWN: [Self; 7] = [
+        Self::InvalidConfig,
+        Self::AuthFailed,
+        Self::RateLimited,
+        Self::UpstreamUnavailable,
+        Self::Unsupported,
+        Self::Temporary,
+        Self::Permanent,
+    ];
+
+    /// The code's wire string.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::InvalidConfig => "invalid_config",
+            Self::AuthFailed => "auth_failed",
+            Self::RateLimited => "rate_limited",
+            Self::UpstreamUnavailable => "upstream_unavailable",
+            Self::Unsupported => "unsupported",
+            Self::Temporary => "temporary",
+            Self::Permanent => "permanent",
+            Self::Other(code) => code,
+        }
+    }
+
+    /// Whether this is one of the seven well-known codes, however it was
+    /// spelled.
+    pub fn is_known(&self) -> bool {
+        !matches!(self.normalized(), Self::Other(_))
+    }
+
+    /// The well-known variant for a well-known string, else `self`.
+    fn normalized(&self) -> Self {
+        match self {
+            Self::Other(code) => Self::from(code.as_str()),
+            known => known.clone(),
+        }
+    }
+
+    fn variant_name(&self) -> Option<&'static str> {
+        Some(match self.normalized() {
+            Self::InvalidConfig => "InvalidConfig",
+            Self::AuthFailed => "AuthFailed",
+            Self::RateLimited => "RateLimited",
+            Self::UpstreamUnavailable => "UpstreamUnavailable",
+            Self::Unsupported => "Unsupported",
+            Self::Temporary => "Temporary",
+            Self::Permanent => "Permanent",
+            Self::Other(_) => return None,
+        })
+    }
+}
+
+impl From<&str> for PluginErrorCode {
+    fn from(code: &str) -> Self {
+        Self::KNOWN
+            .into_iter()
+            .find(|known| known.as_str() == code)
+            .unwrap_or_else(|| Self::Other(code.to_string()))
+    }
+}
+
+impl From<String> for PluginErrorCode {
+    fn from(code: String) -> Self {
+        match Self::from(code.as_str()) {
+            Self::Other(_) => Self::Other(code),
+            known => known,
+        }
+    }
+}
+
+impl PartialEq for PluginErrorCode {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for PluginErrorCode {}
+
+impl std::hash::Hash for PluginErrorCode {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl std::fmt::Display for PluginErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Well-known codes print as their variant name, as they always have in logs;
+/// any other code prints as its string.
+impl std::fmt::Debug for PluginErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.variant_name() {
+            Some(name) => f.write_str(name),
+            None => f.write_str(self.as_str()),
+        }
+    }
+}
+
+/// The binary-format shape: the variant layout `PluginErrorCode` had as a
+/// closed enum, plus one trailing variant for every other code.
+#[derive(Serialize, Deserialize)]
+enum PluginErrorCodeWire {
+    InvalidConfig,
+    AuthFailed,
+    RateLimited,
+    UpstreamUnavailable,
+    Unsupported,
+    Temporary,
+    Permanent,
+    Other(String),
+}
+
+impl Serialize for PluginErrorCode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            return serializer.serialize_str(self.as_str());
+        }
+        let wire = match self.normalized() {
+            Self::InvalidConfig => PluginErrorCodeWire::InvalidConfig,
+            Self::AuthFailed => PluginErrorCodeWire::AuthFailed,
+            Self::RateLimited => PluginErrorCodeWire::RateLimited,
+            Self::UpstreamUnavailable => PluginErrorCodeWire::UpstreamUnavailable,
+            Self::Unsupported => PluginErrorCodeWire::Unsupported,
+            Self::Temporary => PluginErrorCodeWire::Temporary,
+            Self::Permanent => PluginErrorCodeWire::Permanent,
+            Self::Other(code) => PluginErrorCodeWire::Other(code),
+        };
+        wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginErrorCode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            return String::deserialize(deserializer).map(Self::from);
+        }
+        Ok(match PluginErrorCodeWire::deserialize(deserializer)? {
+            PluginErrorCodeWire::InvalidConfig => Self::InvalidConfig,
+            PluginErrorCodeWire::AuthFailed => Self::AuthFailed,
+            PluginErrorCodeWire::RateLimited => Self::RateLimited,
+            PluginErrorCodeWire::UpstreamUnavailable => Self::UpstreamUnavailable,
+            PluginErrorCodeWire::Unsupported => Self::Unsupported,
+            PluginErrorCodeWire::Temporary => Self::Temporary,
+            PluginErrorCodeWire::Permanent => Self::Permanent,
+            PluginErrorCodeWire::Other(code) => Self::from(code),
+        })
+    }
+}
+
+impl JsonSchema for PluginErrorCode {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PluginErrorCode".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "What kind of failure a plugin is reporting. Open: any snake_case code is valid, and a code is API once a released plugin sends it. The well-known codes are listed in `examples`; hosts treat any other code like `permanent`.",
+            "pattern": "^[a-z0-9_]+$",
+            "examples": [
+                "invalid_config",
+                "auth_failed",
+                "rate_limited",
+                "upstream_unavailable",
+                "unsupported",
+                "temporary",
+                "permanent"
+            ]
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1301,6 +1585,8 @@ pub enum DownloadInputKind {
     TorrentUrl,
     TorrentBytes,
     MagnetUri,
+    /// An HTTP-family release; the payload is `PluginDownloadSource.http`.
+    HttpResource,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -2124,6 +2410,9 @@ pub struct PluginDownloadSource {
     /// Ordered release-specific candidates; never includes plugin-wide fallbacks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub password_candidates: Vec<String>,
+    /// Set when `kind == HttpResource`; absent for every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<PluginHttpDownloadSource>,
 }
 
 impl std::fmt::Debug for PluginDownloadSource {
@@ -2132,8 +2421,142 @@ impl std::fmt::Debug for PluginDownloadSource {
             .field("kind", &self.kind)
             .field("has_password", &self.source_password.is_some())
             .field("password_candidate_count", &self.password_candidates.len())
+            .field("has_http", &self.http.is_some())
             .finish_non_exhaustive()
     }
+}
+
+/// Everything an HTTP-family download client needs to fetch one release.
+///
+/// `release` is the indexer's description, verbatim, after the host ran the
+/// indexer's `resolve` action close to submission. `selected` is the host's
+/// choice derived from the quality profile and library language settings;
+/// `policy` names the output and what the host will verify afterwards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpDownloadSource {
+    pub release: PluginHttpRelease,
+    pub selected: PluginHttpSelection,
+    pub policy: PluginHttpPolicy,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpSelection {
+    /// Host order, already filtered to the transports this client declared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_preference: Vec<HttpTransport>,
+    /// Indices into `release.resources` the host picked. Empty when the
+    /// client is expected to resolve the provider page itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<u32>,
+    /// For example `["av1", "h265", "h264"]`. Empty means the client default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub video_codec_preference: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub container_preference: Vec<String>,
+    /// Ordered; the library's required audio languages come first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_languages: Vec<String>,
+    #[serde(default)]
+    pub audio_role: HttpAudioRolePreference,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtitle_languages: Vec<String>,
+    #[serde(default)]
+    pub subtitle_mode: HttpSubtitleMode,
+    #[serde(default)]
+    pub playlist_policy: HttpPlaylistPolicy,
+    /// Reserved. The host never sets it today; clients may ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<PluginHttpClip>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpClip {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpPolicy {
+    /// Host-derived, sanitised, unique per download id. Clients name the
+    /// output after it and add only an extension.
+    pub output_basename: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_duration_seconds: Option<u64>,
+    /// Exact only when the indexer reported an exact size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_size_bytes: Option<i64>,
+    #[serde(default)]
+    pub verify: PluginHttpVerify,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpVerify {
+    /// The completed media must run at least this fraction of
+    /// `expected_duration_seconds` when that is known.
+    #[serde(default = "default_min_duration_ratio")]
+    pub min_duration_ratio: f32,
+    #[serde(default = "default_true")]
+    pub require_video: bool,
+}
+
+fn default_min_duration_ratio() -> f32 {
+    0.95
+}
+
+impl Default for PluginHttpVerify {
+    fn default() -> Self {
+        Self {
+            min_duration_ratio: default_min_duration_ratio(),
+            require_video: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpAudioRolePreference {
+    #[default]
+    Original,
+    Any,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpSubtitleMode {
+    #[default]
+    None,
+    EmbeddedOnly,
+    SidecarPreferred,
+    SidecarRequired,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpPlaylistPolicy {
+    #[default]
+    SingleItem,
+}
+
+/// Progress detail an HTTP-family client may attach to a queue item.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport_in_use: Option<HttpTransport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<HttpDownloadPhase>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpDownloadPhase {
+    Resolving,
+    Downloading,
+    Muxing,
+    WritingSubtitles,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2252,6 +2675,8 @@ pub struct PluginDownloadItem {
     pub remote_output_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub torrent: Option<PluginTorrentItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<PluginHttpItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_size_bytes: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2380,6 +2805,10 @@ pub struct PluginCompletedDownload {
     pub output_kind: Option<PluginDownloadOutputKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content_paths: Vec<String>,
+    /// Subtitle sidecars the client wrote next to the media, so they reach
+    /// the subtitle import path without a directory scan.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtitle_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3137,6 +3566,267 @@ pub struct PluginSearchResult {
     pub season_pack_seed_ratio: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub season_pack_seed_time_minutes: Option<i64>,
+    /// Set only when `protocol == Some(IndexerProtocol::Http)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<PluginHttpRelease>,
+}
+
+/// An HTTP-family release as the indexer describes it.
+///
+/// `provider` and `item_id` are the durable identity; signed CDN URLs in
+/// `resources` are not. A release whose `resources` are empty, or hold only a
+/// `provider_page` entry, is legitimate: it says a capable client must fetch
+/// and demux the page itself.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpRelease {
+    /// Provider slug, for example `youtube`, `mediathekviewweb`,
+    /// `internet_archive`.
+    pub provider: String,
+    /// The provider's stable item id.
+    pub item_id: String,
+    /// The canonical provider page; stable across resolutions.
+    pub page_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<PluginHttpChannel>,
+    #[serde(default)]
+    pub availability: HttpAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rights_window: Option<PluginHttpRightsWindow>,
+    /// Present only when the item was enumerated from a list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<PluginHttpPlaylistPosition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<PluginHttpResource>,
+    /// An indexer `action` that returns a fresh `PluginHttpRelease` for this
+    /// item. The host runs it right before submission and again when a
+    /// resource has expired, and refuses the result if `item_id` or
+    /// `page_url` changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolve: Option<PluginHttpResolve>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpChannel {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpRightsWindow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starts_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ends_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpPlaylistPosition {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpResolve {
+    /// Name of the indexer action to invoke.
+    pub action: String,
+    /// How long a resolved `resources` list may be trusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpAvailability {
+    Available,
+    Expired,
+    GeoRestricted,
+    AuthRequired,
+    Drm,
+    Removed,
+    Live,
+    Upcoming,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpTransport {
+    /// The client resolves the provider page itself (yt-dlp style).
+    ProviderPage,
+    DirectFile,
+    Hls,
+    Dash,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpResourceRole {
+    Video,
+    Audio,
+    Muxed,
+    Subtitle,
+    Thumbnail,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpRangeSupport {
+    KnownYes,
+    KnownNo,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpResource {
+    pub transport: HttpTransport,
+    pub role: HttpResourceRole,
+    pub url: String,
+    /// RFC 3339; set for signed URLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// Request headers scoped to this resource's origin only. The host never
+    /// forwards them across a redirect to another origin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<PluginHttpHeader>,
+    /// Name of an indexer config secret the host may attach. Never the
+    /// secret itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_ref: Option<String>,
+    /// Exact size when the provider asserts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<i64>,
+    /// A labelled estimate; never treated as exact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_estimate: Option<i64>,
+    #[serde(default)]
+    pub validators: PluginHttpValidators,
+    /// For example `mp4`, `webm`, `mkv`, `ts`, `m4a`, `vtt`, `ttml`, `srt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<PluginHttpVideoTrack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<PluginHttpAudioTrack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<PluginHttpSubtitleTrack>,
+    /// Audio and video arrive as distinct resources that need muxing.
+    #[serde(default)]
+    pub separate_tracks: bool,
+    #[serde(default)]
+    pub range_support: HttpRangeSupport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpValidators {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpVideoTrack {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitrate: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpAudioTrack {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<HttpAudioRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channels: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitrate: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpAudioRole {
+    Original,
+    Dubbed,
+    AudioDescription,
+    Commentary,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginHttpSubtitleTrack {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<HttpSubtitleRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpSubtitleRole {
+    Normal,
+    Sdh,
+    Forced,
+}
+
+impl PluginHttpRelease {
+    /// The transports this release offers. A release with no resources is
+    /// treated as a `provider_page` release.
+    pub fn offered_transports(&self) -> Vec<HttpTransport> {
+        let mut transports: Vec<HttpTransport> = Vec::new();
+        for resource in &self.resources {
+            if !transports.contains(&resource.transport) {
+                transports.push(resource.transport);
+            }
+        }
+        if transports.is_empty() {
+            transports.push(HttpTransport::ProviderPage);
+        }
+        transports
+    }
+}
+
+impl DownloadHttpCapabilities {
+    /// Whether this client can take the given release: some offered transport
+    /// is declared, and the provider is allowed.
+    pub fn accepts(&self, release: &PluginHttpRelease) -> bool {
+        let provider_ok = self.providers.is_empty()
+            || self
+                .providers
+                .iter()
+                .any(|provider| provider.eq_ignore_ascii_case(&release.provider));
+        provider_ok
+            && release
+                .offered_transports()
+                .iter()
+                .any(|transport| self.transports.contains(transport))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3155,6 +3845,9 @@ struct PluginSdkSchemaDocument {
     indexer_search_request: PluginSearchRequest,
     indexer_search_response: PluginSearchResponse,
     resolve_network_endpoints_response: command::ResolveNetworkEndpointsResponse,
+    config_fields_request: command::ConfigFieldsRequest,
+    config_fields_response: command::ConfigFieldsResponse,
+    login_challenge_response: command::LoginChallengeResponse,
     indexer_search_plan_request: PluginSearchPlanRequest,
     indexer_search_strategy_event: PluginSearchStrategyEvent,
     indexer_search_plan_summary: PluginSearchPlanSummary,
@@ -3770,6 +4463,123 @@ mod tests {
         }
     }
 
+    /// The closed enum `PluginErrorCode` was through SDK 3.17.0, exactly as it
+    /// was derived. Guests built against it still decode host-call replies.
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum LegacyPluginErrorCode {
+        InvalidConfig,
+        AuthFailed,
+        RateLimited,
+        UpstreamUnavailable,
+        Unsupported,
+        Temporary,
+        Permanent,
+    }
+
+    const LEGACY_CODES: [(PluginErrorCode, LegacyPluginErrorCode); 7] = [
+        (
+            PluginErrorCode::InvalidConfig,
+            LegacyPluginErrorCode::InvalidConfig,
+        ),
+        (
+            PluginErrorCode::AuthFailed,
+            LegacyPluginErrorCode::AuthFailed,
+        ),
+        (
+            PluginErrorCode::RateLimited,
+            LegacyPluginErrorCode::RateLimited,
+        ),
+        (
+            PluginErrorCode::UpstreamUnavailable,
+            LegacyPluginErrorCode::UpstreamUnavailable,
+        ),
+        (
+            PluginErrorCode::Unsupported,
+            LegacyPluginErrorCode::Unsupported,
+        ),
+        (PluginErrorCode::Temporary, LegacyPluginErrorCode::Temporary),
+        (PluginErrorCode::Permanent, LegacyPluginErrorCode::Permanent),
+    ];
+
+    #[test]
+    fn well_known_codes_keep_the_closed_enum_wire_form_on_json_and_postcard() {
+        for (code, legacy) in LEGACY_CODES {
+            assert_eq!(
+                serde_json::to_string(&code).unwrap(),
+                serde_json::to_string(&legacy).unwrap(),
+            );
+            assert_eq!(
+                postcard::to_stdvec(&code).unwrap(),
+                postcard::to_stdvec(&legacy).unwrap(),
+                "{code:?}"
+            );
+            // Spelled as a string, a well-known code still takes the legacy form.
+            let spelled = PluginErrorCode::Other(code.as_str().to_string());
+            assert_eq!(spelled, code);
+            assert_eq!(
+                postcard::to_stdvec(&spelled).unwrap(),
+                postcard::to_stdvec(&legacy).unwrap(),
+                "{code:?}"
+            );
+
+            let from_old_guest: PluginErrorCode =
+                postcard::from_bytes(&postcard::to_stdvec(&legacy).unwrap()).unwrap();
+            assert!(matches!(
+                (&from_old_guest, &code),
+                (a, b) if std::mem::discriminant(a) == std::mem::discriminant(b)
+            ));
+            let to_old_guest: LegacyPluginErrorCode =
+                postcard::from_bytes(&postcard::to_stdvec(&code).unwrap()).unwrap();
+            assert_eq!(to_old_guest, legacy);
+            let from_old_json: PluginErrorCode =
+                serde_json::from_str(&serde_json::to_string(&legacy).unwrap()).unwrap();
+            assert!(std::mem::discriminant(&from_old_json) == std::mem::discriminant(&code));
+        }
+    }
+
+    #[test]
+    fn any_other_code_is_open_and_round_trips_on_json_and_postcard() {
+        let code = PluginErrorCode::from("invalid_username_password");
+        assert!(!code.is_known());
+        assert_eq!(code.as_str(), "invalid_username_password");
+        assert_eq!(code.to_string(), "invalid_username_password");
+        assert_eq!(format!("{code:?}"), "invalid_username_password");
+        assert_eq!(
+            PluginErrorCode::from(String::from("auth_failed")),
+            PluginErrorCode::AuthFailed
+        );
+        assert!(matches!(
+            PluginErrorCode::from("auth_failed"),
+            PluginErrorCode::AuthFailed
+        ));
+        assert_eq!(format!("{:?}", PluginErrorCode::AuthFailed), "AuthFailed");
+
+        assert_eq!(
+            serde_json::to_string(&code).unwrap(),
+            r#""invalid_username_password""#
+        );
+        let json: PluginErrorCode = serde_json::from_str(r#""invalid_username_password""#).unwrap();
+        assert_eq!(json, code);
+        let binary: PluginErrorCode =
+            postcard::from_bytes(&postcard::to_stdvec(&code).unwrap()).unwrap();
+        assert_eq!(binary, code);
+
+        let error = PluginError {
+            code: code.clone(),
+            public_message: "Login refused".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        };
+        let decoded: PluginError =
+            postcard::from_bytes(&postcard::to_stdvec(&error).unwrap()).unwrap();
+        assert_eq!(decoded.code, code);
+        let decoded: PluginError =
+            serde_json::from_str(&serde_json::to_string(&error).unwrap()).unwrap();
+        assert_eq!(decoded.code, code);
+    }
+
     /// `PluginError` crosses the component host-call transport as postcard,
     /// which is positional: every field the deserializer reads must have been
     /// written. A `skip_serializing_if` on the optional fields would make the
@@ -3815,6 +4625,7 @@ mod tests {
                 source_title: None,
                 source_password: None,
                 password_candidates: Vec::new(),
+                http: None,
             },
             release: PluginDownloadRelease {
                 info_hash_hint: Some("abcdef0123456789abcdef0123456789abcdef01".to_string()),
@@ -3884,6 +4695,7 @@ mod tests {
                 source_title: None,
                 source_password: None,
                 password_candidates: Vec::new(),
+                http: None,
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -3931,6 +4743,7 @@ mod tests {
                 source_title: None,
                 source_password: None,
                 password_candidates: Vec::new(),
+                http: None,
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -3973,6 +4786,7 @@ mod tests {
                 source_title: None,
                 source_password: None,
                 password_candidates: Vec::new(),
+                http: None,
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -4385,9 +5199,216 @@ mod tests {
     }
 
     #[test]
+    fn http_release_without_resources_offers_only_the_provider_page() {
+        let release = PluginHttpRelease {
+            provider: "youtube".to_string(),
+            item_id: "abc123".to_string(),
+            page_url: "https://video.example/watch?v=abc123".to_string(),
+            ..PluginHttpRelease::default()
+        };
+        assert_eq!(
+            release.offered_transports(),
+            vec![HttpTransport::ProviderPage]
+        );
+
+        let direct_only = DownloadHttpCapabilities {
+            transports: vec![HttpTransport::DirectFile],
+            ..DownloadHttpCapabilities::default()
+        };
+        assert!(!direct_only.accepts(&release));
+
+        let page_capable = DownloadHttpCapabilities {
+            transports: vec![HttpTransport::ProviderPage, HttpTransport::DirectFile],
+            ..DownloadHttpCapabilities::default()
+        };
+        assert!(page_capable.accepts(&release));
+
+        let other_provider_only = DownloadHttpCapabilities {
+            transports: vec![HttpTransport::ProviderPage],
+            providers: vec!["mediathekviewweb".to_string()],
+            ..DownloadHttpCapabilities::default()
+        };
+        assert!(!other_provider_only.accepts(&release));
+    }
+
+    #[test]
+    fn http_release_offered_transports_deduplicate_resources() {
+        let resource = |transport: HttpTransport| PluginHttpResource {
+            transport,
+            role: HttpResourceRole::Muxed,
+            url: "https://cdn.example/file.mp4".to_string(),
+            expires_at: None,
+            headers: Vec::new(),
+            auth_ref: None,
+            size_bytes: None,
+            size_estimate: None,
+            validators: PluginHttpValidators::default(),
+            container: None,
+            video: None,
+            audio: None,
+            subtitle: None,
+            separate_tracks: false,
+            range_support: HttpRangeSupport::Unknown,
+        };
+        let release = PluginHttpRelease {
+            provider: "internet_archive".to_string(),
+            item_id: "item".to_string(),
+            page_url: "https://archive.example/details/item".to_string(),
+            resources: vec![
+                resource(HttpTransport::DirectFile),
+                resource(HttpTransport::DirectFile),
+                resource(HttpTransport::Hls),
+            ],
+            ..PluginHttpRelease::default()
+        };
+        assert_eq!(
+            release.offered_transports(),
+            vec![HttpTransport::DirectFile, HttpTransport::Hls]
+        );
+    }
+
+    #[test]
+    fn http_download_source_round_trips_through_json() {
+        let source = PluginDownloadSource {
+            kind: DownloadInputKind::HttpResource,
+            download_url: None,
+            magnet_uri: None,
+            torrent_bytes_base64: None,
+            torrent_url: None,
+            torrent_file_name: None,
+            torrent_content_type: None,
+            nzb_bytes_base64: None,
+            nzb_file_name: None,
+            nzb_content_type: None,
+            source_title: Some("Example.Upload.2024.1080p".to_string()),
+            source_password: None,
+            password_candidates: Vec::new(),
+            http: Some(PluginHttpDownloadSource {
+                release: PluginHttpRelease {
+                    provider: "youtube".to_string(),
+                    item_id: "abc123".to_string(),
+                    page_url: "https://video.example/watch?v=abc123".to_string(),
+                    ..PluginHttpRelease::default()
+                },
+                selected: PluginHttpSelection {
+                    transport_preference: vec![HttpTransport::ProviderPage],
+                    max_height: Some(1080),
+                    audio_languages: vec!["en".to_string()],
+                    subtitle_mode: HttpSubtitleMode::SidecarPreferred,
+                    ..PluginHttpSelection::default()
+                },
+                policy: PluginHttpPolicy {
+                    output_basename: "Example.Upload.2024.1080p".to_string(),
+                    expected_duration_seconds: Some(1_200),
+                    ..PluginHttpPolicy::default()
+                },
+            }),
+        };
+        let json = serde_json::to_value(&source).unwrap();
+        assert_eq!(json["kind"], "http_resource");
+        assert_eq!(
+            json["http"]["selected"]["subtitle_mode"],
+            "sidecar_preferred"
+        );
+        assert_eq!(json["http"]["policy"]["verify"]["require_video"], true);
+        let parsed: PluginDownloadSource = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.http, source.http);
+
+        let legacy: PluginDownloadSource =
+            serde_json::from_str(r#"{"kind":"nzb_url","download_url":"https://x.example/a.nzb"}"#)
+                .unwrap();
+        assert!(legacy.http.is_none());
+    }
+
+    #[test]
     fn category_scoped_feedback_capability_defaults_to_disabled() {
         let capabilities: DownloadClientCapabilities = serde_json::from_str("{}").unwrap();
         assert!(!capabilities.category_scoped_feedback);
+    }
+
+    #[test]
+    fn dynamic_config_fields_capability_is_opt_in_and_omitted_for_old_plugins() {
+        let capabilities: IndexerCapabilities = serde_json::from_str("{}").unwrap();
+        assert!(capabilities.dynamic_config_fields.is_none());
+        assert!(
+            serde_json::to_value(IndexerCapabilities::default())
+                .unwrap()
+                .get("dynamic_config_fields")
+                .is_none()
+        );
+        let declared: IndexerCapabilities = serde_json::from_value(serde_json::json!({
+            "dynamic_config_fields": { "trigger_keys": ["definition"] }
+        }))
+        .unwrap();
+        assert_eq!(
+            declared.dynamic_config_fields,
+            Some(DynamicConfigFieldsCapability {
+                trigger_keys: vec!["definition".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn config_fields_action_payloads_round_trip_through_the_action_envelope() {
+        use crate::command::{
+            CONFIG_FIELDS_ACTION, ConfigFieldsRequest, ConfigFieldsResponse, PluginActionRequest,
+            PluginActionResponse,
+        };
+
+        let request = PluginActionRequest {
+            action: CONFIG_FIELDS_ACTION.into(),
+            payload: serde_json::to_value(ConfigFieldsRequest {
+                values: BTreeMap::from([("definition".into(), "sample-tracker".into())]),
+            })
+            .unwrap(),
+        };
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "action": "config_fields",
+                "payload": { "values": { "definition": "sample-tracker" } }
+            })
+        );
+        let parsed: ConfigFieldsRequest = serde_json::from_value(
+            serde_json::from_value::<PluginActionRequest>(wire)
+                .unwrap()
+                .payload,
+        )
+        .unwrap();
+        assert_eq!(parsed.values["definition"], "sample-tracker");
+        let empty: ConfigFieldsRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(empty.values.is_empty());
+
+        let response = ConfigFieldsResponse {
+            fields: vec![ConfigFieldDef {
+                key: "apikey".into(),
+                label: "API Key".into(),
+                field_type: ConfigFieldType::Password,
+                required: true,
+                ..ConfigFieldDef::default()
+            }],
+            hidden_field_keys: vec!["username".into(), "password".into()],
+        };
+        let envelope = PluginActionResponse {
+            payload: serde_json::to_value(&response).unwrap(),
+        };
+        let wire = serde_json::to_value(PluginResult::Ok(envelope)).unwrap();
+        let PluginResult::Ok(decoded) =
+            serde_json::from_value::<PluginResult<PluginActionResponse>>(wire).unwrap()
+        else {
+            panic!("expected an ok action response");
+        };
+        let decoded: ConfigFieldsResponse = serde_json::from_value(decoded.payload).unwrap();
+        assert_eq!(decoded, response);
+
+        // A plugin with nothing to add may answer with an empty object.
+        let nothing: ConfigFieldsResponse = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(nothing, ConfigFieldsResponse::default());
+        assert_eq!(
+            serde_json::to_value(ConfigFieldsResponse::default()).unwrap(),
+            serde_json::json!({})
+        );
     }
 
     #[test]
@@ -4981,5 +6002,60 @@ mod tests {
             serde_json::from_str("\"filtered_select\"").expect("variant should decode");
         assert_eq!(decoded, ConfigFieldType::FilteredSelect);
         assert_ne!(ConfigFieldType::FilteredSelect, ConfigFieldType::Select);
+    }
+
+    /// Adding `info` leaves every existing field type's wire name unchanged.
+    #[test]
+    fn info_field_type_is_additive_on_the_wire() {
+        for (field_type, wire) in [
+            (ConfigFieldType::String, "string"),
+            (ConfigFieldType::Password, "password"),
+            (ConfigFieldType::Multiline, "multiline"),
+            (ConfigFieldType::Bool, "bool"),
+            (ConfigFieldType::Select, "select"),
+            (ConfigFieldType::FilteredSelect, "filtered_select"),
+            (ConfigFieldType::Number, "number"),
+            (ConfigFieldType::Path, "path"),
+            (ConfigFieldType::Tag, "tag"),
+            (ConfigFieldType::Info, "info"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&field_type).unwrap(),
+                format!("\"{wire}\"")
+            );
+            let decoded: ConfigFieldType = serde_json::from_str(&format!("\"{wire}\"")).unwrap();
+            assert_eq!(decoded, field_type);
+        }
+        let decoded: ConfigFieldType = serde_json::from_str("\"secret\"").unwrap();
+        assert_eq!(decoded, ConfigFieldType::Password);
+    }
+
+    #[test]
+    fn login_challenge_role_and_response_are_additive_on_the_wire() {
+        assert_eq!(
+            serde_json::to_string(&ConfigFieldRole::ConnectionUrl).unwrap(),
+            "\"connection_url\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ConfigFieldRole::LoginChallengeAnswer).unwrap(),
+            "\"login_challenge_answer\""
+        );
+        // The shape the Cardigann engine already answers `checkCaptcha` with.
+        let decoded: crate::command::LoginChallengeResponse =
+            serde_json::from_value(serde_json::json!({
+                "captchaRequest": {
+                    "type": "image",
+                    "contentType": "image/png",
+                    "imageData": "AQID"
+                }
+            }))
+            .unwrap();
+        let request = decoded.captcha_request.unwrap();
+        assert_eq!(request.challenge_type, "image");
+        assert_eq!(request.content_type, "image/png");
+        assert_eq!(request.image_data, "AQID");
+        let nothing: crate::command::LoginChallengeResponse =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(nothing.captcha_request, None);
     }
 }

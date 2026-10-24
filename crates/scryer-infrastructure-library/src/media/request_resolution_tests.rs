@@ -116,7 +116,16 @@ async fn overlapping_request_resolution_preserves_each_lease_and_provenance() {
         .list_for_title("approved-title")
         .await
         .unwrap();
-    assert_eq!(claims.len(), 3);
+    assert_eq!(
+        claims.len(),
+        2,
+        "the forever request has no time to delete, so it writes no claim"
+    );
+    assert!(
+        claims
+            .iter()
+            .all(|claim| claim.producer_ref.as_deref() != Some("forever"))
+    );
     for (id, days) in [
         ("primary", Some(45)),
         ("sibling", Some(5)),
@@ -136,9 +145,8 @@ async fn overlapping_request_resolution_preserves_each_lease_and_provenance() {
         );
         let claim = claims
             .iter()
-            .find(|claim| claim.producer_ref.as_deref() == Some(id))
-            .unwrap();
-        assert_eq!(claim.duration_days, days);
+            .find(|claim| claim.producer_ref.as_deref() == Some(id));
+        assert_eq!(claim.and_then(|claim| claim.duration_days), days);
     }
     let events = SqlRuntime::fetch_all(
         store.datastore.read_exec(),
@@ -235,7 +243,7 @@ async fn failed_claim_write_keeps_approval_pending_and_retry_creates_all_holds()
         .unwrap();
     assert_eq!(
         claims.list_for_title("approved-title").await.unwrap().len(),
-        3
+        2
     );
 }
 
@@ -253,10 +261,6 @@ async fn lifecycle_claim_extensions_never_shorten_and_survive_activation() {
         .iter()
         .find(|claim| claim.producer_ref.as_deref() == Some("sibling"))
         .unwrap();
-    let permanent = rows
-        .iter()
-        .find(|claim| claim.producer_ref.as_deref() == Some("forever"))
-        .unwrap();
     let now = Utc::now();
     let extension = now + chrono::Duration::days(30);
     claims.extend(&finite.id, extension, now).await.unwrap();
@@ -268,7 +272,6 @@ async fn lifecycle_claim_extensions_never_shorten_and_survive_activation() {
     ] {
         assert!(claims.extend(&finite.id, invalid, now).await.is_err());
     }
-    assert!(claims.extend(&permanent.id, extension, now).await.is_err());
     claims
         .activate(&finite.id, now, Some(now + chrono::Duration::days(5)), now)
         .await

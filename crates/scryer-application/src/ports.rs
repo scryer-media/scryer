@@ -2186,6 +2186,12 @@ pub trait TitleRepository: Send + Sync {
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()>;
+    /// Atomically claim a missing folder without overwriting another writer.
+    async fn claim_missing_folder_path(&self, _id: &str, _folder_path: &str) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "atomic folder claims are unsupported by this repository".into(),
+        ))
+    }
     /// Move a title into another library and onto a root in that library, in one
     /// transaction, carrying its library projections with it (FR-056).
     ///
@@ -5519,6 +5525,21 @@ pub trait DownloadRegistryRepository: Send + Sync {
     async fn load_binding(&self, id: &DownloadId)
     -> AppResult<Option<DownloadClientBindingRecord>>;
 
+    /// Reconcile the in-memory tracker against durable retirements.
+    async fn ended_bindings(&self, ids: &[DownloadId]) -> AppResult<Vec<DownloadId>> {
+        let mut ended = Vec::new();
+        for id in ids {
+            if self
+                .load_binding(id)
+                .await?
+                .is_some_and(|binding| binding.ended_at.is_some())
+            {
+                ended.push(*id);
+            }
+        }
+        Ok(ended)
+    }
+
     /// Find a non-ended binding with an exact configured-client/type/native-item locator.
     ///
     /// Resolve the active binding for an exact locator (client id, client type
@@ -5530,6 +5551,28 @@ pub trait DownloadRegistryRepository: Send + Sync {
 
     /// End an active binding; ending an already-ended or absent binding is a no-op.
     async fn end_binding(&self, id: &DownloadId) -> AppResult<()>;
+
+    /// Whether any of these active bindings holds a durable password retry fence.
+    /// Implementations without password retry support have no such fences.
+    async fn bindings_have_password_retry(&self, _ids: &[DownloadId]) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    /// Retire one title's bindings together in stores supporting transactions.
+    async fn end_bindings(&self, ids: &[DownloadId]) -> AppResult<()> {
+        for id in ids {
+            self.end_binding(id).await?;
+        }
+        Ok(())
+    }
+
+    /// End the bindings of a deleted title's downloads. Unlike
+    /// [`Self::end_bindings`], a pending password retry does not preserve the
+    /// binding: its fence and stored retry state are removed with it, because
+    /// the title the retry would import into no longer exists.
+    async fn end_bindings_for_deleted_title(&self, ids: &[DownloadId]) -> AppResult<()> {
+        self.end_bindings(ids).await
+    }
 
     /// Active bindings Scryer created by submitting a grab, created before
     /// `created_before`, whose download no client listing has ever carried.
@@ -5728,6 +5771,24 @@ pub trait DownloadSubmissionRepository: Send + Sync {
         _history_offset: usize,
         _error: Option<&str>,
     ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Settle cleanup locally when its title is explicitly deleted.
+    async fn abandon_title_download_cleanup(&self, ids: &[DownloadId]) -> AppResult<()> {
+        for id in ids {
+            if self.has_pending_download_cleanup(id).await? {
+                self.finish_download_cleanup(
+                    id,
+                    "cleanup_abandoned",
+                    true,
+                    0,
+                    0,
+                    Some("title deleted; the client entry is left for the operator"),
+                )
+                .await?;
+            }
+        }
         Ok(())
     }
 
@@ -6135,6 +6196,12 @@ pub trait DownloadSubmissionRepository: Send + Sync {
 
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>>;
 
+    /// On-demand recovery rows for durable password retries with an active,
+    /// matching client binding, including jobs absent from the native queue.
+    async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
+        Ok(Vec::new())
+    }
+
     /// Configured client ids that still hold at least one live (non-ended)
     /// client binding — that is, a download this instance is still tracking on
     /// that client.
@@ -6161,12 +6228,13 @@ pub trait DownloadSubmissionRepository: Send + Sync {
 
     /// Every Scryer submission, across titles, whose canonical client binding
     /// is still active without a native client item and that was submitted
-    /// before `submitted_before`: grab intents no client job ever confirmed.
-    /// Defaults to empty for stores without canonical bindings.
+    /// before `submitted_before`: grab intents no client job ever confirmed,
+    /// each with its submission time. Defaults to empty for stores without
+    /// canonical bindings.
     async fn list_active_unbound_submitted_before(
         &self,
         _submitted_before: DateTime<Utc>,
-    ) -> AppResult<Vec<DownloadSubmission>> {
+    ) -> AppResult<Vec<crate::contracts::UnconfirmedDownloadSubmission>> {
         Ok(Vec::new())
     }
 
@@ -6211,6 +6279,13 @@ pub trait DownloadSubmissionRepository: Send + Sync {
     ) -> AppResult<bool> {
         Err(AppError::Repository(
             "this store cannot move a download to another title".into(),
+        ))
+    }
+
+    /// Remove only this canonical submission; never follow a reused client locator.
+    async fn delete_by_download_id(&self, _download_id: &DownloadId) -> AppResult<()> {
+        Err(AppError::Repository(
+            "canonical submission deletion is unsupported".into(),
         ))
     }
 
@@ -7085,6 +7160,19 @@ pub trait ImportRepository: Send + Sync {
         Ok(())
     }
 
+    /// Delete the manual-import selections made for a deleted title, with
+    /// their candidates. Only rows change; no file is touched.
+    async fn delete_manual_import_selections_for_title(&self, _title_id: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Delete those of `import_ids` that are still unfinished (`queued`,
+    /// `pending`, `running` or `processing`), for a deleted title. A row that
+    /// finished meanwhile is history and is kept. Returns the rows deleted.
+    async fn delete_unfinished_imports(&self, _import_ids: &[String]) -> AppResult<u64> {
+        Ok(0)
+    }
+
     async fn list_imports(&self, limit: usize) -> AppResult<Vec<ImportRecord>>;
 }
 
@@ -7683,6 +7771,34 @@ pub trait MediaFileRepository: Send + Sync {
         expected_episode_ids: &[String],
         episode_ids: &[String],
     ) -> AppResult<EpisodeLinkReplacement>;
+
+    /// Make `request.episode_ids` the episodes `request.file_id` serves, in one
+    /// transaction. The file becomes primary for every target. Another file that is
+    /// primary for a target either refuses the request or, with `replace`,
+    /// stays linked as an additional file. On an episode the file leaves, a
+    /// sole remaining additional file is promoted to primary. Nothing on disk
+    /// is touched and no file row is deleted. Every outcome but
+    /// [`EpisodeFileReassignOutcome::Reassigned`] wrote nothing.
+    async fn reassign_file_episode_links(
+        &self,
+        _request: &EpisodeFileReassignRequest,
+    ) -> AppResult<EpisodeFileReassignOutcome> {
+        Err(AppError::Repository(
+            "episode file reassignment is unavailable".into(),
+        ))
+    }
+
+    /// Undo [`Self::reassign_file_episode_links`]: restore the file's previous
+    /// links and the roles of the files it demoted or promoted, in one
+    /// transaction.
+    async fn restore_file_episode_links(
+        &self,
+        _reassignment: &EpisodeFileReassignment,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "episode file reassignment is unavailable".into(),
+        ))
+    }
 
     async fn link_file_to_series_movie(
         &self,
@@ -9291,16 +9407,9 @@ pub trait LifecycleClaimRepository: Send + Sync {
         now: DateTime<Utc>,
     ) -> AppResult<()>;
 
-    /// Mark `id` converted and insert `replacement` (a keep) in one transaction,
-    /// so there is no instant in which the title carries neither. A title holds
-    /// at most one live operator keep, so when it already has one that keep
-    /// stands in for `replacement`. Returns the id of the keep now in force.
-    async fn convert_to_permanent(
-        &self,
-        id: &str,
-        replacement: &scryer_domain::LifecycleClaim,
-        now: DateTime<Utc>,
-    ) -> AppResult<String>;
+    /// Mark a live lease converted, so the title carries no expiry. Refused for
+    /// a claim that is no longer live.
+    async fn convert_to_permanent(&self, id: &str, now: DateTime<Utc>) -> AppResult<()>;
 
     /// Live claims produced by requests this user submitted, for the
     /// `active_lease_count` fact.
@@ -9458,6 +9567,26 @@ pub trait IndexerClient: Send + Sync {
     /// provider kinds that do not need a specialized request shape.
     async fn probe_connection(&self) -> AppResult<bool> {
         Ok(false)
+    }
+
+    /// Ask the plugin for the config fields that depend on `values`, the
+    /// current values of its declared trigger keys. `None` means it has none
+    /// to offer: it does not declare the capability or answered
+    /// `unsupported`. The answer is unvalidated; callers go through the
+    /// application's dynamic-field validation before using it.
+    async fn dynamic_config_fields(
+        &self,
+        _values: &std::collections::BTreeMap<String, String>,
+    ) -> AppResult<Option<PluginDynamicConfigFields>> {
+        Ok(None)
+    }
+
+    /// Fetch the challenge the indexer's sign-in asks the operator to solve,
+    /// using this client's settings. `None` means it asks for nothing: the
+    /// provider has no sign-in challenge, or none right now. The image is
+    /// shown once and never stored.
+    async fn login_challenge(&self) -> AppResult<Option<IndexerLoginChallenge>> {
+        Ok(None)
     }
 
     async fn finalize_search_session(
@@ -9804,6 +9933,17 @@ pub trait IndexerClient: Send + Sync {
     ) -> AppResult<Option<ResolvedDownloadArtifact>> {
         Ok(None)
     }
+
+    /// Re-run the indexer's `resolve` action for an HTTP-family release right
+    /// before submission, returning the fresh release it describes. `None`
+    /// means the provider declares no such action, so the release is submitted
+    /// as it was listed. The caller refuses a result whose identity changed.
+    async fn resolve_http_release(
+        &self,
+        _release: &scryer_plugin_sdk::PluginHttpRelease,
+    ) -> AppResult<Option<scryer_plugin_sdk::PluginHttpRelease>> {
+        Ok(None)
+    }
 }
 
 /// Persisted identity charged for an observed request, independent of the
@@ -9821,6 +9961,26 @@ impl IndexerAccountingContext {
             indexer_name: config.name.clone(),
         })
     }
+}
+
+/// Config fields a plugin adds for the values entered so far, plus the
+/// static field keys it hides for those values.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PluginDynamicConfigFields {
+    pub fields: Vec<scryer_domain::ConfigFieldDef>,
+    pub hidden_field_keys: Vec<String>,
+}
+
+/// An image challenge an indexer's sign-in asks the operator to solve. The
+/// answer goes in `answer_field_key`. Transient: never persisted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexerLoginChallenge {
+    pub answer_field_key: String,
+    /// One of [`crate::login_challenge_refusal::IMAGE_CONTENT_TYPES`].
+    pub content_type: String,
+    /// The image, standard base64, at most
+    /// [`crate::login_challenge_refusal::MAX_IMAGE_BYTES`] decoded.
+    pub image_base64: String,
 }
 
 pub trait IndexerPluginProvider: Send + Sync {
@@ -9946,6 +10106,11 @@ pub trait IndexerPluginProvider: Send + Sync {
         &self,
         _provider_type: &str,
     ) -> Vec<scryer_domain::ConfigFieldDef> {
+        vec![]
+    }
+    /// Static config field keys whose values decide the plugin's dynamic
+    /// config fields. Empty when the plugin declares none.
+    fn dynamic_config_trigger_keys_for_provider(&self, _provider_type: &str) -> Vec<String> {
         vec![]
     }
     fn plugin_name_for_provider(&self, _provider_type: &str) -> Option<String> {
@@ -10078,6 +10243,14 @@ pub trait DownloadClientPluginProvider: Send + Sync {
     }
     fn accepted_inputs_for_provider(&self, _provider_type: &str) -> Vec<String> {
         vec![]
+    }
+    /// The `http` capability block a download-client plugin declared, when
+    /// it accepts HTTP-family releases.
+    fn http_capabilities_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Option<scryer_domain::DownloadClientHttpCapabilities> {
+        None
     }
     fn upsert_runtime_plugin(&self, plugin: RuntimePluginLoad) -> Result<(), String> {
         let _ = plugin;
@@ -10832,6 +11005,16 @@ pub struct DownloadClientSnapshotOutcome {
     /// neither this set nor `authoritative_client_ids`; per-client status
     /// judges only clients that were actually consulted.
     pub failed_client_ids: std::collections::HashSet<String>,
+    /// Clients whose recent-activity read filled the requested limit, so the
+    /// client may hold older history the snapshot never saw.
+    ///
+    /// The value is the oldest activity timestamp in the returned window
+    /// (clients answer newest first), or `None` when a returned row carried
+    /// no parseable timestamp. A client absent from this map answered with
+    /// fewer rows than the limit, so its returned history is all it holds.
+    /// Absence reasoning must treat a saturated client as covering only the
+    /// period after that timestamp.
+    pub saturated_activity_windows: std::collections::HashMap<String, Option<DateTime<Utc>>>,
     pub any_client_read_succeeded: bool,
 }
 

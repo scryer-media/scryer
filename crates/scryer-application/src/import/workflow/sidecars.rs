@@ -72,10 +72,22 @@ struct DeliveryContext {
     facet: scryer_domain::MediaFacet,
 }
 
+/// Where a plan's subtitles are read from.
+#[derive(Clone, Debug)]
+enum SubtitleOrigin {
+    /// Discovered inside Scryer's owned archive workspace, which also stages
+    /// each copy before it is published.
+    ArchiveWorkspace(PathBuf),
+    /// The exact files the download client reported writing beside the media
+    /// (the native HTTP client). Nothing else in the download is read, and a
+    /// copy is staged beside its destination so it never crosses a volume.
+    ClientReported,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct SceneSubtitlePlan {
     files: BTreeMap<PathBuf, Vec<(PathBuf, String)>>,
-    staging_root: Option<PathBuf>,
+    origin: Option<SubtitleOrigin>,
     context: Option<DeliveryContext>,
     total_bytes: u64,
     unmapped_files: usize,
@@ -88,13 +100,18 @@ impl SceneSubtitlePlan {
         import_id: &str,
         videos: &[(PathBuf, PathBuf)],
         roots: &[PathBuf],
+        client_sidecars: &[PathBuf],
     ) -> AppResult<Self> {
-        let Some(root) = roots
+        let archive_root = roots
             .iter()
             .find(|root| crate::archive_extractor::is_owned_archive_workspace(root))
+            .map(PathBuf::as_path);
+        let Some(root) =
+            archive_root.or_else(|| client_sidecars.iter().find_map(|path| path.parent()))
         else {
             return Ok(Self::default());
         };
+        let from_archive = archive_root.is_some();
         let stream = app
             .runtime
             .imports
@@ -113,8 +130,13 @@ impl SceneSubtitlePlan {
         };
         let videos = videos.to_vec();
         let roots = roots.to_vec();
+        let client_sidecars = client_sidecars.to_vec();
         let result = bounded_blocking(app, control, move |control| {
-            Self::discover_with_control(&videos, &roots, &control)
+            if from_archive {
+                Self::discover_with_control(&videos, &roots, &control)
+            } else {
+                Self::discover_client_reported(&videos, &client_sidecars, &control)
+            }
         })
         .await;
         stream.finish().await;
@@ -157,7 +179,7 @@ impl SceneSubtitlePlan {
             collect_subtitles(root, 0, &mut count, &mut paths, control)?;
         }
         let mut plan = Self {
-            staging_root: Some(staging_root.clone()),
+            origin: Some(SubtitleOrigin::ArchiveWorkspace(staging_root.clone())),
             ..Default::default()
         };
         if paths.len() > MAX_SUBTITLE_FILES {
@@ -185,30 +207,79 @@ impl SceneSubtitlePlan {
             {
                 continue;
             }
-            let matches = videos
-                .iter()
-                .filter_map(|(physical, alias)| {
-                    subtitle_suffix(&path, physical, alias, videos.len() == 1)
-                        .map(|suffix| (physical, suffix))
-                })
-                .collect::<Vec<_>>();
-            match matches.as_slice() {
-                [(source, suffix)] => plan
-                    .files
-                    .entry((*source).clone())
-                    .or_default()
-                    .push((path, suffix.clone())),
-                [] => {
-                    plan.unmapped_files += 1;
-                    tracing::warn!("subtitle skipped because no imported video matches")
-                }
-                _ => {
-                    plan.unmapped_files += 1;
-                    tracing::warn!("subtitle skipped because multiple imported videos match")
-                }
-            }
+            plan.assign(path, videos);
         }
         Ok(plan)
+    }
+
+    /// A plan for the sidecars the download client reported writing beside
+    /// the media. Only those files are read; the rest of the download is not
+    /// walked, so a loose subtitle the client did not write is never imported.
+    fn discover_client_reported(
+        videos: &[(PathBuf, PathBuf)],
+        sidecars: &[PathBuf],
+        control: &IoControl,
+    ) -> AppResult<Self> {
+        let paths = sidecars.iter().cloned().collect::<BTreeSet<_>>();
+        if paths.is_empty() {
+            return Ok(Self::default());
+        }
+        if paths.len() > MAX_SUBTITLE_FILES {
+            return Err(AppError::Validation(
+                "scene subtitle file count limit exceeded; sources preserved".into(),
+            ));
+        }
+        let mut plan = Self {
+            origin: Some(SubtitleOrigin::ClientReported),
+            ..Default::default()
+        };
+        for path in paths {
+            control.check()?;
+            if !scryer_domain::is_subtitle_file(&path) {
+                plan.unmapped_files += 1;
+                tracing::warn!("client-reported sidecar skipped because it is not a subtitle");
+                continue;
+            }
+            let size = open_client_subtitle(&path)?
+                .metadata()
+                .map_err(|error| AppError::Repository(error.to_string()))?
+                .len();
+            if size > MAX_SUBTITLE_BYTES
+                || plan.total_bytes.saturating_add(size) > MAX_TOTAL_SUBTITLE_BYTES
+            {
+                return Err(AppError::Validation(
+                    "scene subtitle aggregate size limit exceeded; sources preserved".into(),
+                ));
+            }
+            plan.total_bytes += size;
+            plan.assign(path, videos);
+        }
+        Ok(plan)
+    }
+
+    fn assign(&mut self, path: PathBuf, videos: &[(PathBuf, PathBuf)]) {
+        let matches = videos
+            .iter()
+            .filter_map(|(physical, alias)| {
+                subtitle_suffix(&path, physical, alias, videos.len() == 1)
+                    .map(|suffix| (physical, suffix))
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [(source, suffix)] => self
+                .files
+                .entry((*source).clone())
+                .or_default()
+                .push((path, suffix.clone())),
+            [] => {
+                self.unmapped_files += 1;
+                tracing::warn!("subtitle skipped because no imported video matches")
+            }
+            _ => {
+                self.unmapped_files += 1;
+                tracing::warn!("subtitle skipped because multiple imported videos match")
+            }
+        }
     }
 
     #[cfg(all(test, feature = "runtime-archives"))]
@@ -320,7 +391,7 @@ impl SceneSubtitlePlan {
             copy_subtitle_with_control(
                 subtitle,
                 &parent.join(name),
-                self.staging_root.as_deref().ok_or_else(|| {
+                self.origin.as_ref().ok_or_else(|| {
                     AppError::Validation("scene subtitle staging workspace is unavailable".into())
                 })?,
                 control,
@@ -579,6 +650,44 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
     Ok(file)
 }
 
+/// Open a sidecar the download client reported, refusing a symlink or reparse
+/// point at that path and anything that is not a regular file.
+fn open_client_subtitle(source: &Path) -> AppResult<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(1).custom_flags(0x0020_0000);
+    }
+    let file = options
+        .open(source)
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(AppError::Validation(
+                "client-reported subtitle is a reparse point".into(),
+            ));
+        }
+    }
+    if !metadata.is_file() {
+        return Err(AppError::Validation(
+            "client-reported subtitle is not a regular file".into(),
+        ));
+    }
+    Ok(file)
+}
+
 fn collect_subtitles(
     root: &Path,
     depth: usize,
@@ -682,19 +791,24 @@ fn copy_subtitle_without_replacement(
     destination: &Path,
     staging_root: &Path,
 ) -> AppResult<()> {
-    copy_subtitle_with_control(source, destination, staging_root, &IoControl::default())
+    copy_subtitle_with_control(
+        source,
+        destination,
+        &SubtitleOrigin::ArchiveWorkspace(staging_root.to_path_buf()),
+        &IoControl::default(),
+    )
 }
 
 fn copy_subtitle_with_control(
     source: &Path,
     destination: &Path,
-    staging_root: &Path,
+    origin: &SubtitleOrigin,
     control: &IoControl,
 ) -> AppResult<()> {
     copy_subtitle_with_writer(
         source,
         destination,
-        staging_root,
+        origin,
         |file, bytes| {
             for chunk in bytes.chunks(16 * 1024) {
                 control
@@ -711,17 +825,30 @@ fn copy_subtitle_with_control(
 fn copy_subtitle_with_writer(
     source: &Path,
     destination: &Path,
-    staging_root: &Path,
+    origin: &SubtitleOrigin,
     writer: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
     control: &IoControl,
 ) -> AppResult<()> {
     control.check()?;
-    if !crate::archive_extractor::is_owned_archive_workspace(staging_root) {
-        return Err(AppError::Validation(
-            "scene subtitle staging requires an owned archive workspace".into(),
-        ));
-    }
-    let mut source_file = open_owned_subtitle(source, staging_root)?;
+    let (mut source_file, staging_root) = match origin {
+        SubtitleOrigin::ArchiveWorkspace(staging_root) => {
+            if !crate::archive_extractor::is_owned_archive_workspace(staging_root) {
+                return Err(AppError::Validation(
+                    "scene subtitle staging requires an owned archive workspace".into(),
+                ));
+            }
+            (
+                open_owned_subtitle(source, staging_root)?,
+                staging_root.as_path(),
+            )
+        }
+        SubtitleOrigin::ClientReported => (
+            open_client_subtitle(source)?,
+            destination.parent().ok_or_else(|| {
+                AppError::Validation("imported video has no parent directory".into())
+            })?,
+        ),
+    };
     let metadata = source_file
         .metadata()
         .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -995,7 +1122,7 @@ mod tests {
         let result = copy_subtitle_with_writer(
             &source,
             &destination,
-            &workspace,
+            &SubtitleOrigin::ArchiveWorkspace(workspace.clone()),
             |file, bytes| {
                 file.write_all(&bytes[..4])?;
                 Err(std::io::Error::other("synthetic write failure"))
@@ -1099,17 +1226,18 @@ mod tests {
         let workspace = workspace(fixture.path());
         let source = write(&workspace, "out/source.srt", b"subtitle");
         let destination = fixture.path().join("final.srt");
+        let origin = SubtitleOrigin::ArchiveWorkspace(workspace.clone());
         let cancelled = IoControl::default();
         cancelled.cancellation.cancel();
         assert!(matches!(
-            copy_subtitle_with_control(&source, &destination, &workspace, &cancelled),
+            copy_subtitle_with_control(&source, &destination, &origin, &cancelled),
             Err(AppError::Canceled(_))
         ));
         let expired = IoControl {
             deadline: Instant::now(),
             ..Default::default()
         };
-        assert!(copy_subtitle_with_control(&source, &destination, &workspace, &expired).is_err());
+        assert!(copy_subtitle_with_control(&source, &destination, &origin, &expired).is_err());
         assert!(!destination.exists());
         assert_eq!(std::fs::read(&source).unwrap(), b"subtitle");
         assert!(validate_disk_allowance(SUBTITLE_DISK_RESERVE_BYTES - 1, 0).is_err());
@@ -1137,5 +1265,121 @@ mod tests {
         .unwrap();
         assert!(plan.is_empty());
         assert_eq!(std::fs::read(outside).unwrap(), b"loose subtitle");
+    }
+}
+
+#[cfg(test)]
+mod client_reported_tests {
+    use super::*;
+
+    fn write(root: &Path, relative: &str, bytes: &[u8]) -> PathBuf {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn names(directory: &Path) -> Vec<String> {
+        let mut names = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn reported_sidecar_lands_beside_the_imported_video_with_its_language() {
+        let fixture = tempfile::tempdir().unwrap();
+        let media = write(fixture.path(), "job/Show.S01E01.mkv", b"video");
+        let subtitle = write(fixture.path(), "job/Show.S01E01.eng.srt", b"subtitle");
+        let destination = write(fixture.path(), "library/Show - S01E01.mkv", b"video");
+        let plan = SceneSubtitlePlan::discover_client_reported(
+            &[(media.clone(), media.clone())],
+            std::slice::from_ref(&subtitle),
+            &IoControl::default(),
+        )
+        .unwrap();
+        assert!(
+            plan.copy_to_with_control(&media, &destination, &IoControl::default())
+                .unwrap()
+        );
+        assert_eq!(
+            std::fs::read(destination.with_file_name("Show - S01E01.eng.srt")).unwrap(),
+            b"subtitle"
+        );
+        assert_eq!(
+            names(&fixture.path().join("library")),
+            ["Show - S01E01.eng.srt", "Show - S01E01.mkv"],
+            "nothing but the subtitle is left beside the video"
+        );
+        assert_eq!(std::fs::read(&subtitle).unwrap(), b"subtitle");
+        assert!(!plan.has_pending_sources(std::iter::once(media.as_path())));
+    }
+
+    #[test]
+    fn only_reported_sidecars_are_read_from_the_download() {
+        let fixture = tempfile::tempdir().unwrap();
+        let media = write(fixture.path(), "job/Show.S01E01.mkv", b"video");
+        let loose = write(fixture.path(), "job/Show.S01E01.fre.srt", b"loose");
+        let destination = write(fixture.path(), "library/Episode.mkv", b"video");
+        let plan = SceneSubtitlePlan::discover_client_reported(
+            &[(media.clone(), media.clone())],
+            &[],
+            &IoControl::default(),
+        )
+        .unwrap();
+        assert!(
+            !plan
+                .copy_to_with_control(&media, &destination, &IoControl::default())
+                .unwrap()
+        );
+        assert!(!destination.with_file_name("Episode.fre.srt").exists());
+        assert_eq!(std::fs::read(loose).unwrap(), b"loose");
+        assert!(!plan.has_pending_sources(std::iter::empty()));
+    }
+
+    #[test]
+    fn an_existing_different_subtitle_is_kept_and_the_source_preserved() {
+        let fixture = tempfile::tempdir().unwrap();
+        let media = write(fixture.path(), "job/Show.S01E01.mkv", b"video");
+        let subtitle = write(fixture.path(), "job/Show.S01E01.eng.srt", b"new");
+        let destination = write(fixture.path(), "library/Episode.mkv", b"video");
+        let existing = write(fixture.path(), "library/Episode.eng.srt", b"operator");
+        let plan = SceneSubtitlePlan::discover_client_reported(
+            &[(media.clone(), media.clone())],
+            std::slice::from_ref(&subtitle),
+            &IoControl::default(),
+        )
+        .unwrap();
+        assert!(
+            plan.copy_to_with_control(&media, &destination, &IoControl::default())
+                .is_err()
+        );
+        assert_eq!(std::fs::read(existing).unwrap(), b"operator");
+        assert_eq!(std::fs::read(subtitle).unwrap(), b"new");
+        assert_eq!(
+            names(&fixture.path().join("library")),
+            ["Episode.eng.srt", "Episode.mkv"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_reported_symlink_is_refused() {
+        let fixture = tempfile::tempdir().unwrap();
+        let media = write(fixture.path(), "job/Show.S01E01.mkv", b"video");
+        let target = write(fixture.path(), "elsewhere/secret.srt", b"secret");
+        let link = fixture.path().join("job/Show.S01E01.eng.srt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(
+            SceneSubtitlePlan::discover_client_reported(
+                &[(media.clone(), media)],
+                &[link],
+                &IoControl::default(),
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read(target).unwrap(), b"secret");
     }
 }

@@ -2,6 +2,7 @@ pub(crate) use crate::*;
 
 pub(crate) mod admission;
 pub(crate) mod anime_numbering;
+pub(crate) mod http_grab;
 pub(crate) mod submission;
 
 /// Contract tests for the shared admission gate. Written from the gate's own

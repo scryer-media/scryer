@@ -67,6 +67,7 @@ pub const EPISODE_BEARING_EVENT_TYPES: &[&str] = &[
     "import_rejected",
     "media_file_analyzed",
     "media_file_renamed",
+    "media_file_reassigned",
     "media_file_deleted",
     "media_file_restored",
     "media_file_upgraded",

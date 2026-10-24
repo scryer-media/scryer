@@ -298,6 +298,7 @@ async fn run_recovery_import_with_submissions(
                 library.name,
                 library.slug,
                 vec![crate::LibraryRootDraft {
+                    id: None,
                     path: root.to_string_lossy().into_owned(),
                     is_default: true,
                 }],

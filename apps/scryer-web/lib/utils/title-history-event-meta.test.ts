@@ -91,6 +91,11 @@ test("every history filter maps to the domain events that produce it", () => {
     "RELEASE_BLOCKLISTED",
     "RELEASE_GRABBED",
   ]);
+  // A file moved to other episodes shows as a rematch, so it refetches too.
+  assert.deepEqual(domainEventTypesForHistoryEvents(["rematched"]), [
+    "MEDIA_FILE_REASSIGNED",
+    "TITLE_REMATCHED",
+  ]);
   assert.deepEqual(domainEventTypesForHistoryEvents(["unknown"]), []);
 });
 

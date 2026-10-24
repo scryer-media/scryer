@@ -2527,6 +2527,7 @@ async fn configure_library_roots(
         .iter()
         .enumerate()
         .map(|(index, path)| LibraryRootDraft {
+            id: None,
             path: path.to_string_lossy().to_string(),
             is_default: index == 0,
         })

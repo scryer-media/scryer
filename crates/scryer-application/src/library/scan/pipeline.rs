@@ -3461,6 +3461,7 @@ mod tests {
                     facet.clone(),
                     "Discovery Fixture".into(),
                     vec![crate::LibraryRootDraft {
+                        id: None,
                         path: path_to_stored_string(root.path()),
                         is_default: true,
                     }],

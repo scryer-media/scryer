@@ -20,7 +20,7 @@ test("catalog activity cards retain the standard success border above global CSS
 });
 
 test("every toast variant paints an opaque surface", () => {
-  // `!bg-[var(--card)]` is the mechanism: Sonner's richColors sets a translucent
+  // `!bg-[var(--background)]` is the mechanism: Sonner's richColors sets a translucent
   // background per variant, and only an important utility beats it. Warning and
   // info used to reach for `bg-[linear-gradient(...),var(--scry-bg)]`, which
   // Tailwind emits as `background-image` — a bare colour is not a valid layer
@@ -28,10 +28,10 @@ test("every toast variant paints an opaque surface", () => {
   // default showed.
   for (const variant of ["success", "error", "warning", "info"]) {
     assert.ok(
-      new RegExp(`${variant}:\\s*\\n?\\s*"[^"]*!bg-\\[var\\(--card\\)\\]`).test(
+      new RegExp(`${variant}:\\s*\\n?\\s*"[^"]*!bg-\\[var\\(--background\\)\\]`).test(
         toaster,
       ),
-      `${variant} toast must force the opaque card surface`,
+      `${variant} toast must force the opaque page surface`,
     );
   }
   assert.ok(

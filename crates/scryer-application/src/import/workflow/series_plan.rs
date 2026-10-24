@@ -87,6 +87,7 @@ fn verified_episode_pack(
     catalog_episodes: &[scryer_domain::Episode],
     anime_numbering_bridge: Option<&scryer_domain::AnimeNumberingBridge>,
     acquired_episode_ids: Option<&HashSet<String>>,
+    reference_date: Option<chrono::NaiveDate>,
 ) -> EpisodePackVerification {
     let ReleaseEvidence::ScryerSubmission { scope, .. } = release_evidence else {
         return EpisodePackVerification::NotPack;
@@ -130,7 +131,7 @@ fn verified_episode_pack(
         title,
         catalog_episodes,
         &mut parsed,
-        None,
+        reference_date,
     );
     let exact_episode_ids = match numbering {
         crate::anime_numbering::NumberingResolution::Resolved(candidate) => {
@@ -187,6 +188,7 @@ async fn build_episode_pack_import_plan(
     source_root: &Path,
     video_files: &[ImportVideoFile],
     expected_episode_ids: Option<&HashSet<String>>,
+    reference_date: Option<chrono::NaiveDate>,
 ) -> AppResult<Option<EpisodePackImportPlan>> {
     let catalog_episodes = app
         .services
@@ -212,6 +214,7 @@ async fn build_episode_pack_import_plan(
         &catalog_episodes,
         anime_numbering_bridge.as_ref(),
         expected_episode_ids,
+        reference_date,
     ) {
         EpisodePackVerification::NotPack => return Ok(None),
         EpisodePackVerification::Verified(pack) => pack,
@@ -252,6 +255,7 @@ async fn build_episode_pack_import_plan(
                 source_path,
                 &catalog_episodes,
                 anime_numbering_bridge.as_ref(),
+                reference_date,
             )
         };
         let draft = if matches!(
@@ -498,6 +502,7 @@ fn plan_episode_pack_member(
     source_path: &Path,
     catalog: &[scryer_domain::Episode],
     anime_numbering_bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    reference_date: Option<chrono::NaiveDate>,
 ) -> PlannedMemberDraft {
     let parsed_stem = parsed_pack_member_for_catalog(title, source_path, catalog);
     if has_disc_layout_ancestor(source_root, source_path) {
@@ -572,6 +577,7 @@ fn plan_episode_pack_member(
         anime_numbering_bridge,
         &parsed_stem,
         &identity,
+        reference_date,
     ) {
         Ok(Some(translated)) => {
             let season = translated.season;
@@ -618,6 +624,7 @@ fn translate_pack_member_numbering(
     anime_numbering_bridge: Option<&scryer_domain::AnimeNumberingBridge>,
     parsed_stem: &crate::ParsedReleaseMetadata,
     identity: &crate::ParsedEpisodeMetadata,
+    reference_date: Option<chrono::NaiveDate>,
 ) -> Result<Option<crate::ParsedEpisodeMetadata>, crate::anime_numbering::NumberingResolution> {
     let Some(bridge) = anime_numbering_bridge else {
         return Ok(None);
@@ -634,7 +641,7 @@ fn translate_pack_member_numbering(
         catalog,
         &mut translated,
         &variants,
-        None,
+        reference_date,
     );
     match resolution {
         crate::anime_numbering::NumberingResolution::Resolved(_) => Ok(Some(translated)),
@@ -1708,14 +1715,14 @@ mod series_plan_tests {
 
         // Community S04E20 is official S01E56 (cour 4 starts at official 37).
         assert!(matches!(
-            plan_episode_pack_member(&title, root, &member, &catalog, Some(&bridge)),
+            plan_episode_pack_member(&title, root, &member, &catalog, Some(&bridge), None),
             PlannedMemberDraft::Resolved(ref episodes)
                 if episodes.len() == 1 && episodes[0].id == "ep-56"
         ));
 
         // Without a bridge the member is unresolvable, exactly as today.
         assert!(!matches!(
-            plan_episode_pack_member(&title, root, &member, &catalog, None),
+            plan_episode_pack_member(&title, root, &member, &catalog, None, None),
             PlannedMemberDraft::Resolved(_)
         ));
     }
@@ -1767,7 +1774,7 @@ mod series_plan_tests {
             .join("Season 01")
             .join("Lantern Verge - S01E05 - 1080p WEB-DL-FIXTUREGRP.mkv");
 
-        let planned = plan_episode_pack_member(&title, root, &member, &catalog, Some(&bridge));
+        let planned = plan_episode_pack_member(&title, root, &member, &catalog, Some(&bridge), None);
         match planned {
             PlannedMemberDraft::Resolved(ref episodes) => {
                 assert_eq!(episodes.len(), 1);
@@ -1777,7 +1784,7 @@ mod series_plan_tests {
         }
         // And the bridge changed nothing: the answer matches the no-bridge one.
         assert!(matches!(
-            plan_episode_pack_member(&title, root, &member, &catalog, None),
+            plan_episode_pack_member(&title, root, &member, &catalog, None, None),
             PlannedMemberDraft::Resolved(ref episodes)
                 if episodes.len() == 1 && episodes[0].id == "ep-5"
         ));
@@ -1794,6 +1801,87 @@ mod series_plan_tests {
         catalog.season_number = Some(season.to_string());
         catalog.episode_label = Some(format!("S{season:02}E{episode:02}"));
         catalog
+    }
+
+    /// TVDB seasons 2 and 3 of twelve, weekly from 2019-01-06 and 2023-04-02,
+    /// with community cour 3 mapping onto TVDB season 2: `S03E05` is both the
+    /// literal S3E5 and community cour 3 episode 5 (TVDB S2E5, aired
+    /// 2019-02-03).
+    fn contested_pack_catalog_and_bridge()
+    -> (Vec<scryer_domain::Episode>, scryer_domain::AnimeNumberingBridge) {
+        let mut catalog = Vec::new();
+        for (season, first_aired) in [
+            (2u32, chrono::NaiveDate::from_ymd_opt(2019, 1, 6).expect("date")),
+            (3u32, chrono::NaiveDate::from_ymd_opt(2023, 4, 2).expect("date")),
+        ] {
+            for number in 1..=12u32 {
+                let mut row = catalog_episode_in_season(
+                    &format!("s{season}-e{number}"),
+                    season,
+                    number,
+                    (season - 2) * 12 + number,
+                );
+                row.air_date = Some(
+                    (first_aired + chrono::Duration::days(i64::from(number - 1) * 7))
+                        .format("%Y-%m-%d")
+                        .to_string(),
+                );
+                catalog.push(row);
+            }
+        }
+        let bridge = scryer_domain::AnimeNumberingBridge {
+            source: Default::default(),
+            generated_on: "2026-10-23".to_string(),
+            corroborating_order: None,
+            seasons: vec![scryer_domain::AnimeCommunitySeason {
+                index: 3,
+                anidb_id: None,
+                anilist_id: None,
+                mal_id: None,
+                titles: vec!["Lantern Verge Cour 3".to_string()],
+                ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                    community_episode_start: 1,
+                    community_episode_end: Some(12),
+                    tvdb_season: 2,
+                    tvdb_episode_start: 1,
+                    tvdb_episode_end: Some(12),
+                }],
+                absolute_start: None,
+                contiguous_absolute_start: None,
+                episode_count: Some(12),
+            }],
+        };
+        (catalog, bridge)
+    }
+
+    /// The pack lane hands its reference date to the numbering resolver: with
+    /// no date the contested member keeps its literal episode and is not held,
+    /// and with a completion date near the community target's air date the
+    /// community reading is corroborated.
+    #[test]
+    fn a_pack_members_reference_date_reaches_the_numbering_resolver() {
+        let title = anime_pack_title();
+        let (catalog, bridge) = contested_pack_catalog_and_bridge();
+        let root = Path::new("/downloads/Lantern Verge Batch 1080p WEB-DL-FIXTUREGRP");
+        let member = root.join("Lantern Verge - S03E05 - 1080p WEB-DL-FIXTUREGRP.mkv");
+
+        assert!(matches!(
+            plan_episode_pack_member(&title, root, &member, &catalog, Some(&bridge), None),
+            PlannedMemberDraft::Resolved(ref episodes)
+                if episodes.len() == 1 && episodes[0].id == "s3-e5"
+        ));
+        assert!(matches!(
+            plan_episode_pack_member(
+                &title,
+                root,
+                &member,
+                &catalog,
+                Some(&bridge),
+                chrono::NaiveDate::from_ymd_opt(2019, 2, 5),
+            ),
+            PlannedMemberDraft::Resolved(ref episodes)
+                if episodes.len() == 1 && episodes[0].id == "s2-e5"
+        ));
     }
 
     fn declared_season_pack(season: Option<u32>) -> VerifiedEpisodePack {
@@ -1824,7 +1912,7 @@ mod series_plan_tests {
             },
         };
         let EpisodePackVerification::Verified(pack) =
-            verified_episode_pack(&evidence, &title, &catalog, Some(&bridge), None)
+            verified_episode_pack(&evidence, &title, &catalog, Some(&bridge), None, None)
         else {
             panic!("closed cour should verify");
         };
@@ -1839,6 +1927,7 @@ mod series_plan_tests {
                 &catalog,
                 Some(&bridge),
                 Some(&HashSet::new()),
+                None,
             ),
             EpisodePackVerification::Unresolved
         ));

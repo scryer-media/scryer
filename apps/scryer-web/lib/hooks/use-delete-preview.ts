@@ -1,6 +1,8 @@
 import * as React from "react";
 import { useClient } from "urql";
 import { graphQlErrorExtension } from "@/lib/graphql/error-message";
+import { useTranslate } from "@/lib/context/translate-context";
+import { deleteErrorMessage } from "@/lib/utils/delete-error-message";
 import type { DeletePreview } from "@/lib/types/delete-preview";
 
 type UseDeletePreviewResult<TPayload = DeletePreview> = {
@@ -32,6 +34,7 @@ export function useDeletePreview<
   selectPreview?: (payload: TPayload) => DeletePreview | null | undefined,
 ): UseDeletePreviewResult<TPayload> {
   const client = useClient();
+  const t = useTranslate();
   const [preview, setPreview] = React.useState<DeletePreview | null>(null);
   const [payload, setPayload] = React.useState<TPayload | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -96,9 +99,7 @@ export function useDeletePreview<
         }
         setPreview(null);
         setPayload(null);
-        setError(
-          nextError instanceof Error ? nextError.message : String(nextError ?? "Unknown error"),
-        );
+        setError(deleteErrorMessage(nextError, t, t("status.apiError")));
         setErrorReason(graphQlErrorExtension(nextError, "VALIDATION_ERROR", "reason"));
       })
       .finally(() => {
@@ -110,7 +111,7 @@ export function useDeletePreview<
     return () => {
       cancelled = true;
     };
-  }, [client, enabled, fieldName, query, stableVariables]);
+  }, [client, enabled, fieldName, query, stableVariables, t]);
 
   return { preview, payload, loading, error, errorReason };
 }

@@ -4,6 +4,7 @@ import type {
   DownloadImportStatus,
   DownloadQueueItem,
 } from "@/lib/types";
+import type { Translate } from "@/components/root/types";
 
 export function importRetrySucceeded(
   result: { decision?: string; skipReason?: string | null } | null | undefined,
@@ -450,12 +451,20 @@ export function mergeAuthoritativeQueueItems(
   return sortDownloadQueueItems(merged);
 }
 
+const QUEUE_ATTENTION_REASON_KEYS: Readonly<Record<string, string>> = {
+  download_password_retry: "queue.attention.downloadPasswordRetry",
+};
+
 export function buildQueueStatusDetail(
   queueItem: DownloadQueueDisplayStateInput,
+  t?: Translate,
 ): string {
+  const reason = queueItem.attentionReason;
+  const key = reason && Object.hasOwn(QUEUE_ATTENTION_REASON_KEYS, reason)
+    ? QUEUE_ATTENTION_REASON_KEYS[reason] : null;
   const messages = [
     ...(queueItem.trackedStatusMessages ?? []),
-    queueItem.attentionReason,
+    key && t ? t(key) : reason,
     queueItem.deleteErrorMessage,
     queueItem.importErrorMessage,
   ]

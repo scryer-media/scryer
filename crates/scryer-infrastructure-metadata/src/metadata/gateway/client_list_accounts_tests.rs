@@ -1327,7 +1327,9 @@ fn auth_failure_message_format_and_code_set_are_pinned() {
         assert_eq!(auth_failure_code(&error), Some(*code));
         assert_eq!(error.validation_reason(), auth_failure_reason(code));
         match error {
-            AppError::ValidationRefused { message, reason } => {
+            AppError::ValidationRefused {
+                message, reason, ..
+            } => {
                 assert_eq!(message, expected);
                 assert_eq!(
                     reason,

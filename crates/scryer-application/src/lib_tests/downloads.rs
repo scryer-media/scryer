@@ -6,7 +6,7 @@ type DownloadBindingTimes = HashMap<
 >;
 
 #[derive(Default)]
-pub(super) struct RecordingDownloadRegistry {
+pub(crate) struct RecordingDownloadRegistry {
     rows: Arc<Mutex<HashMap<ClientJobLocator, scryer_domain::download_identity::DownloadId>>>,
     binding_times: Arc<Mutex<DownloadBindingTimes>>,
     ended: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
@@ -15,6 +15,9 @@ pub(super) struct RecordingDownloadRegistry {
     failing_bindings: Arc<Mutex<HashSet<ClientJobLocator>>>,
     failing_ends: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
     strict_conflicts: bool,
+    pub(crate) ended_binding_reads: std::sync::atomic::AtomicUsize,
+    pub(crate) fail_ended_binding_reads: std::sync::atomic::AtomicBool,
+    pub(super) password_retry_ids: Mutex<HashSet<scryer_domain::download_identity::DownloadId>>,
     /// Registry transactions the resolver actually entered.
     pub(super) resolutions: Arc<std::sync::atomic::AtomicUsize>,
     /// Batched freshness writes, one entry per `touch_observations` call.
@@ -70,6 +73,16 @@ impl RecordingDownloadRegistry {
         download_id: &scryer_domain::download_identity::DownloadId,
     ) -> bool {
         self.ended.lock().await.contains(download_id)
+    }
+
+    /// End a binding the way explicit queue removal does: the durable
+    /// password-retry fence does not hold it.
+    pub(super) async fn end_binding_ignoring_password_retry(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) {
+        self.password_retry_ids.lock().await.remove(download_id);
+        self.ended.lock().await.insert(*download_id);
     }
 
     async fn fail_binding_lookup(&self, locator: ClientJobLocator) {
@@ -218,16 +231,72 @@ impl DownloadRegistryRepository for RecordingDownloadRegistry {
         }))
     }
 
+    async fn ended_bindings(
+        &self,
+        ids: &[scryer_domain::download_identity::DownloadId],
+    ) -> AppResult<Vec<scryer_domain::download_identity::DownloadId>> {
+        self.ended_binding_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .fail_ended_binding_reads
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository(
+                "synthetic retirement lookup failure".into(),
+            ));
+        }
+        let ended = self.ended.lock().await;
+        Ok(ids
+            .iter()
+            .filter(|id| ended.contains(id))
+            .copied()
+            .collect())
+    }
+
+    async fn bindings_have_password_retry(
+        &self,
+        ids: &[scryer_domain::download_identity::DownloadId],
+    ) -> AppResult<bool> {
+        let retries = self.password_retry_ids.lock().await;
+        Ok(ids.iter().any(|id| retries.contains(id)))
+    }
+
     async fn end_binding(
         &self,
         id: &scryer_domain::download_identity::DownloadId,
     ) -> AppResult<()> {
+        if self.password_retry_ids.lock().await.contains(id) {
+            return Err(AppError::Validation(
+                "synthetic password retry fence preserves the binding".into(),
+            ));
+        }
         if self.failing_ends.lock().await.contains(id) {
             return Err(AppError::Repository(
                 "injected binding end failure".to_string(),
             ));
         }
         self.ended.lock().await.insert(*id);
+        Ok(())
+    }
+
+    async fn end_bindings_for_deleted_title(
+        &self,
+        ids: &[scryer_domain::download_identity::DownloadId],
+    ) -> AppResult<()> {
+        {
+            let failing = self.failing_ends.lock().await;
+            if let Some(id) = ids.iter().find(|id| failing.contains(id)) {
+                return Err(AppError::Repository(format!(
+                    "injected binding end failure for {id}"
+                )));
+            }
+        }
+        let mut retries = self.password_retry_ids.lock().await;
+        let mut ended = self.ended.lock().await;
+        for id in ids {
+            retries.remove(id);
+            ended.insert(*id);
+        }
         Ok(())
     }
 
@@ -3240,6 +3309,7 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
         .lock()
         .await
         .push(scryer_domain::CompletedDownload {
+            subtitle_paths: Vec::new(),
             client_type: "nzbget".into(),
             client_id: config.id.clone(),
             download_client_item_id: item_id.into(),
@@ -5466,6 +5536,7 @@ async fn register_import_fixture_root(app: &AppUseCase, facet: MediaFacet, root:
             library.name.clone(),
             library.slug.clone(),
             vec![LibraryRootDraft {
+                id: None,
                 path: root.to_string_lossy().into_owned(),
                 is_default: true,
             }],
@@ -7194,9 +7265,70 @@ async fn manual_import_lands_content_qualified_extensionless_movie() {
 
 #[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
-async fn automatic_import_still_ignores_an_extensionless_video() {
-    // Content qualification belongs to the manual executor alone: an automatic
-    // import keeps treating an extensionless file as no video at all.
+async fn automatic_import_lands_content_qualified_extensionless_episode() {
+    // Field 2026-10-22: a client delivered a lone Matroska member with no
+    // extension and the automatic import ended "no video files found". The
+    // completed-download discovery content-probes the extensionless file as
+    // manual import does, and the destination takes the probed container's
+    // extension.
+    let FailClosedPackFixture {
+        app,
+        user,
+        title,
+        episode,
+        library_dir: _library_dir,
+        ..
+    } = fail_closed_pack_fixture().await;
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    write_extensionless_video(source_dir.path(), "h264_aac.mkv");
+    let mut completed = series_pack_completed_download(
+        "automatic-extensionless-episode",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.1080p.WEB-DL",
+        source_dir.path(),
+    );
+    // The client reports the job's release name; the member itself is
+    // obfuscated and carries no extension.
+    completed.release_name = Some("Fail.Closed.Pack.S01E01.1080p.WEB-DL".to_string());
+    // Discovery probes the real file; only the import gate's full analysis
+    // stands in for an episode-length source.
+    let _probe = probe_agrees_with_the_name(1920, 1080);
+
+    let result = crate::import::import::import_completed_download(&app, &user, &completed)
+        .await
+        .expect("automatic import should run");
+
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{result:?}"
+    );
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(media_files.len(), 1, "{media_files:?}");
+    assert_eq!(
+        media_files[0].episode_id.as_deref(),
+        Some(episode.id.as_str())
+    );
+    let destination = crate::stored_paths::stored_path_to_path_buf(&media_files[0].file_path);
+    assert_eq!(
+        destination.extension().and_then(|ext| ext.to_str()),
+        Some("mkv"),
+        "{media_files:?}"
+    );
+    assert!(destination.is_file(), "{destination:?}");
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn automatic_import_still_ignores_an_extensionless_non_video() {
+    // Only content the probe identifies as video qualifies: an extensionless
+    // file of anything else keeps the no-video path.
     let FailClosedPackFixture {
         app,
         user,
@@ -7205,9 +7337,16 @@ async fn automatic_import_still_ignores_an_extensionless_video() {
         ..
     } = fail_closed_pack_fixture().await;
     let source_dir = tempfile::tempdir().expect("source tempdir");
-    write_extensionless_video(source_dir.path(), "h264_aac.mkv");
+    let payload = source_dir.path().join("dXRUKoYEAJ58jradJdxMKKxgczVTvt");
+    std::fs::write(&payload, b"not a media container").expect("write payload");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&payload)
+        .expect("open payload")
+        .set_len(PACK_VIDEO_SIZE_BYTES)
+        .expect("size payload above the content-probe floor");
     let completed = series_pack_completed_download(
-        "automatic-extensionless-episode",
+        "automatic-extensionless-non-video",
         &title.id,
         "Fail.Closed.Pack.S01E01.1080p.WEB-DL",
         source_dir.path(),
@@ -9189,6 +9328,301 @@ async fn automatic_import_uses_grabbed_episode_for_absolute_numbered_release() {
         "catalog season/episode numbering must drive the destination: {library_files:?}"
     );
     assert!(source_file.exists());
+}
+
+#[tokio::test]
+async fn automatic_import_names_dated_release_from_assigned_episode_season() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode: template,
+            library_dir,
+            ..
+        },
+        download_submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let collection = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "2026".into(),
+            Some("Season 2026".into()),
+            None,
+            Some("41".into()),
+            Some("41".into()),
+        )
+        .await
+        .expect("create year-numbered season");
+    let mut episode = template.clone();
+    episode.id = Id::new().0;
+    episode.collection_id = Some(collection.id.clone());
+    episode.season_number = Some("2026".to_string());
+    episode.episode_number = Some("41".to_string());
+    episode.episode_label = Some("S2026E41".to_string());
+    episode.title = Some("Autumn Visit".to_string());
+    episode.air_date = Some("2026-10-11".to_string());
+    app.services
+        .catalog
+        .shows
+        .create_episode(episode.clone())
+        .await
+        .expect("create year-numbered episode");
+
+    // A broadcaster-style title carries only an air date: no season token.
+    let release_title = "Fail Closed Pack vom 11.10.2026 [CHN]";
+    let item_id = "dated-release-year-season";
+    record_pack_identity_submission(
+        &download_submissions,
+        &title.id,
+        item_id,
+        release_title,
+        SubmissionScope::Episode {
+            episode_id: episode.id.clone(),
+        },
+    )
+    .await;
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let job_dir = source_dir
+        .path()
+        .join("Fail_Closed_Pack_vom_11.10.2026_CHN-0f3c9a2e-5b71-4d8e-9c64-2a1b7e9d3f50");
+    std::fs::create_dir_all(&job_dir).expect("create job dir");
+    let source_file = write_pack_video(
+        &job_dir,
+        "Fail_Closed_Pack_vom_11.10.2026_CHN-0f3c9a2e-5b71-4d8e-9c64-2a1b7e9d3f50.mkv",
+    );
+    // The client reports the finished file itself as the output path.
+    let completed = series_pack_completed_download(item_id, &title.id, release_title, &source_file);
+
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("dated completed import should run")
+    };
+
+    assert_eq!(result.decision, scryer_domain::ImportDecision::Imported);
+    assert_eq!(result.episode_ids, vec![episode.id.clone()]);
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list imported dated file");
+    assert_eq!(media_files.len(), 1, "{media_files:?}");
+    assert_eq!(
+        media_files[0].episode_id.as_deref(),
+        Some(episode.id.as_str())
+    );
+    let dest_path = Path::new(&media_files[0].file_path);
+    let season_folder = dest_path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .expect("season folder");
+    assert_eq!(season_folder, "Season 2026", "{}", dest_path.display());
+    let file_name = dest_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("destination file name");
+    assert!(
+        file_name.contains("S2026E41"),
+        "the assigned episode row must drive the destination numbering: {file_name}"
+    );
+    assert_eq!(library_video_file_names(library_dir.path()).len(), 1);
+}
+
+/// An operator-chosen replacement of a dated episode that an earlier import
+/// filed under the wrong season lands in the linked episode's season, not
+/// beside the incumbent it replaces.
+#[tokio::test]
+async fn replacement_import_names_dated_release_from_assigned_episode_season() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode: template,
+            library_dir,
+            ..
+        },
+        download_submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        ..Default::default()
+    })
+    .await;
+    let collection = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "2026".into(),
+            Some("Season 2026".into()),
+            None,
+            Some("41".into()),
+            Some("41".into()),
+        )
+        .await
+        .expect("create year-numbered season");
+    let mut episode = template.clone();
+    episode.id = Id::new().0;
+    episode.collection_id = Some(collection.id.clone());
+    episode.season_number = Some("2026".to_string());
+    episode.episode_number = Some("41".to_string());
+    episode.episode_label = Some("S2026E41".to_string());
+    episode.title = Some("Autumn Visit".to_string());
+    episode.air_date = Some("2026-10-11".to_string());
+    app.services
+        .catalog
+        .shows
+        .create_episode(episode.clone())
+        .await
+        .expect("create year-numbered episode");
+
+    // An earlier import filed this episode under a season it does not have.
+    let wrong_season = library_dir.path().join("Fail Closed Pack").join("Season 1");
+    std::fs::create_dir_all(&wrong_season).expect("create wrong season folder");
+    let incumbent_path = wrong_season.join("Fail Closed Pack - S01E41 - 1080p.mkv");
+    std::fs::File::create(&incumbent_path)
+        .expect("create incumbent")
+        .set_len(PACK_VIDEO_SIZE_BYTES)
+        .expect("size incumbent");
+    let incumbent_id = app
+        .services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: incumbent_path.to_string_lossy().into_owned(),
+            size_bytes: PACK_VIDEO_SIZE_BYTES as i64,
+            role: MediaFileRole::Primary,
+            quality_label: Some("1080p".to_string()),
+            resolution: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert incumbent");
+    app.services
+        .library
+        .media_files
+        .link_file_to_episode(&incumbent_id, &episode.id)
+        .await
+        .expect("link incumbent to episode");
+    app.services
+        .library
+        .media_files
+        .set_media_file_roles_for_episode(&title.id, &episode.id, &incumbent_id, &[])
+        .await
+        .expect("make the incumbent the episode's primary");
+
+    // The native HTTP client names its job with its own item id and carries
+    // the grab's download id back on the completed download, so the import
+    // finds the grab by that id: it is the identity the grab must record.
+    let release_title = "Fail Closed Pack vom 11.10.2026 [CHN]";
+    let item_id = "5c0d7e21-8a43-4f6b-9e12-3b7a6c4d2f80";
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let download_id_wire = download_id.to_wire();
+    let accepted_identity =
+        crate::accepted_download_submission_identity(crate::AcceptedDownloadIdentityInput {
+            initial_download_id: Some(download_id_wire.as_str()),
+            source_kind: Some(DownloadSourceKind::HttpResource),
+            source_hint: Some("https://media.example.invalid/episode-41"),
+            info_hash_hint: None,
+            client_type: Some("http"),
+            client_item_id: Some(item_id),
+            accepted_info_hash: None,
+        });
+    download_submissions
+        .record_submission_with_identity(
+            DownloadSubmission {
+                download_id,
+                title_id: title.id.clone(),
+                purpose: crate::DownloadSubmissionPurpose::ManualReplacement,
+                facet: "series".to_string(),
+                download_client_id: Some("primary".to_string()),
+                download_client_type: "http".to_string(),
+                download_client_item_id: item_id.to_string(),
+                source_hint: Some("https://media.example.invalid/episode-41".to_string()),
+                source_provider_id: None,
+                source_provider_name: None,
+                source_kind: Some(DownloadSourceKind::HttpResource),
+                source_title: Some(release_title.to_string()),
+                info_hash: None,
+                release_size_bytes: None,
+                request_signature: None,
+                scope: SubmissionScope::Episode {
+                    episode_id: episode.id.clone(),
+                },
+                release_listing_json: None,
+            },
+            accepted_identity,
+            None,
+        )
+        .await
+        .expect("record replacement submission");
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let job_dir = source_dir
+        .path()
+        .join("Fail_Closed_Pack_vom_11.10.2026_CHN-0f3c9a2e-5b71-4d8e-9c64-2a1b7e9d3f50");
+    std::fs::create_dir_all(&job_dir).expect("create job dir");
+    let source_file = write_pack_video(
+        &job_dir,
+        "Fail_Closed_Pack_vom_11.10.2026_CHN-0f3c9a2e-5b71-4d8e-9c64-2a1b7e9d3f50.mkv",
+    );
+    let mut completed =
+        series_pack_completed_download(item_id, &title.id, release_title, &source_file);
+    completed.client_type = "http".to_string();
+    completed.release_name = Some(release_title.to_string());
+    completed.download_id = Some(download_id_wire.clone());
+    completed
+        .parameters
+        .push((crate::DOWNLOAD_ID_PARAMETER.to_string(), download_id_wire));
+
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("dated replacement import should run")
+    };
+
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{result:?}"
+    );
+    assert_eq!(result.episode_ids, vec![episode.id.clone()]);
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list replacement file");
+    let replacement = media_files
+        .iter()
+        .find(|file| file.id != incumbent_id)
+        .unwrap_or_else(|| panic!("a replacement row: {media_files:?}"));
+    let dest_path = Path::new(&replacement.file_path);
+    let season_folder = dest_path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .expect("season folder");
+    assert_eq!(season_folder, "Season 2026", "{}", dest_path.display());
+    let file_name = dest_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("destination file name");
+    assert!(
+        file_name.contains("S2026E41"),
+        "the assigned episode row must drive the destination numbering: {file_name}"
+    );
 }
 
 #[tokio::test]
@@ -12140,8 +12574,11 @@ async fn queue_delete_ends_bound_download_when_client_is_unavailable() {
     let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
     let locator = ClientJobLocator::new(Some("client-bound"), "nzbget", "bound-job");
     registry.bind(locator, canonical_download_id).await;
-    let app =
-        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_download_submissions(Arc::new(TrackingDownloadSubmissionRepo::default()))
+    });
 
     let command = app
         .delete_download_queue_item(&user, Some("client-bound"), "NZBGet", "bound-job", false)
@@ -12443,6 +12880,63 @@ async fn queue_delete_registry_miss_or_error_uses_legacy_command_and_still_execu
     let deleted = download_client.deleted_items.lock().await.clone();
     assert!(deleted.contains(&("miss-job".to_string(), false)));
     assert!(deleted.contains(&("error-job".to_string(), false)));
+}
+
+#[tokio::test]
+async fn delayed_canonical_delete_command_preserves_reused_client_item() {
+    let client = Arc::new(StubDownloadClient::default());
+    let commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let command_id = commands
+        .seed_pending(Some("client-reused"), "nzbget", "reused-job", false)
+        .await;
+    let old = scryer_domain::download_identity::DownloadId::new();
+    let new = scryer_domain::download_identity::DownloadId::new();
+    commands
+        .queued
+        .lock()
+        .await
+        .iter_mut()
+        .find(|row| row.id == command_id)
+        .unwrap()
+        .canonical_download_id = Some(old);
+    let (base_app, _) = bootstrap_with_delete_queue(client.clone(), commands.clone());
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    registry
+        .bind_at(
+            ClientJobLocator::new(Some("client-reused"), "nzbget", "reused-job"),
+            new,
+            chrono::Utc::now(),
+            None,
+        )
+        .await;
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let token = tokio_util::sync::CancellationToken::new();
+    let task = tokio::spawn(start_background_download_delete_poller(
+        app,
+        token.child_token(),
+    ));
+    crate::test_wait::wait_until("superseded delete command completes", || async {
+        commands
+            .get(&command_id)
+            .await
+            .is_some_and(|row| row.status == scryer_domain::DownloadQueueDeleteStatus::Completed)
+    })
+    .await;
+    token.cancel();
+    crate::test_wait::within_deadline("delete poller stops", task)
+        .await
+        .unwrap();
+    assert!(client.deleted_items.lock().await.is_empty());
+    assert!(
+        registry
+            .load_binding(&new)
+            .await
+            .unwrap()
+            .unwrap()
+            .ended_at
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -13290,6 +13784,7 @@ async fn disposition_fixture(name: &str, release_title: &str) -> DispositionFixt
             movie_library.name.clone(),
             movie_library.slug.clone(),
             vec![LibraryRootDraft {
+                id: None,
                 path: library_dir.path().to_string_lossy().into_owned(),
                 is_default: true,
             }],
@@ -14870,6 +15365,7 @@ async fn series_movie_link_upgrade_finds_its_incumbent_at_another_path() {
             anime_library.name.clone(),
             anime_library.slug.clone(),
             vec![LibraryRootDraft {
+                id: None,
                 path: library_dir.path().to_string_lossy().into_owned(),
                 is_default: true,
             }],
@@ -18055,9 +18551,14 @@ async fn deleting_a_download_client_clears_its_status_row() {
     let config =
         create_enabled_download_client_config(&app, &user, "Fixture Retired", "nzbget").await;
 
+    let generation = app.runtime.acquisition.download_registry_generation();
     app.delete_download_client_config(&user, &config.id)
         .await
         .expect("delete download client config");
+    assert!(
+        app.runtime.acquisition.download_registry_generation() > generation,
+        "retired client bindings must invalidate tracker reconciliation"
+    );
 
     assert_eq!(
         status.cleared.lock().expect("cleared mutex").as_slice(),

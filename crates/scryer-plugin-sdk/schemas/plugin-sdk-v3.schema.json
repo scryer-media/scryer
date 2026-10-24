@@ -27,6 +27,15 @@
     "resolve_network_endpoints_response": {
       "$ref": "#/$defs/ResolveNetworkEndpointsResponse"
     },
+    "config_fields_request": {
+      "$ref": "#/$defs/ConfigFieldsRequest"
+    },
+    "config_fields_response": {
+      "$ref": "#/$defs/ConfigFieldsResponse"
+    },
+    "login_challenge_response": {
+      "$ref": "#/$defs/LoginChallengeResponse"
+    },
     "indexer_search_plan_request": {
       "$ref": "#/$defs/PluginSearchPlanRequest"
     },
@@ -151,6 +160,9 @@
     "indexer_search_request",
     "indexer_search_response",
     "resolve_network_endpoints_response",
+    "config_fields_request",
+    "config_fields_response",
+    "login_challenge_response",
     "indexer_search_plan_request",
     "indexer_search_strategy_event",
     "indexer_search_plan_summary",
@@ -386,6 +398,11 @@
           "description": "Enumerated selection rendered with a filter box. Same `options` payload\nas `Select`; declare it when the list is long enough that scanning it\nunaided is the wrong ask.",
           "type": "string",
           "const": "filtered_select"
+        },
+        {
+          "description": "Read-only guidance for the operator, not a setting: the form shows the\n`label` and `help_text` as plain text, never an input, and no value is\never saved under its key. It is never required and carries no default\nor options. Added in SDK 3.19.0; a host on an older SDK cannot read it,\nso declare it only from a plugin whose SDK constraint requires 3.19.",
+          "type": "string",
+          "const": "info"
         }
       ]
     },
@@ -397,9 +414,18 @@
       ]
     },
     "ConfigFieldRole": {
-      "type": "string",
-      "enum": [
-        "connection_url"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "connection_url"
+          ]
+        },
+        {
+          "description": "The field that takes the operator's answer to the image challenge the\nplugin's sign-in asks for. While this field is shown, the host asks the\nplugin for the challenge through the\n[`LOGIN_CHALLENGE_ACTION`](crate::command::LOGIN_CHALLENGE_ACTION)\naction and shows the image beside it. Declare it on at most one static\nfield. Added in SDK 3.19.0; a host on an older SDK cannot read it.",
+          "type": "string",
+          "const": "login_challenge_answer"
+        }
       ]
     },
     "PluginHostBindingId": {
@@ -826,7 +852,8 @@
       "enum": [
         "generic",
         "usenet",
-        "torrent"
+        "torrent",
+        "http"
       ]
     },
     "IndexerCapabilities": {
@@ -957,16 +984,47 @@
               "type": "null"
             }
           ]
+        },
+        "http": {
+          "description": "Declared by indexers whose `protocols` include `Http`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IndexerHttpCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dynamic_config_fields": {
+          "description": "The plugin answers the reserved\n[`CONFIG_FIELDS_ACTION`](crate::command::CONFIG_FIELDS_ACTION) action\nwith config fields that depend on the values entered so far. Absent\nkeeps the static `config_fields` list as the whole form, and a host\nolder than SDK 3.18 ignores it the same way.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DynamicConfigFieldsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
     "IndexerProtocol": {
-      "type": "string",
-      "enum": [
-        "usenet",
-        "torrent",
-        "mixed",
-        "unknown"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "usenet",
+            "torrent",
+            "mixed",
+            "unknown"
+          ]
+        },
+        {
+          "description": "Releases fetched over plain HTTP(S): provider pages, direct files,\nHLS or DASH manifests. Carried in `PluginSearchResult.http`.",
+          "type": "string",
+          "const": "http"
+        }
       ]
     },
     "IndexerFeedMode": {
@@ -1185,6 +1243,59 @@
         }
       }
     },
+    "IndexerHttpCapabilities": {
+      "description": "What an HTTP-family indexer's releases offer, so Scryer can tell before\nany search whether a download client can take them.",
+      "type": "object",
+      "properties": {
+        "transports": {
+          "description": "Every transport this indexer's releases may offer. An indexer that\nonly ever emits provider pages lists just `provider_page`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HttpTransport"
+          }
+        },
+        "providers": {
+          "description": "Provider slugs this indexer emits in `PluginHttpRelease.provider`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "HttpTransport": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "direct_file",
+            "hls",
+            "dash"
+          ]
+        },
+        {
+          "description": "The client resolves the provider page itself (yt-dlp style).",
+          "type": "string",
+          "const": "provider_page"
+        }
+      ]
+    },
+    "DynamicConfigFieldsCapability": {
+      "description": "Opt-in to config fields that depend on the values the operator has\nentered so far, such as the settings of a selected tracker definition.\n\nThe host asks the plugin through the reserved\n[`CONFIG_FIELDS_ACTION`](crate::command::CONFIG_FIELDS_ACTION) action,\nsending the current values of `trigger_keys` only. The answer must be a\npure function of those values: the host caches it per plugin version and\ntrigger values, and re-asks only when a trigger value changes. Values the\noperator types into dynamic fields are stored as ordinary config entries\nkeyed by the field key, exactly like static fields.",
+      "type": "object",
+      "properties": {
+        "trigger_keys": {
+          "description": "Keys of static `config_fields` whose values decide the dynamic\nfields. Must be non-empty; keys that do not name a static field are\nignored by the host.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "trigger_keys"
+      ]
+    },
     "PluginScoringPolicy": {
       "type": "object",
       "properties": {
@@ -1384,14 +1495,23 @@
       ]
     },
     "DownloadInputKind": {
-      "type": "string",
-      "enum": [
-        "nzb",
-        "nzb_url",
-        "torrent_file",
-        "torrent_url",
-        "torrent_bytes",
-        "magnet_uri"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "nzb",
+            "nzb_url",
+            "torrent_file",
+            "torrent_url",
+            "torrent_bytes",
+            "magnet_uri"
+          ]
+        },
+        {
+          "description": "An HTTP-family release; the payload is `PluginDownloadSource.http`.",
+          "type": "string",
+          "const": "http_resource"
+        }
       ]
     },
     "DownloadIsolationMode": {
@@ -1475,6 +1595,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/DownloadTorrentCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "http": {
+          "description": "Present only for clients that accept `DownloadInputKind::HttpResource`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DownloadHttpCapabilities"
             },
             {
               "type": "null"
@@ -1591,6 +1722,40 @@
           "default": false
         },
         "client_id_may_differ_from_info_hash": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "DownloadHttpCapabilities": {
+      "description": "What an HTTP-family download client can take from a `PluginHttpRelease`.\n\nScryer routes an `Http` release to a client only when at least one of the\nrelease's offered transports is in `transports`, so a client that cannot\ndrive a provider page must not list `provider_page`.",
+      "type": "object",
+      "properties": {
+        "transports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HttpTransport"
+          }
+        },
+        "providers": {
+          "description": "Providers this client is limited to. Empty means any provider.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "muxes_separate_tracks": {
+          "description": "The client can combine separate audio and video resources itself.",
+          "type": "boolean",
+          "default": false
+        },
+        "writes_subtitle_sidecars": {
+          "description": "The client writes subtitle sidecars next to the media file and\nreports them in `PluginCompletedDownload.subtitle_paths`.",
+          "type": "boolean",
+          "default": false
+        },
+        "reports_final_paths": {
+          "description": "Completed downloads carry exact `content_paths`, so the host never has\nto scan the destination directory.",
           "type": "boolean",
           "default": false
         }
@@ -3359,11 +3524,683 @@
           "items": {
             "type": "string"
           }
+        },
+        "http": {
+          "description": "Set when `kind == HttpResource`; absent for every other kind.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpDownloadSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "kind"
       ]
+    },
+    "PluginHttpDownloadSource": {
+      "description": "Everything an HTTP-family download client needs to fetch one release.\n\n`release` is the indexer's description, verbatim, after the host ran the\nindexer's `resolve` action close to submission. `selected` is the host's\nchoice derived from the quality profile and library language settings;\n`policy` names the output and what the host will verify afterwards.",
+      "type": "object",
+      "properties": {
+        "release": {
+          "$ref": "#/$defs/PluginHttpRelease"
+        },
+        "selected": {
+          "$ref": "#/$defs/PluginHttpSelection"
+        },
+        "policy": {
+          "$ref": "#/$defs/PluginHttpPolicy"
+        }
+      },
+      "required": [
+        "release",
+        "selected",
+        "policy"
+      ]
+    },
+    "PluginHttpRelease": {
+      "description": "An HTTP-family release as the indexer describes it.\n\n`provider` and `item_id` are the durable identity; signed CDN URLs in\n`resources` are not. A release whose `resources` are empty, or hold only a\n`provider_page` entry, is legitimate: it says a capable client must fetch\nand demux the page itself.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "Provider slug, for example `youtube`, `mediathekviewweb`,\n`internet_archive`.",
+          "type": "string"
+        },
+        "item_id": {
+          "description": "The provider's stable item id.",
+          "type": "string"
+        },
+        "page_url": {
+          "description": "The canonical provider page; stable across resolutions.",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "channel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpChannel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availability": {
+          "$ref": "#/$defs/HttpAvailability",
+          "default": "unknown"
+        },
+        "rights_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpRightsWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "playlist": {
+          "description": "Present only when the item was enumerated from a list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpPlaylistPosition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginHttpResource"
+          }
+        },
+        "resolve": {
+          "description": "An indexer `action` that returns a fresh `PluginHttpRelease` for this\nitem. The host runs it right before submission and again when a\nresource has expired, and refuses the result if `item_id` or\n`page_url` changed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpResolve"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "item_id",
+        "page_url"
+      ]
+    },
+    "PluginHttpChannel": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "HttpAvailability": {
+      "type": "string",
+      "enum": [
+        "available",
+        "expired",
+        "geo_restricted",
+        "auth_required",
+        "drm",
+        "removed",
+        "live",
+        "upcoming",
+        "unknown"
+      ]
+    },
+    "PluginHttpRightsWindow": {
+      "type": "object",
+      "properties": {
+        "starts_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ends_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PluginHttpPlaylistPosition": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "PluginHttpResource": {
+      "type": "object",
+      "properties": {
+        "transport": {
+          "$ref": "#/$defs/HttpTransport"
+        },
+        "role": {
+          "$ref": "#/$defs/HttpResourceRole"
+        },
+        "url": {
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "RFC 3339; set for signed URLs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headers": {
+          "description": "Request headers scoped to this resource's origin only. The host never\nforwards them across a redirect to another origin.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginHttpHeader"
+          }
+        },
+        "auth_ref": {
+          "description": "Name of an indexer config secret the host may attach. Never the\nsecret itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "description": "Exact size when the provider asserts it.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "size_estimate": {
+          "description": "A labelled estimate; never treated as exact.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "validators": {
+          "$ref": "#/$defs/PluginHttpValidators",
+          "default": {}
+        },
+        "container": {
+          "description": "For example `mp4`, `webm`, `mkv`, `ts`, `m4a`, `vtt`, `ttml`, `srt`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "video": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpVideoTrack"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpAudioTrack"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subtitle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpSubtitleTrack"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "separate_tracks": {
+          "description": "Audio and video arrive as distinct resources that need muxing.",
+          "type": "boolean",
+          "default": false
+        },
+        "range_support": {
+          "$ref": "#/$defs/HttpRangeSupport",
+          "default": "unknown"
+        }
+      },
+      "required": [
+        "transport",
+        "role",
+        "url"
+      ]
+    },
+    "HttpResourceRole": {
+      "type": "string",
+      "enum": [
+        "video",
+        "audio",
+        "muxed",
+        "subtitle",
+        "thumbnail"
+      ]
+    },
+    "PluginHttpHeader": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ]
+    },
+    "PluginHttpValidators": {
+      "type": "object",
+      "properties": {
+        "etag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_modified": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checksum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PluginHttpVideoTrack": {
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "bitrate": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "PluginHttpAudioTrack": {
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HttpAudioRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "channels": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "bitrate": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "HttpAudioRole": {
+      "type": "string",
+      "enum": [
+        "original",
+        "dubbed",
+        "audio_description",
+        "commentary"
+      ]
+    },
+    "PluginHttpSubtitleTrack": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HttpSubtitleRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "HttpSubtitleRole": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "sdh",
+        "forced"
+      ]
+    },
+    "HttpRangeSupport": {
+      "type": "string",
+      "enum": [
+        "known_yes",
+        "known_no",
+        "unknown"
+      ]
+    },
+    "PluginHttpResolve": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "Name of the indexer action to invoke.",
+          "type": "string"
+        },
+        "ttl_seconds": {
+          "description": "How long a resolved `resources` list may be trusted.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "PluginHttpSelection": {
+      "type": "object",
+      "properties": {
+        "transport_preference": {
+          "description": "Host order, already filtered to the transports this client declared.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HttpTransport"
+          }
+        },
+        "resources": {
+          "description": "Indices into `release.resources` the host picked. Empty when the\nclient is expected to resolve the provider page itself.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "max_height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "video_codec_preference": {
+          "description": "For example `[\"av1\", \"h265\", \"h264\"]`. Empty means the client default.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "container_preference": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "audio_languages": {
+          "description": "Ordered; the library's required audio languages come first.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "audio_role": {
+          "$ref": "#/$defs/HttpAudioRolePreference",
+          "default": "original"
+        },
+        "subtitle_languages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subtitle_mode": {
+          "$ref": "#/$defs/HttpSubtitleMode",
+          "default": "none"
+        },
+        "playlist_policy": {
+          "$ref": "#/$defs/HttpPlaylistPolicy",
+          "default": "single_item"
+        },
+        "clip": {
+          "description": "Reserved. The host never sets it today; clients may ignore it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpClip"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "HttpAudioRolePreference": {
+      "type": "string",
+      "enum": [
+        "original",
+        "any"
+      ]
+    },
+    "HttpSubtitleMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "embedded_only",
+        "sidecar_preferred",
+        "sidecar_required"
+      ]
+    },
+    "HttpPlaylistPolicy": {
+      "type": "string",
+      "enum": [
+        "single_item"
+      ]
+    },
+    "PluginHttpClip": {
+      "type": "object",
+      "properties": {
+        "start_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "end_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "PluginHttpPolicy": {
+      "type": "object",
+      "properties": {
+        "output_basename": {
+          "description": "Host-derived, sanitised, unique per download id. Clients name the\noutput after it and add only an extension.",
+          "type": "string"
+        },
+        "expected_duration_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "expected_size_bytes": {
+          "description": "Exact only when the indexer reported an exact size.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "verify": {
+          "$ref": "#/$defs/PluginHttpVerify",
+          "default": {
+            "min_duration_ratio": 0.949999988079071,
+            "require_video": true
+          }
+        }
+      },
+      "required": [
+        "output_basename"
+      ]
+    },
+    "PluginHttpVerify": {
+      "type": "object",
+      "properties": {
+        "min_duration_ratio": {
+          "description": "The completed media must run at least this fraction of\n`expected_duration_seconds` when that is known.",
+          "type": "number",
+          "format": "float",
+          "default": 0.949999988079071
+        },
+        "require_video": {
+          "type": "boolean",
+          "default": true
+        }
+      }
     },
     "PluginDownloadRelease": {
       "type": "object",
@@ -6536,6 +7373,17 @@
             "null"
           ],
           "format": "int64"
+        },
+        "http": {
+          "description": "Set only when `protocol == Some(IndexerProtocol::Http)`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpRelease"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -6584,8 +7432,10 @@
       ]
     },
     "PluginErrorCode": {
+      "description": "What kind of failure a plugin is reporting. Open: any snake_case code is valid, and a code is API once a released plugin sends it. The well-known codes are listed in `examples`; hosts treat any other code like `permanent`.",
       "type": "string",
-      "enum": [
+      "pattern": "^[a-z0-9_]+$",
+      "examples": [
         "invalid_config",
         "auth_failed",
         "rate_limited",
@@ -7114,6 +7964,16 @@
             }
           ]
         },
+        "http": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHttpItem"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "total_size_bytes": {
           "type": [
             "integer",
@@ -7338,6 +8198,41 @@
         }
       }
     },
+    "PluginHttpItem": {
+      "description": "Progress detail an HTTP-family client may attach to a queue item.",
+      "type": "object",
+      "properties": {
+        "transport_in_use": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HttpTransport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HttpDownloadPhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "HttpDownloadPhase": {
+      "type": "string",
+      "enum": [
+        "resolving",
+        "downloading",
+        "muxing",
+        "writing_subtitles"
+      ]
+    },
     "PluginResult5": {
       "oneOf": [
         {
@@ -7480,6 +8375,13 @@
           ]
         },
         "content_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subtitle_paths": {
+          "description": "Subtitle sidecars the client wrote next to the media, so they reach\nthe subtitle import path without a directory scan.",
           "type": "array",
           "items": {
             "type": "string"
@@ -10080,7 +10982,7 @@
       ]
     },
     "ResolveNetworkEndpointsResponse": {
-      "description": "Payload of the `resolve_network_endpoints` action. Origins must contain\nonly an HTTP(S) scheme, hostname, and optional port.\nThe host validates these origins, then grants instance-scoped hostname\npermissions using the descriptor network policy. Scheme and port are not\npermission boundaries: other HTTP(S) ports on a declared host are allowed.",
+      "description": "Payload of the `resolve_network_endpoints` action. Origins must contain\nonly an HTTP(S) scheme, hostname, and optional port.\nThe host validates these origins, then grants instance-scoped hostname\npermissions using the descriptor network policy. Scheme and port are not\npermission boundaries: other HTTP(S) ports on a declared host are allowed.\nA declared domain name with at least two labels also covers its subdomains\n(`dl.tracker.example` for `tracker.example`), never a different domain; an\nIP literal or single-label name covers only itself.",
       "type": "object",
       "properties": {
         "origins": {
@@ -10093,6 +10995,79 @@
       "additionalProperties": false,
       "required": [
         "origins"
+      ]
+    },
+    "ConfigFieldsRequest": {
+      "description": "Payload of the [`CONFIG_FIELDS_ACTION`] action.",
+      "type": "object",
+      "properties": {
+        "values": {
+          "description": "Current values of the descriptor's trigger keys, in the same string\nform the plugin reads as host config. A trigger key the operator has\nnot filled in is absent.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      }
+    },
+    "ConfigFieldsResponse": {
+      "description": "Response payload of the [`CONFIG_FIELDS_ACTION`] action.\n\nThe host validates the answer before it reaches a form: keys must be\nunique and must not reuse a static field key, fields are operator-entered\n(no host binding, no connection-URL role), select fields carry options,\nand conditions and option overrides may only name known fields. A\nresponse that breaks a rule is rejected as a whole.",
+      "type": "object",
+      "properties": {
+        "fields": {
+          "description": "Fields shown after the static ones, in this order. `visible_when`,\n`required_when`, `advanced` and the `password` type behave exactly as\non static fields.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigFieldDef"
+          }
+        },
+        "hidden_field_keys": {
+          "description": "Static field keys the form hides for these values, for example\n`username` and `password` when the selected definition uses an API\nkey. A hidden static field is never required. Trigger keys cannot be\nhidden.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "LoginChallengeResponse": {
+      "description": "Response payload of the [`LOGIN_CHALLENGE_ACTION`] action. No\n`captchaRequest` means the sign-in asks for nothing right now.",
+      "type": "object",
+      "properties": {
+        "captchaRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LoginCaptchaRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "LoginCaptchaRequest": {
+      "description": "One challenge for the operator to solve. The host shows only raster images\n(`image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/bmp`) of at\nmost 1 MiB and never stores them.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "The challenge kind. The host understands `image`.",
+          "type": "string"
+        },
+        "contentType": {
+          "description": "The image's media type, as the tracker sent it.",
+          "type": "string"
+        },
+        "imageData": {
+          "description": "The image bytes, standard base64.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "contentType",
+        "imageData"
       ]
     },
     "PluginSearchPlanRequest": {

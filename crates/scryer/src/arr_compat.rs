@@ -676,6 +676,7 @@ mod tests {
                         facet.clone(),
                         format!("{flavor} {label}"),
                         vec![scryer_application::LibraryRootDraft {
+                            id: None,
                             path: format!("/fixture/{flavor}/{label}"),
                             is_default: true,
                         }],

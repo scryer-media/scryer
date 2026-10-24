@@ -1,6 +1,6 @@
 import type { Translate } from "@/components/root/types";
 import type { SetGlobalStatus } from "@/lib/context/global-status-context";
-import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
+import { pluginErrorMessage } from "./plugin-error-message.ts";
 
 /**
  * One rejection bucket from the backend's `NoAutoEligibleRelease` error,
@@ -123,7 +123,7 @@ export function reportAutomaticSearchFailure(
     setGlobalStatus(outcome, { level: "WARNING" });
     return;
   }
-  setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), {
+  setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), {
     level: "ERROR",
   });
 }

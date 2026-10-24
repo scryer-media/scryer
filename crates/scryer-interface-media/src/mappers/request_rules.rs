@@ -81,15 +81,12 @@ pub fn request_vote_value(vote: RequestVote) -> RequestVoteValue {
 fn lifecycle_claim_producer_value(producer: LifecycleClaimProducer) -> LifecycleClaimProducerValue {
     match producer {
         LifecycleClaimProducer::RequestLease => LifecycleClaimProducerValue::RequestLease,
-        LifecycleClaimProducer::RequestPermanent => LifecycleClaimProducerValue::RequestPermanent,
-        LifecycleClaimProducer::OperatorKeep => LifecycleClaimProducerValue::OperatorKeep,
     }
 }
 
 fn lifecycle_claim_kind_value(kind: LifecycleClaimKind) -> LifecycleClaimKindValue {
     match kind {
         LifecycleClaimKind::RetainUntil => LifecycleClaimKindValue::RetainUntil,
-        LifecycleClaimKind::Keep => LifecycleClaimKindValue::Keep,
     }
 }
 

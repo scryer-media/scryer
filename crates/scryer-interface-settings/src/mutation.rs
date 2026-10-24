@@ -781,7 +781,7 @@ impl SettingsMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value."
+            desc = "Complete UI settings to save; omitted or null date_time_format, no_glow, language or table_columns keeps its current value."
         )]
         input: SetMyUiSettingsInput,
     ) -> GqlResult<UiSettingsPayload> {
@@ -789,10 +789,7 @@ impl SettingsMutations {
         let actor = actor_from_ctx(ctx)?;
         let current = app.get_my_ui_settings(&actor).await.map_err(to_gql_error)?;
         let settings = app
-            .set_my_ui_settings(
-                &actor,
-                ui_settings_update_from_input(input, current.date_time_format),
-            )
+            .set_my_ui_settings(&actor, ui_settings_update_from_input(input, &current))
             .await
             .map_err(to_gql_error)?;
         Ok(from_ui_settings(settings))

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Link, type LinkProps } from "react-router";
 import { cn } from "@/lib/utils";
 
 export type UnderlineFilterButtonTone =
@@ -50,16 +51,7 @@ export const UnderlineFilterButton = React.forwardRef<
       type="button"
       aria-label={ariaLabel}
       aria-pressed={ariaPressed}
-      className={cn(
-        "relative inline-flex shrink-0 items-center gap-2 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]",
-        large
-          ? "h-12 rounded-t-[10px] px-4 py-3 text-[15.5px]"
-          : "h-10 px-3.5 py-2.5 text-[13.5px]",
-        selected
-          ? cn("text-white", large && "bg-[rgba(var(--scry-accent-rgb),0.14)]")
-          : cn("text-[var(--scry-muted)] hover:text-[var(--scry-ink2)]", large && "hover:bg-[var(--scry-hover)]"),
-        className,
-      )}
+      className={cn(underlineTabClassName(selected, large), className)}
     >
       {icon ? (
         <span
@@ -80,11 +72,7 @@ export const UnderlineFilterButton = React.forwardRef<
         </span>
       ) : null}
       <span className="whitespace-nowrap">{label}</span>
-      {badge ? (
-        <span className="rounded-[6px] border border-[var(--scry-border2)] px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-[0.06em] text-[var(--scry-muted2)]">
-          {badge}
-        </span>
-      ) : null}
+      {badge ? <UnderlineBadge label={badge} /> : null}
       {typeof count === "number" ? (
         <span
           className={cn(
@@ -98,14 +86,65 @@ export const UnderlineFilterButton = React.forwardRef<
           {count.toLocaleString()}
         </span>
       ) : null}
-      {selected ? (
-        <span
-          className={cn(
-            "absolute bottom-[-1px] rounded-full bg-[var(--scry-accent-ring)]",
-            large ? "left-0 right-0 h-[3px]" : "left-2 right-2 h-[2.5px]",
-          )}
-        />
-      ) : null}
+      {selected ? <UnderlineIndicator large={large} /> : null}
     </button>
   );
 });
+
+function underlineTabClassName(selected: boolean, large: boolean) {
+  return cn(
+    "relative inline-flex shrink-0 items-center gap-2 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]",
+    large
+      ? "h-12 rounded-t-[10px] px-4 py-3 text-[15.5px]"
+      : "h-10 px-3.5 py-2.5 text-[13.5px]",
+    selected
+      ? cn("text-white", large && "bg-[rgba(var(--scry-accent-rgb),0.14)]")
+      : cn("text-[var(--scry-muted)] hover:text-[var(--scry-ink2)]", large && "hover:bg-[var(--scry-hover)]"),
+  );
+}
+
+function UnderlineBadge({ label }: { label: string }) {
+  return (
+    <span className="rounded-[6px] border border-[var(--scry-border2)] px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none tracking-[0.06em] text-[var(--scry-muted2)]">
+      {label}
+    </span>
+  );
+}
+
+function UnderlineIndicator({ large }: { large: boolean }) {
+  return (
+    <span
+      className={cn(
+        "absolute bottom-[-1px] rounded-full bg-[var(--scry-accent-ring)]",
+        large ? "left-0 right-0 h-[3px]" : "left-2 right-2 h-[2.5px]",
+      )}
+    />
+  );
+}
+
+type UnderlineTabLinkProps = Omit<LinkProps, "children" | "role"> & {
+  selected: boolean;
+  label: string;
+  /** A short tag after the label, such as one marking the pane as beta. */
+  badge?: string;
+};
+
+/**
+ * A page section tab that is its own route: the large underline tab, as a
+ * link. Place it in a `role="tablist"` row like the button form.
+ */
+export function UnderlineTabLink({ selected, label, badge, className, ...linkProps }: UnderlineTabLinkProps) {
+  return (
+    <Link
+      {...linkProps}
+      role="tab"
+      aria-selected={selected}
+      aria-current={selected ? "page" : undefined}
+      className={cn(underlineTabClassName(selected, true), className)}
+    >
+      <span className="whitespace-nowrap">{label}</span>
+      {badge ? <UnderlineBadge label={badge} /> : null}
+      {selected ? <UnderlineIndicator large /> : null}
+    </Link>
+  );
+}

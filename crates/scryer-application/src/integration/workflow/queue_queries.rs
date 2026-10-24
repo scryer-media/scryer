@@ -1160,11 +1160,65 @@ impl AppUseCase {
             completed_downloads: snapshot.completed_downloads,
             authoritative_client_ids: snapshot.authoritative_client_ids,
             failed_client_ids: snapshot.failed_client_ids,
+            saturated_activity_windows: snapshot.saturated_activity_windows,
             any_client_read_succeeded: snapshot.any_client_read_succeeded,
         })
     }
 }
+fn password_retry_recovery_queue_item(submission: DownloadSubmission) -> DownloadQueueItem {
+    DownloadQueueItem {
+        id: submission.download_id.to_string(),
+        title_id: Some(submission.title_id.clone()),
+        episode_id: None,
+        title_name: submission.source_title.unwrap_or(submission.title_id),
+        facet: Some(submission.facet),
+        category: None,
+        client_id: submission.download_client_id.unwrap_or_default(),
+        client_name: String::new(),
+        client_type: submission.download_client_type,
+        state: DownloadQueueState::Completed,
+        progress_percent: 0,
+        import_transfer_phase: None,
+        import_transfer_bytes: None,
+        import_transfer_total_bytes: None,
+        import_transfer_started_at: None,
+        import_transfer_updated_at: None,
+        size_bytes: submission.release_size_bytes,
+        remaining_seconds: None,
+        queued_at: None,
+        last_updated_at: None,
+        attention_required: true,
+        attention_reason: Some(crate::DOWNLOAD_PASSWORD_RETRY_REASON.into()),
+        download_client_item_id: submission.download_client_item_id,
+        download_id: Some(submission.download_id.to_wire()),
+        import_status: None,
+        import_type: None,
+        import_error_code: None,
+        import_error_message: None,
+        imported_at: None,
+        delete_status: None,
+        delete_error_message: None,
+        is_scryer_origin: true,
+        source_provider: None,
+        tracked_state: Some(TrackedDownloadState::ImportBlocked),
+        tracked_status: Some(TrackedDownloadStatus::Warning),
+        tracked_status_messages: Vec::new(),
+        tracked_match_type: Some(scryer_domain::TitleMatchType::Submission),
+        seeding: None,
+    }
+}
+
 impl AppUseCase {
+    pub(crate) async fn invalidate_download_queue_read_model(&self) {
+        // Wait for any pre-mutation build before discarding its derived rows.
+        let cache = &self.runtime.acquisition.download_queue_read_model;
+        let _guard = cache.build_lock.lock().await;
+        cache.current.write().await.take();
+        cache
+            .password_retry_recovery_known_empty
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
     async fn current_download_queue_read_model(
         &self,
     ) -> AppResult<(
@@ -1188,6 +1242,7 @@ impl AppUseCase {
         {
             metrics::counter!(crate::services::DOWNLOAD_QUEUE_READ_MODEL_TOTAL, "result" => "hit")
                 .increment(1);
+            snapshot.items = std::sync::Arc::clone(&model.items);
             return Ok((snapshot, model));
         }
 
@@ -1208,11 +1263,44 @@ impl AppUseCase {
         {
             metrics::counter!(crate::services::DOWNLOAD_QUEUE_READ_MODEL_TOTAL, "result" => "hit")
                 .increment(1);
+            snapshot.items = std::sync::Arc::clone(&model.items);
             return Ok((snapshot, model));
         }
 
         metrics::counter!(crate::services::DOWNLOAD_QUEUE_READ_MODEL_TOTAL, "result" => "miss")
             .increment(1);
+        // Activity reads recover durable retry holds after a restart even if
+        // the client has already removed the job. Navigation badge refreshes
+        // rebuild this read model on every native snapshot revision, so an
+        // empty result is remembered (under the build lock) until an explicit
+        // invalidation; only a retry claim, which invalidates, adds a fence.
+        let known_empty = &cache.password_retry_recovery_known_empty;
+        let recovery = if known_empty.load(std::sync::atomic::Ordering::SeqCst) {
+            Vec::new()
+        } else {
+            let recovery = self
+                .services
+                .workflow
+                .download_submissions
+                .list_password_retry_recovery_submissions()
+                .await?;
+            known_empty.store(recovery.is_empty(), std::sync::atomic::Ordering::SeqCst);
+            recovery
+        };
+        if !recovery.is_empty() {
+            let mut items = snapshot.items.to_vec();
+            for submission in recovery {
+                let locator = ClientJobLocator::from_submission(&submission);
+                if items.iter().any(|item| {
+                    item.download_id.as_deref() == Some(submission.download_id.to_wire().as_str())
+                        || download_queue_item_source_identity(item) == locator
+                }) {
+                    continue;
+                }
+                items.push(password_retry_recovery_queue_item(submission));
+            }
+            snapshot.items = items.into();
+        }
         let title_ids = snapshot
             .items
             .iter()

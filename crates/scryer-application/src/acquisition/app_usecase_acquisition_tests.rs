@@ -113,6 +113,7 @@ fn test_search_result_with_decision(
     decision_code: &str,
 ) -> IndexerSearchResult {
     IndexerSearchResult {
+        http: None,
         indexer_id: None,
         source: "indexer".to_string(),
         title: title.to_string(),

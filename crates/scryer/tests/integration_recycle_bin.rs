@@ -191,6 +191,7 @@ async fn seed_library(ctx: &TestContext, name: &str, root: &Path) -> Library {
             MediaFacet::Movie,
             name.to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: root.to_string_lossy().to_string(),
                 is_default: true,
             }],
@@ -218,6 +219,7 @@ async fn seed_library_in_store(ctx: &TestContext, name: &str, root: &Path) -> Li
             updated_at: now,
         },
         vec![LibraryRootDraft {
+            id: None,
             path: root.to_string_lossy().to_string(),
             is_default: true,
         }],
@@ -1281,10 +1283,12 @@ async fn delete_title_purges_recycle_entries_from_all_library_roots() {
             "Movies Multi Root".to_string(),
             vec![
                 LibraryRootDraft {
+                    id: None,
                     path: root_a.path().to_string_lossy().to_string(),
                     is_default: true,
                 },
                 LibraryRootDraft {
+                    id: None,
                     path: root_b.path().to_string_lossy().to_string(),
                     is_default: false,
                 },

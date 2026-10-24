@@ -1,3 +1,4 @@
+import { titleDeleteErrorMessage } from "@/lib/utils/title-delete-error-message";
 import * as React from "react";
 import type { Client } from "urql";
 import { addListExclusionMutation, deleteTitlesMutation } from "@/lib/graphql/mutations";
@@ -318,17 +319,13 @@ export function useBulkDelete({
       }
     } catch (error) {
       setGlobalStatus(
-        withFailureDetail(
-          t("status.bulkTitleDeleteFailed"),
-          batchFailureDetail(error),
-        ),
+        titleDeleteErrorMessage(error, t, t("status.bulkTitleDeleteFailed")),
         { level: "ERROR" },
       );
     } finally {
       setBulkActionBusy(false);
     }
   }, [
-    batchFailureDetail,
     bulkActionBusy,
     bulkDeleteExcludeFromLists,
     bulkDeleteFilesOnDisk,
@@ -347,7 +344,6 @@ export function useBulkDelete({
     setPendingDeletedTitleIds,
     setSelectedTitleIds,
     t,
-    withFailureDetail,
   ]);
 
   const openBulkTitleDelete = React.useCallback(() => {

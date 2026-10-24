@@ -135,6 +135,7 @@ export type EpisodeRowProps = {
   onClearReleaseBlocklistEntry?: (entryId: string) => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
+  onAssignFileToEpisode?: (fileId: string) => void;
   onOpenHistory?: (episode: CollectionEpisode) => void;
   onQueueFromEpisodeSearch?: (episode: CollectionEpisode, release: Release) => Promise<void> | void;
   onQueueAdditionalFromEpisodeSearch?: (episode: CollectionEpisode, release: Release) => Promise<void> | void;
@@ -174,6 +175,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
   onClearReleaseBlocklistEntry,
   onDeleteFile,
   onMakePrimaryFile,
+  onAssignFileToEpisode,
   onOpenHistory,
   onQueueFromEpisodeSearch,
   onQueueAdditionalFromEpisodeSearch,
@@ -301,6 +303,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
       onClearReleaseBlocklistEntry={onClearReleaseBlocklistEntry}
       onDeleteFile={onDeleteFile}
       onMakePrimaryFile={onMakePrimaryFile}
+      onAssignFileToEpisode={onAssignFileToEpisode}
       onRefreshSubtitles={onRefreshSubtitles}
       onTabChange={handleEpisodeTabChange}
       showHistoryTab={Boolean(onOpenHistory)}
@@ -505,6 +508,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
           episode.absoluteNumber,
         )}
         data-episode-id={episode.id}
+        data-ui="episode-row"
         className={`cv-auto-row-sm${episode.monitored ? "" : " opacity-50"}`}
       >
         {selectionCheckbox ? (

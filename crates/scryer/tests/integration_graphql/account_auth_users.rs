@@ -2335,6 +2335,7 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
             updated_at: now,
         },
         vec![LibraryRootDraft {
+            id: None,
             path: media_root.path().to_string_lossy().to_string(),
             is_default: true,
         }],
@@ -2709,6 +2710,7 @@ async fn subtitle_search_and_download_require_manage_subtitles() {
             updated_at: now,
         },
         vec![LibraryRootDraft {
+            id: None,
             path: media_root.path().to_string_lossy().to_string(),
             is_default: true,
         }],

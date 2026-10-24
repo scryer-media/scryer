@@ -3103,6 +3103,7 @@ jobs:
         run: test -s "release-notes/${{ steps.release_meta.outputs.tag_name }}.md"
 
       - name: Publish release
+        id: publish_release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.release_meta.outputs.tag_name }}
@@ -3133,11 +3134,11 @@ jobs:
 
       - name: Update Homebrew tap
         env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_PUSH_TOKEN }}
+          TAP_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
         run: |
           if [ -z "$TAP_TOKEN" ]; then
-            echo "HOMEBREW_TAP_PUSH_TOKEN not set; skipping tap update."
-            exit 0
+            echo "::error::TAP_PUSH_TOKEN is not set; the Homebrew tap was not updated."
+            exit 1
           fi
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#scryer-v}"
@@ -3258,6 +3259,7 @@ jobs:
           fi
 
       - name: Rebuild website for released GraphQL schema
+        if: ${{ !cancelled() && steps.publish_release.outcome == 'success' }}
         continue-on-error: true
         env:
           WEB_TOKEN: ${{ secrets.WEB_DISPATCH_TOKEN }}

@@ -225,6 +225,12 @@ async fn delete_title_removes_title_from_catalog() {
         .await
         .expect("create title");
 
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+        .await
+        .expect("persist fixture administrator permissions");
     app.delete_title(&user, &created.id, false, None)
         .await
         .expect("delete title");
@@ -1006,6 +1012,12 @@ async fn delete_title_queues_targeted_cancel_for_active_submission_only() {
         },
     ];
 
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+        .await
+        .expect("persist fixture administrator permissions");
     app.delete_title(&user, &created.id, false, None)
         .await
         .expect("delete title");
@@ -1144,18 +1156,20 @@ async fn delete_title_ends_bindings_and_forgets_tracked_state_of_its_downloads()
 
     let tracked_responder = tokio::spawn(async move {
         match tracked_rx.recv().await.expect("forget-for-title command") {
-            crate::tracked_downloads::TrackedDownloadCommand::ForgetForTitle {
-                title_id,
+            crate::tracked_downloads::TrackedDownloadCommand::ForgetMany {
+                mut title_ids,
                 download_ids,
-                reply,
-            } => {
-                let _ = reply.send(Ok(download_ids.clone()));
-                (title_id, download_ids)
-            }
+            } => (title_ids.pop().expect("title id"), download_ids),
             _ => panic!("unexpected tracked-download command"),
         }
     });
 
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+        .await
+        .expect("persist fixture administrator permissions");
     app.delete_title(&user, &created.id, false, None)
         .await
         .expect("delete title");
@@ -1212,19 +1226,21 @@ async fn delete_title_then_regrab_of_the_same_torrent_tracks_a_fresh_downloading
     ));
     let (tracked_tx, mut tracked_rx) = tokio::sync::mpsc::channel(4);
     let responder_tracker = tracker.clone();
+    let (forgotten_tx, mut forgotten_rx) = tokio::sync::mpsc::channel(1);
     tokio::spawn(async move {
         while let Some(command) = tracked_rx.recv().await {
             match command {
-                crate::tracked_downloads::TrackedDownloadCommand::ForgetForTitle {
-                    title_id,
+                crate::tracked_downloads::TrackedDownloadCommand::ForgetMany {
+                    title_ids,
                     download_ids,
-                    reply,
                 } => {
-                    let removed = responder_tracker
-                        .lock()
-                        .await
-                        .forget_for_title(&title_id, &download_ids);
-                    let _ = reply.send(Ok(removed));
+                    for title_id in title_ids {
+                        responder_tracker
+                            .lock()
+                            .await
+                            .forget_for_title(&title_id, &download_ids);
+                    }
+                    forgotten_tx.send(()).await.unwrap();
                 }
                 _ => panic!("unexpected tracked-download command"),
             }
@@ -1300,10 +1316,19 @@ async fn delete_title_then_regrab_of_the_same_torrent_tracks_a_fresh_downloading
         "the terminal marker is what revives the dead download's outcome"
     );
 
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+        .await
+        .expect("persist fixture administrator permissions");
     app.delete_title(&user, &deleted.id, false, None)
         .await
         .expect("delete title");
 
+    within_deadline("tracker forget applied", forgotten_rx.recv())
+        .await
+        .expect("notification");
     assert!(tracker.lock().await.get_by_download_id(dead_id).is_none());
     assert!(registry.is_ended(&dead_id).await);
     assert_eq!(
@@ -1401,18 +1426,19 @@ async fn delete_title_ends_the_binding_of_a_grab_the_client_has_not_reported_yet
 
     let tracked_responder = tokio::spawn(async move {
         match tracked_rx.recv().await.expect("forget-for-title command") {
-            crate::tracked_downloads::TrackedDownloadCommand::ForgetForTitle {
-                download_ids,
-                reply,
-                ..
-            } => {
-                let _ = reply.send(Ok(download_ids.clone()));
-                download_ids
-            }
+            crate::tracked_downloads::TrackedDownloadCommand::ForgetMany {
+                download_ids, ..
+            } => download_ids,
             _ => panic!("unexpected tracked-download command"),
         }
     });
 
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+        .await
+        .expect("persist fixture administrator permissions");
     app.delete_title(&user, &created.id, false, None)
         .await
         .expect("delete title");
@@ -1888,4 +1914,842 @@ async fn merge_retires_a_source_download_it_cannot_move_and_still_succeeds() {
     // No failure removes anything from the client.
     assert!(download_queue_commands.queued.lock().await.is_empty());
     assert!(download_client.deleted_requests.lock().await.is_empty());
+}
+
+async fn queue_synthetic_import(
+    imports: &TrackingImportRepo,
+    item_id: &str,
+    payload: serde_json::Value,
+    status: scryer_domain::ImportStatus,
+    canonical: Option<scryer_domain::download_identity::DownloadId>,
+) -> String {
+    let id = imports
+        .queue_import_request(
+            ClientJobLocator::new(Some("primary"), "sabnzbd", item_id),
+            "manual_import".to_string(),
+            payload.to_string(),
+        )
+        .await
+        .unwrap();
+    if status != scryer_domain::ImportStatus::Pending {
+        imports
+            .update_import_status(&id, status, None)
+            .await
+            .unwrap();
+    }
+    if let Some(canonical) = canonical {
+        imports
+            .canonical_ids
+            .lock()
+            .await
+            .insert(id.clone(), canonical);
+    }
+    id
+}
+
+#[tokio::test]
+async fn title_delete_takes_its_pending_imports_and_password_retry_with_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("library");
+    let folder = root.join("Synthetic Retry Movie");
+    std::fs::create_dir_all(&folder).unwrap();
+    let media = folder.join("movie.mkv");
+    std::fs::write(&media, b"synthetic media").unwrap();
+    let other_folder = root.join("Synthetic Bystander Movie");
+    std::fs::create_dir_all(&other_folder).unwrap();
+    let other_media = other_folder.join("movie.mkv");
+    std::fs::write(&other_media, b"synthetic bystander").unwrap();
+    let (base_app, user, _) = bootstrap_with_cutoff_projection_state(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(StoredQualityProfileRepo::default()),
+        Arc::new(MockMediaFileRepo::default()),
+    );
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let imports = Arc::new(TrackingImportRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_submissions(submissions.clone())
+            .with_download_registry(registry.clone())
+            .with_imports(imports.clone())
+    });
+    app.update_media_settings(
+        &user,
+        MediaFacet::Movie,
+        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&root, true)]),
+    )
+    .await
+    .unwrap();
+    let title = app
+        .add_title(&user, synthetic_movie("Synthetic Retry Movie"))
+        .await
+        .unwrap();
+    let other = app
+        .add_title(&user, synthetic_movie("Synthetic Bystander Movie"))
+        .await
+        .unwrap();
+    for (owner, path, file) in [
+        (&title, &folder, &media),
+        (&other, &other_folder, &other_media),
+    ] {
+        app.services
+            .catalog
+            .titles
+            .set_folder_path(&owner.id, &path.to_string_lossy())
+            .await
+            .unwrap();
+        app.services
+            .library
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: owner.id.clone(),
+                file_path: file.to_string_lossy().into_owned(),
+                size_bytes: 15,
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+
+    // The deleted title: a download awaiting a password retry, plus a second
+    // download whose import is being retried automatically.
+    let retry_id = scryer_domain::download_identity::DownloadId::new();
+    let auto_id = scryer_domain::download_identity::DownloadId::new();
+    for (id, job) in [(retry_id, "retry-job"), (auto_id, "auto-job")] {
+        submissions
+            .record_submission(deleted_title_submission(&title.id, id, "sabnzbd", job))
+            .await
+            .unwrap();
+        registry
+            .bind(ClientJobLocator::new(Some("primary"), "sabnzbd", job), id)
+            .await;
+    }
+    registry.password_retry_ids.lock().await.insert(retry_id);
+    let password_import = queue_synthetic_import(
+        &imports,
+        "retry-job",
+        serde_json::json!({}),
+        scryer_domain::ImportStatus::Pending,
+        None,
+    )
+    .await;
+    let auto_import = queue_synthetic_import(
+        &imports,
+        "auto-job",
+        serde_json::json!({}),
+        scryer_domain::ImportStatus::Processing,
+        Some(auto_id),
+    )
+    .await;
+    let manual_import = queue_synthetic_import(
+        &imports,
+        "manual-job",
+        serde_json::json!({ "title_id": title.id }),
+        scryer_domain::ImportStatus::Pending,
+        None,
+    )
+    .await;
+    let finished_import = queue_synthetic_import(
+        &imports,
+        "manual-job",
+        serde_json::json!({ "title_id": title.id }),
+        scryer_domain::ImportStatus::Completed,
+        None,
+    )
+    .await;
+    *imports.manual_import_selection.lock().await = Some(crate::ManualImportSelection {
+        id: "synthetic-selection".to_string(),
+        actor_user_id: user.id.clone(),
+        title_id: title.id.clone(),
+        source_identity: ClientJobLocator::new(Some("primary"), "sabnzbd", "manual-job"),
+        canonical_download_id: None,
+        release_evidence_json: None,
+        trusted_source_root: temp.path().to_string_lossy().into_owned(),
+        archive_workspace_root: None,
+        candidates: Vec::new(),
+    });
+
+    // The bystander title keeps its own fenced download and pending imports.
+    let other_id = scryer_domain::download_identity::DownloadId::new();
+    submissions
+        .record_submission(deleted_title_submission(
+            &other.id,
+            other_id,
+            "sabnzbd",
+            "other-job",
+        ))
+        .await
+        .unwrap();
+    registry
+        .bind(
+            ClientJobLocator::new(Some("primary"), "sabnzbd", "other-job"),
+            other_id,
+        )
+        .await;
+    registry.password_retry_ids.lock().await.insert(other_id);
+    let other_download_import = queue_synthetic_import(
+        &imports,
+        "other-job",
+        serde_json::json!({}),
+        scryer_domain::ImportStatus::Processing,
+        Some(other_id),
+    )
+    .await;
+    let other_manual_import = queue_synthetic_import(
+        &imports,
+        "other-manual-job",
+        serde_json::json!({ "title_id": other.id }),
+        scryer_domain::ImportStatus::Pending,
+        None,
+    )
+    .await;
+
+    let preview = app
+        .preview_delete_title_files(&user, &title.id)
+        .await
+        .unwrap();
+    app.delete_title(
+        &user,
+        &title.id,
+        true,
+        Some(DeleteExecutionConfirmation {
+            preview_fingerprint: preview.fingerprint,
+            typed_confirmation: None,
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(!media.exists());
+    assert!(registry.is_ended(&retry_id).await);
+    assert!(registry.is_ended(&auto_id).await);
+    assert!(!registry.password_retry_ids.lock().await.contains(&retry_id));
+    let remaining = imports
+        .records
+        .lock()
+        .await
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<HashSet<_>>();
+    for gone in [&password_import, &auto_import, &manual_import] {
+        assert!(!remaining.contains(gone), "pending import {gone} survived");
+    }
+    assert!(
+        remaining.contains(&finished_import),
+        "finished import history is kept"
+    );
+    assert!(imports.manual_import_selection.lock().await.is_none());
+
+    // Nothing of the bystander title changed.
+    assert!(remaining.contains(&other_download_import));
+    assert!(remaining.contains(&other_manual_import));
+    assert_eq!(std::fs::read(&other_media).unwrap(), b"synthetic bystander");
+    assert!(!registry.is_ended(&other_id).await);
+    assert!(registry.password_retry_ids.lock().await.contains(&other_id));
+    assert_eq!(
+        submissions.list_for_title(&other.id).await.unwrap().len(),
+        1
+    );
+    assert!(
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&other.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn policy_title_cleanup_retires_password_retry_binding() {
+    let (base_app, user) = bootstrap();
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_submissions(submissions.clone())
+            .with_download_registry(registry.clone())
+    });
+    let title = app
+        .add_title(&user, synthetic_movie("Synthetic Legacy Cleanup"))
+        .await
+        .unwrap();
+    let id = scryer_domain::download_identity::DownloadId::new();
+    submissions
+        .record_submission(deleted_title_submission(
+            &title.id,
+            id,
+            "sabnzbd",
+            "retry-job",
+        ))
+        .await
+        .unwrap();
+    registry.password_retry_ids.lock().await.insert(id);
+    // Library/policy cleanup retires a pending password retry with the title,
+    // so no live binding outlives its submission.
+    app.purge_title_dependent_records(&title.id, (&user).into())
+        .await
+        .unwrap();
+    assert!(registry.is_ended(&id).await);
+    assert!(!registry.password_retry_ids.lock().await.contains(&id));
+    assert!(
+        submissions
+            .list_for_title(&title.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn password_retry_claim_and_title_delete_exclude_each_other() {
+    within_deadline(
+        "password_retry_claim_and_title_delete_exclude_each_other",
+        async {
+            let (base_app, user) = bootstrap();
+            let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+            let (tx, _rx) = tokio::sync::mpsc::channel(1);
+            let app = base_app.with_test_overrides(|services| {
+                services
+                    .with_download_submissions(submissions.clone())
+                    .with_tracked_download_handle(
+                        crate::tracked_downloads::TrackedDownloadHandle::new(tx),
+                    )
+            });
+            let title = app
+                .add_title(&user, synthetic_movie("Synthetic Claim Guard"))
+                .await
+                .unwrap();
+            app.services
+                .catalog
+                .libraries
+                .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+                .await
+                .unwrap();
+            let id = scryer_domain::download_identity::DownloadId::new();
+            let submission = deleted_title_submission(&title.id, id, "sabnzbd", "claim-job");
+            let source = ClientJobLocator::from_submission(&submission);
+            submissions.record_submission(submission).await.unwrap();
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+            *submissions.password_claim_gate.lock().await = Some((entered_tx, release_rx));
+            let guard = app
+                .runtime
+                .jobs
+                .interactive_operation_guards
+                .try_acquire(&format!("title-delete:{}", title.id))
+                .await
+                .unwrap();
+            let error = app
+                .retry_download_password(&user, id, source.clone(), "synthetic-pass")
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::title_delete::IN_PROGRESS)
+            );
+            assert!(
+                submissions.password_claim_gate.lock().await.is_some(),
+                "refused retry never reached claim storage"
+            );
+            drop(guard);
+            let retry_app = app.clone();
+            let retry_user = user.clone();
+            let retry = tokio::spawn(async move {
+                retry_app
+                    .retry_download_password(&retry_user, id, source, "synthetic-pass")
+                    .await
+            });
+            within_deadline("password claim admission entered", entered_rx)
+                .await
+                .unwrap();
+            let error = app
+                .delete_title(&user, &title.id, false, None)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::title_delete::IN_PROGRESS)
+            );
+            release_tx.send(()).unwrap();
+            assert!(
+                within_deadline("password claim finishes", retry)
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+            assert!(
+                app.services
+                    .catalog
+                    .titles
+                    .get_by_id(&title.id)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn explicit_queue_removal_recovers_password_retry_fenced_download() {
+    within_deadline(
+        "explicit_queue_removal_recovers_password_retry_fenced_download",
+        async {
+            let client = Arc::new(StubDownloadClient::default());
+            // A job removed before observation can make any adapter return an error.
+            // Local cancellation must still recover the durable retry fence.
+            client
+                .set_delete_error(Some("synthetic client job is absent"))
+                .await;
+            let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+            let commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+            let (base_app, user) = bootstrap_with_cleanup_tracking_and_queue_commands(
+                client.clone(),
+                submissions.clone(),
+                Arc::new(TrackingPendingReleaseRepo::default()),
+                commands.clone(),
+            );
+            let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+            *submissions.linked_registry.lock().await = Some(registry.clone());
+            let app = base_app
+                .with_test_overrides(|services| services.with_download_registry(registry.clone()));
+            app.services
+                .catalog
+                .libraries
+                .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+                .await
+                .unwrap();
+            let title = app
+                .add_title(&user, synthetic_movie("Synthetic Removed Retry"))
+                .await
+                .unwrap();
+            let id = scryer_domain::download_identity::DownloadId::new();
+            let submission =
+                deleted_title_submission(&title.id, id, "sabnzbd", "removed-retry-job");
+            let locator = ClientJobLocator::from_submission(&submission);
+            submissions
+                .password_retry_recovery
+                .lock()
+                .await
+                .push(submission.clone());
+            submissions.record_submission(submission).await.unwrap();
+            registry.bind(locator.clone(), id).await;
+            registry.password_retry_ids.lock().await.insert(id);
+            assert_eq!(
+                app.list_download_import_page(&user, 50, 0, DownloadImportFilter::All)
+                    .await
+                    .unwrap()
+                    .items
+                    .len(),
+                1
+            );
+            let command = app
+                .delete_download_queue_item(
+                    &user,
+                    locator.client_id.as_deref(),
+                    &locator.client_type,
+                    &locator.item_id,
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(command.canonical_download_id, Some(id));
+            let token = tokio_util::sync::CancellationToken::new();
+            let task = tokio::spawn(start_background_download_delete_poller(
+                app.clone(),
+                token.child_token(),
+            ));
+            crate::test_wait::wait_until("explicit retry cancellation completed", || async {
+                commands.get(&command.id).await.is_some_and(|row| {
+                    row.status == scryer_domain::DownloadQueueDeleteStatus::Completed
+                })
+            })
+            .await;
+            token.cancel();
+            within_deadline("retry cancellation poller stops", task)
+                .await
+                .unwrap();
+            assert!(
+                registry.is_ended(&id).await,
+                "explicit removal ends the fenced binding"
+            );
+            // The recovery row cannot say whether the job is still queued or
+            // already in history, so the client is asked to remove it from both.
+            assert_eq!(
+                *client.delete_attempts.lock().await,
+                vec![
+                    ("removed-retry-job".to_string(), false),
+                    ("removed-retry-job".to_string(), true),
+                ]
+            );
+            assert!(
+                submissions
+                    .find_by_canonical_download_id(&id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                app.list_download_import_page(&user, 50, 0, DownloadImportFilter::All)
+                    .await
+                    .unwrap()
+                    .items
+                    .is_empty(),
+                "successful queue removal invalidates a recovery-only cached Activity row"
+            );
+            app.delete_title(&user, &title.id, false, None)
+                .await
+                .unwrap();
+            assert!(
+                app.services
+                    .catalog
+                    .titles
+                    .get_by_id(&title.id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn recovery_row_removal_requires_permission_in_the_titles_library() {
+    within_deadline(
+        "recovery_row_removal_requires_permission_in_the_titles_library",
+        async {
+            let client = Arc::new(StubDownloadClient::default());
+            let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+            let commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+            let (base_app, user) = bootstrap_with_cleanup_tracking_and_queue_commands(
+                client,
+                submissions.clone(),
+                Arc::new(TrackingPendingReleaseRepo::default()),
+                commands.clone(),
+            );
+            let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+            *submissions.linked_registry.lock().await = Some(registry.clone());
+            let app = base_app
+                .with_test_overrides(|services| services.with_download_registry(registry.clone()));
+            let title = app
+                .add_title(&user, synthetic_movie("Synthetic Guarded Retry"))
+                .await
+                .unwrap();
+            let other_library_title = app
+                .add_title(
+                    &user,
+                    NewTitle {
+                        facet: MediaFacet::Series,
+                        ..synthetic_movie("Synthetic Other Library")
+                    },
+                )
+                .await
+                .unwrap();
+            assert_ne!(title.library_id, other_library_title.library_id);
+            let id = scryer_domain::download_identity::DownloadId::new();
+            let submission =
+                deleted_title_submission(&title.id, id, "sabnzbd", "guarded-retry-job");
+            let locator = ClientJobLocator::from_submission(&submission);
+            submissions
+                .password_retry_recovery
+                .lock()
+                .await
+                .push(submission.clone());
+            submissions.record_submission(submission).await.unwrap();
+            registry.bind(locator.clone(), id).await;
+            registry.password_retry_ids.lock().await.insert(id);
+
+            let outsider = library_permission_user(
+                "retry-outsider",
+                &other_library_title.library_id,
+                &[scryer_domain::LibraryPermission::ManageTitles],
+            );
+            let error = app
+                .delete_download_queue_item(
+                    &outsider,
+                    locator.client_id.as_deref(),
+                    &locator.client_type,
+                    &locator.item_id,
+                    false,
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, AppError::Unauthorized(_)),
+                "unexpected error: {error:?}"
+            );
+            assert_eq!(registry.download_id_for(&locator).await, Some(id));
+            assert!(!registry.is_ended(&id).await);
+            assert!(
+                submissions
+                    .find_by_canonical_download_id(&id)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+
+            let manager = library_permission_user(
+                "retry-manager",
+                &title.library_id,
+                &[scryer_domain::LibraryPermission::ManageTitles],
+            );
+            let command = app
+                .delete_download_queue_item(
+                    &manager,
+                    locator.client_id.as_deref(),
+                    &locator.client_type,
+                    &locator.item_id,
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(command.canonical_download_id, Some(id));
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn password_retry_recovery_is_visible_with_empty_runtime_after_restart() {
+    within_deadline("persisted retry recovery projection", async {
+        let (base_app, user) = bootstrap();
+        let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+        let app = base_app.with_test_overrides(|services| {
+            services.with_download_submissions(submissions.clone())
+        });
+        let title = app
+            .add_title(&user, synthetic_movie("Synthetic Restart Retry"))
+            .await
+            .unwrap();
+        let hidden = app
+            .add_title(
+                &user,
+                NewTitle {
+                    facet: MediaFacet::Series,
+                    ..synthetic_movie("Synthetic Hidden Retry")
+                },
+            )
+            .await
+            .unwrap();
+        let viewer = library_permission_user(
+            "retry-viewer",
+            &title.library_id,
+            &[
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::ResolveImports,
+            ],
+        );
+        submissions
+            .password_retry_recovery
+            .lock()
+            .await
+            .push(deleted_title_submission(
+                &hidden.id,
+                scryer_domain::download_identity::DownloadId::new(),
+                "sabnzbd",
+                "hidden-retry-job",
+            ));
+        let id = scryer_domain::download_identity::DownloadId::new();
+        submissions
+            .password_retry_recovery
+            .lock()
+            .await
+            .push(deleted_title_submission(
+                &title.id,
+                id,
+                "sabnzbd",
+                "missing-retry-job",
+            ));
+        assert!(
+            app.runtime
+                .acquisition
+                .tracked_download_snapshot
+                .read()
+                .await
+                .is_empty()
+        );
+        assert!(
+            app.runtime
+                .acquisition
+                .download_queue_snapshot
+                .snapshot()
+                .await
+                .items
+                .is_empty()
+        );
+        for _ in 0..2 {
+            let rows = app
+                .list_download_import_page(&viewer, 50, 0, DownloadImportFilter::All)
+                .await
+                .unwrap()
+                .items;
+            assert_eq!(
+                rows.len(),
+                1,
+                "initial rebuild and cache hit both retain recovery row"
+            );
+            assert_eq!(rows[0].download_id.as_deref(), Some(id.to_wire().as_str()));
+            assert_eq!(rows[0].download_client_item_id, "missing-retry-job");
+            assert_eq!(rows[0].client_id, "primary");
+            assert_eq!(
+                rows[0].tracked_state,
+                Some(TrackedDownloadState::ImportBlocked)
+            );
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn empty_password_retry_recovery_is_not_requeried_on_native_revisions() {
+    within_deadline("recovery query skipped on native revisions", async {
+        let (base_app, user) = bootstrap();
+        let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+        let app = base_app.with_test_overrides(|services| {
+            services.with_download_submissions(submissions.clone())
+        });
+        let reads = || {
+            submissions
+                .password_retry_recovery_reads
+                .load(std::sync::atomic::Ordering::SeqCst)
+        };
+        let list = || async {
+            app.list_download_import_page(&user, 50, 0, DownloadImportFilter::All)
+                .await
+                .unwrap()
+                .items
+        };
+        assert!(list().await.is_empty());
+        let initial_reads = reads();
+        assert!(initial_reads >= 1, "first build queries recovery rows");
+        let snapshot_cache = &app.runtime.acquisition.download_queue_snapshot;
+        let revision = snapshot_cache.snapshot().await.revision;
+        snapshot_cache.stage_success(Vec::new()).await;
+        snapshot_cache.commit_pending_for_test().await;
+        assert_ne!(snapshot_cache.snapshot().await.revision, revision);
+        assert!(list().await.is_empty());
+        assert_eq!(
+            reads(),
+            initial_reads,
+            "a native-revision-only rebuild reuses the empty recovery result"
+        );
+        app.invalidate_download_queue_read_model().await;
+        assert!(list().await.is_empty());
+        assert_eq!(
+            reads(),
+            initial_reads + 1,
+            "explicit invalidation re-queries recovery rows"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn password_retry_cache_tracks_claim_and_refusal_without_native_revision() {
+    within_deadline("password retry read-model lifecycle", async {
+        let client = Arc::new(StubDownloadClient::default());
+        let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+        submissions
+            .simulate_password_retry
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let (base_app, user) = bootstrap_with_cleanup_tracking(
+            client.clone(),
+            submissions.clone(),
+            Arc::new(TrackingPendingReleaseRepo::default()),
+        );
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let app = base_app.with_test_overrides(|services| {
+            services.with_tracked_download_handle(
+                crate::tracked_downloads::TrackedDownloadHandle::new(tx),
+            )
+        });
+        let title = app
+            .add_title(&user, synthetic_movie("Synthetic Retry Cache"))
+            .await
+            .unwrap();
+        let id = scryer_domain::download_identity::DownloadId::new();
+        let submission = deleted_title_submission(&title.id, id, "sabnzbd", "cache-retry-job");
+        let locator = ClientJobLocator::from_submission(&submission);
+        submissions.record_submission(submission).await.unwrap();
+        assert!(
+            app.list_download_import_page(&user, 50, 0, DownloadImportFilter::All)
+                .await
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        let revision = app
+            .runtime
+            .acquisition
+            .download_queue_snapshot
+            .snapshot()
+            .await
+            .revision;
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *client.password_retry_gate.lock().await = Some((entered_tx, release_rx));
+        let retry_app = app.clone();
+        let retry_user = user.clone();
+        let retry = tokio::spawn(async move {
+            retry_app
+                .retry_download_password(&retry_user, id, locator, "synthetic-pass")
+                .await
+        });
+        within_deadline("retry client entered", entered_rx)
+            .await
+            .unwrap();
+        let held = app
+            .list_download_import_page(&user, 50, 0, DownloadImportFilter::All)
+            .await
+            .unwrap();
+        assert_eq!(
+            held.items.len(),
+            1,
+            "new durable claim invalidates cached empty projection"
+        );
+        assert_eq!(
+            held.items[0].download_id.as_deref(),
+            Some(id.to_wire().as_str())
+        );
+        release_tx.send(()).unwrap();
+        assert!(matches!(
+            within_deadline("retry refusal completed", retry)
+                .await
+                .unwrap()
+                .unwrap(),
+            crate::DownloadClientRetryOutcome::Refused
+        ));
+        assert!(
+            app.list_download_import_page(&user, 50, 0, DownloadImportFilter::All)
+                .await
+                .unwrap()
+                .items
+                .is_empty(),
+            "definitive refusal invalidates cached recovery row"
+        );
+        assert_eq!(
+            app.runtime
+                .acquisition
+                .download_queue_snapshot
+                .snapshot()
+                .await
+                .revision,
+            revision
+        );
+    })
+    .await;
 }

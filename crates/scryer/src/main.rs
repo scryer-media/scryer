@@ -298,7 +298,7 @@ fn restore_datastore_handle() -> RestoreDatastoreHandle {
 fn plugin_type_belongs_to_indexer_family(plugin_type: &str) -> bool {
     matches!(
         plugin_type,
-        "indexer" | "usenet_indexer" | "torrent_indexer"
+        "indexer" | "usenet_indexer" | "torrent_indexer" | "http_indexer"
     )
 }
 

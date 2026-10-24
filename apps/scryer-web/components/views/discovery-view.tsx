@@ -586,7 +586,7 @@ function DiscoveryHero({
           />
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute left-1/2 top-1/2 z-40 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[16px] bg-[var(--scry-accent)] text-primary-foreground opacity-0 shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.45),0_0_36px_rgba(var(--scry-accent-rgb),0.5),0_18px_36px_rgba(0,0,0,0.42)] transition duration-200 group-hover:opacity-100 group-focus-within:opacity-100"
+            className="pointer-events-none absolute left-1/2 top-1/2 z-40 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[16px] bg-[var(--scry-accent)] text-primary-foreground opacity-0 shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.45),0_0_36px_rgba(var(--scry-accent-rgb),calc(0.5*var(--scry-glow))),0_18px_36px_rgba(0,0,0,0.42)] transition duration-200 group-hover:opacity-100 group-focus-within:opacity-100"
           >
             <HeroActionIcon className="h-7 w-7" aria-hidden="true" />
           </span>

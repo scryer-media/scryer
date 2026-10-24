@@ -327,6 +327,29 @@ pub enum UiThemeValue {
     System,
 }
 
+/// Curated appearance saved on the caller's profile.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum UiPaletteValue {
+    /// The original Scryer look, following the selected light or dark theme.
+    Classic,
+    /// The Scryer indigo palette, always dark.
+    ScryerDefault,
+    /// Cool grey with a blue accent, always light.
+    Slate,
+    /// Deep blue-green with a teal accent, always dark.
+    Ocean,
+    /// Dark green with a green accent, always dark.
+    Forest,
+    /// Dark purple with a violet accent, always dark.
+    Plum,
+    /// Warm cream with a burnt-orange accent, always light.
+    Ember,
+    /// Neutral charcoal with a sea-green accent, always dark.
+    Graphite,
+    Papyrus,
+}
+
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 /// Date and time display format preference.
@@ -446,6 +469,8 @@ pub struct UiTableColumnSettingPayload {
 #[derive(SimpleObject, Clone)]
 /// Persisted caller presentation preferences and table-column settings.
 pub struct UiSettingsPayload {
+    /// Selected curated color palette.
+    pub palette: UiPaletteValue,
     /// Selected theme.
     pub theme: UiThemeValue,
     /// Selected date and time format.
@@ -460,6 +485,8 @@ pub struct UiSettingsPayload {
     pub reduce_motion: bool,
     /// Whether the sponsor button is hidden.
     pub hide_sponsor_button: bool,
+    /// Whether the decorative accent glow is turned off.
+    pub no_glow: bool,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
@@ -505,6 +532,8 @@ pub struct UiTableColumnSettingInput {
 #[derive(InputObject, Clone)]
 /// Complete caller presentation-preferences update.
 pub struct SetMyUiSettingsInput {
+    /// Curated color palette; omitted or null preserves the existing selection.
+    pub palette: Option<UiPaletteValue>,
     /// Selected theme.
     pub theme: UiThemeValue,
     /// Optional date and time format; null preserves the existing value.
@@ -519,6 +548,8 @@ pub struct SetMyUiSettingsInput {
     pub reduce_motion: bool,
     /// Whether the sponsor button should be hidden.
     pub hide_sponsor_button: bool,
+    /// Optional glow preference; true turns the decorative accent glow off and null preserves the existing value.
+    pub no_glow: Option<bool>,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.

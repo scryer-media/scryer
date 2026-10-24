@@ -5,7 +5,7 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { DeletePreviewSummary } from "@/components/common/delete-preview-summary";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { deleteErrorMessage } from "@/lib/utils/delete-error-message";
 import { deleteMediaFileMutation } from "@/lib/graphql/mutations";
 import { deleteMediaFilePreviewQuery } from "@/lib/graphql/queries";
 import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
@@ -144,7 +144,7 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
       setTarget(null);
       setTypedConfirmation("");
     } catch (error: unknown) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")), { level: "ERROR" });
+      setGlobalStatus(deleteErrorMessage(error, t, t("status.apiError")), { level: "ERROR" });
     } finally {
       setLoading(false);
     }

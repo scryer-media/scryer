@@ -14,6 +14,7 @@ pub(crate) fn config_field_to_domain(field: &ConfigFieldDef) -> scryer_domain::C
             ConfigFieldType::Number => scryer_domain::ConfigFieldType::Number,
             ConfigFieldType::Path => scryer_domain::ConfigFieldType::Path,
             ConfigFieldType::Tag => scryer_domain::ConfigFieldType::Tag,
+            ConfigFieldType::Info => scryer_domain::ConfigFieldType::Info,
         },
         required: field.required,
         default_value: field.default_value.clone(),
@@ -25,6 +26,9 @@ pub(crate) fn config_field_to_domain(field: &ConfigFieldDef) -> scryer_domain::C
         },
         role: field.role.map(|role| match role {
             ConfigFieldRole::ConnectionUrl => scryer_domain::ConfigFieldRole::ConnectionUrl,
+            ConfigFieldRole::LoginChallengeAnswer => {
+                scryer_domain::ConfigFieldRole::LoginChallengeAnswer
+            }
         }),
         host_binding: field.host_binding.map(host_binding_to_domain),
         options: field
@@ -125,6 +129,56 @@ pub(crate) fn indexer_capabilities_to_domain(
             .response_features
             .as_ref()
             .map(indexer_response_features_to_domain),
+        http: capabilities
+            .http
+            .as_ref()
+            .map(indexer_http_capabilities_to_domain),
+    }
+}
+
+pub(crate) fn http_transport_to_domain(
+    transport: scryer_plugin_sdk::HttpTransport,
+) -> scryer_domain::HttpTransportCapability {
+    match transport {
+        scryer_plugin_sdk::HttpTransport::ProviderPage => {
+            scryer_domain::HttpTransportCapability::ProviderPage
+        }
+        scryer_plugin_sdk::HttpTransport::DirectFile => {
+            scryer_domain::HttpTransportCapability::DirectFile
+        }
+        scryer_plugin_sdk::HttpTransport::Hls => scryer_domain::HttpTransportCapability::Hls,
+        scryer_plugin_sdk::HttpTransport::Dash => scryer_domain::HttpTransportCapability::Dash,
+    }
+}
+
+fn indexer_http_capabilities_to_domain(
+    http: &scryer_plugin_sdk::IndexerHttpCapabilities,
+) -> scryer_domain::IndexerHttpCapabilities {
+    scryer_domain::IndexerHttpCapabilities {
+        transports: http
+            .transports
+            .iter()
+            .copied()
+            .map(http_transport_to_domain)
+            .collect(),
+        providers: http.providers.clone(),
+    }
+}
+
+pub(crate) fn download_client_http_capabilities_to_domain(
+    http: &scryer_plugin_sdk::DownloadHttpCapabilities,
+) -> scryer_domain::DownloadClientHttpCapabilities {
+    scryer_domain::DownloadClientHttpCapabilities {
+        transports: http
+            .transports
+            .iter()
+            .copied()
+            .map(http_transport_to_domain)
+            .collect(),
+        providers: http.providers.clone(),
+        muxes_separate_tracks: http.muxes_separate_tracks,
+        writes_subtitle_sidecars: http.writes_subtitle_sidecars,
+        reports_final_paths: http.reports_final_paths,
     }
 }
 
@@ -134,6 +188,7 @@ fn indexer_protocol_to_domain(
     match protocol {
         IndexerProtocol::Usenet => scryer_domain::IndexerProtocolCapability::Usenet,
         IndexerProtocol::Torrent => scryer_domain::IndexerProtocolCapability::Torrent,
+        IndexerProtocol::Http => scryer_domain::IndexerProtocolCapability::Http,
         IndexerProtocol::Mixed => scryer_domain::IndexerProtocolCapability::Mixed,
         IndexerProtocol::Unknown => scryer_domain::IndexerProtocolCapability::Unknown,
     }

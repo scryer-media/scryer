@@ -6,11 +6,11 @@ use scryer_application::{
     NotificationMediaUpdateTypePayload, NotificationPayload, NotificationSeverityPayload,
 };
 use scryer_domain::NotificationEventType as DomainNotificationEventType;
-use scryer_plugin_sdk::PluginResult;
 use scryer_plugin_sdk::command::{
     PluginActionRequest, PluginCommand, PluginCommandRequest, PluginCommandResult,
     PluginNotificationCommand, PluginNotificationCommandResult,
 };
+use scryer_plugin_sdk::{PluginError, PluginResult};
 use tracing::warn;
 
 use crate::runtime_backing::PluginInstanceSpec;
@@ -121,10 +121,10 @@ impl WasmNotificationClient {
         };
         match result {
             PluginResult::Ok(response) => Ok(Some(response.payload)),
-            PluginResult::Err(error) => Err(AppError::Repository(format!(
-                "notification {EXPORT_NOTIFICATION_ACTION} failed: plugin error {:?}: {}",
-                error.code, error.public_message
-            ))),
+            PluginResult::Err(error) => Err(notification_plugin_failure(
+                &error,
+                EXPORT_NOTIFICATION_ACTION,
+            )),
         }
     }
 }
@@ -152,10 +152,10 @@ impl NotificationClient for WasmNotificationClient {
         let response: PluginNotificationResponse = match result {
             PluginResult::Ok(response) => response,
             PluginResult::Err(error) => {
-                return Err(AppError::Repository(format!(
-                    "notification {EXPORT_NOTIFICATION_SEND} failed: plugin error {:?}: {}",
-                    error.code, error.public_message
-                )));
+                return Err(notification_plugin_failure(
+                    &error,
+                    EXPORT_NOTIFICATION_SEND,
+                ));
             }
         };
 
@@ -477,6 +477,46 @@ fn map_event_type(event_type: DomainNotificationEventType) -> NotificationEventT
         DomainNotificationEventType::ListSyncFailed => NotificationEventType::ListSyncFailed,
         DomainNotificationEventType::ListUnfollowed => NotificationEventType::ListUnfollowed,
         DomainNotificationEventType::Test => NotificationEventType::Test,
+    }
+}
+
+/// A notification plugin's failure, keeping the reason it named so a client
+/// can say why in its own language.
+fn notification_plugin_failure(error: &PluginError, export: &str) -> AppError {
+    AppError::plugin_failed(error, &format!("notification {export} failed"))
+}
+
+#[cfg(test)]
+mod plugin_failure_tests {
+    use super::*;
+    use scryer_plugin_sdk::PluginErrorCode;
+
+    #[test]
+    fn a_failed_send_names_the_plugin_reason_and_keeps_its_sentence() {
+        let error = notification_plugin_failure(
+            &PluginError {
+                code: PluginErrorCode::from("invalid_api_key"),
+                public_message: "the service rejected the token".to_string(),
+                debug_message: Some("token=example-secret".to_string()),
+                retry_after_seconds: None,
+                details: None,
+            },
+            EXPORT_NOTIFICATION_SEND,
+        );
+        let failure = error.plugin_failure().expect("a typed plugin failure");
+        assert_eq!(failure.reason.as_str(), "PLUGIN_INVALID_API_KEY");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("the service rejected the token")
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "notification {EXPORT_NOTIFICATION_SEND} failed: plugin error invalid_api_key: \
+                 the service rejected the token"
+            )
+        );
+        assert!(!error.to_string().contains("example-secret"));
     }
 }
 

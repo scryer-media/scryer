@@ -28,13 +28,14 @@ import {
   runConnectionFeedback,
 } from "@/lib/utils/connection-feedback";
 import {
-  buildDownloadClientBaseUrl,
   buildDownloadClientConfigValues,
+  downloadClientConnectionTestBlocker,
   normalizeDownloadClientDraft,
   buildDownloadClientDraftFromRecord,
   buildDownloadClientTypeOptions,
   ensureDownloadClientTypeOption,
   isBuiltInDownloadClientType,
+  isHostlessDownloadClientType,
   normalizeDownloadClientType,
 } from "@/lib/utils/download-clients";
 import {
@@ -504,7 +505,10 @@ export function SettingsDownloadClientsContainer({
       isEnabled: draft.isEnabled,
     };
 
-    if (!payload.name || !payload.host) {
+    if (
+      !payload.name ||
+      (!payload.host && !isHostlessDownloadClientType(payload.clientType))
+    ) {
       const message = t("settings.downloadClientValidation");
       setGlobalStatus(message);
       return;
@@ -515,6 +519,7 @@ export function SettingsDownloadClientsContainer({
       if (isBuiltInDownloadClientType(payload.clientType)) {
         await runConnectionFeedback({
           setGlobalStatus,
+          t,
           startMessage: t("status.testingDownloadClient", {
             client: selectedDownloadClientLabel,
           }),
@@ -602,10 +607,7 @@ export function SettingsDownloadClientsContainer({
     const draft = normalizeDownloadClientDraft(downloadClientDraft);
     setDownloadClientDraft(draft);
     const payload = {
-      name: draft.name.trim(),
       clientType: normalizeDownloadClientType(draft.clientType),
-      host: draft.host.trim(),
-      baseUrl: buildDownloadClientBaseUrl(draft),
       config: buildDownloadClientConfigValues(
         draft,
         selectedDownloadClientConfigFields,
@@ -614,15 +616,9 @@ export function SettingsDownloadClientsContainer({
       proxyConfigId: draft.proxyConfigId,
     };
 
-    if (!payload.name || !payload.host) {
-      const message = t("settings.downloadClientValidation");
-      setGlobalStatus(message);
-      return;
-    }
-
-    if (!payload.baseUrl) {
-      const message = t("settings.downloadClientBaseUrlRequired");
-      setGlobalStatus(message);
+    const blocker = downloadClientConnectionTestBlocker(draft);
+    if (blocker) {
+      setGlobalStatus(t(blocker));
       return;
     }
 
@@ -630,6 +626,7 @@ export function SettingsDownloadClientsContainer({
     try {
       await runConnectionFeedback({
         setGlobalStatus,
+        t,
         startMessage: t("status.testingDownloadClient", {
           client: selectedDownloadClientLabel,
         }),

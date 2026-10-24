@@ -3199,6 +3199,7 @@ async fn commit_successful_grab_marks_covered_wanted_set_and_supersedes_pending_
     ] {
         pending_releases
             .insert_pending_release(&PendingRelease {
+                http_release: None,
                 id: id.to_string(),
                 wanted_item_id: wanted_item_id.to_string(),
                 title_id: title_id.to_string(),
@@ -5829,6 +5830,7 @@ async fn a_failed_grab_walks_the_saved_search_results_without_querying_an_indexe
     assert_eq!(covered_before.len(), 2, "fixture: both indexers covered");
 
     let saved = |suffix: &str, score: i32| PendingRelease {
+        http_release: None,
         id: Id::new().0,
         wanted_item_id: wanted.id.clone(),
         title_id: title.id.clone(),
@@ -5919,7 +5921,6 @@ async fn a_failed_grab_walks_the_saved_search_results_without_querying_an_indexe
             client_item_id,
             release_title: release(suffix),
             reason: "download failed".to_string(),
-            remove_from_client_if_configured: false,
             blocklist_reason: None,
             skip_reacquire: false,
         }
@@ -7321,6 +7322,7 @@ fn listing_tickets_drop_expired_then_oldest_at_the_cap() {
                 &FixedReleaseIndexerClient::new("Listing.Ticket.2026.1080p.WEB-DL-GRP").release(),
                 now,
             ),
+        http_release: None,
         expires_at,
     };
     let live = now + chrono::Duration::minutes(30);

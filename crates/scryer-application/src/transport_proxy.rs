@@ -118,6 +118,23 @@ pub fn transport_proxied_reqwest_client_with_redirect_policy(
     extra_ca_bundle_pem: &str,
     redirect_policy: reqwest::redirect::Policy,
 ) -> Result<reqwest::Client, String> {
+    transport_proxied_reqwest_client_with_options(
+        config,
+        extra_ca_bundle_pem,
+        redirect_policy,
+        true,
+    )
+}
+
+/// [`transport_proxied_reqwest_client_with_redirect_policy`] that can leave
+/// response bodies undecoded: `decompress: false` is for file transfers that
+/// store bytes against the announced length.
+pub fn transport_proxied_reqwest_client_with_options(
+    config: &ProxyConfig,
+    extra_ca_bundle_pem: &str,
+    redirect_policy: reqwest::redirect::Policy,
+    decompress: bool,
+) -> Result<reqwest::Client, String> {
     let tunnel = config
         .is_tunnel()
         .then(|| crate::tunnel_proxy::resolve_tunnel_endpoint(config))
@@ -133,12 +150,13 @@ pub fn transport_proxied_reqwest_client_with_redirect_policy(
             password: endpoint.credentials.password(),
         })
         .or_else(|| transport_proxy_credentials(config));
-    scryer_outbound_http::transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
+    scryer_outbound_http::transport_proxy_reqwest_client_with_options(
         &url,
         credentials,
         transport_proxy_request_timeout(config),
         extra_ca_bundle_pem,
         redirect_policy,
+        decompress,
     )
     .map_err(|error| transport_proxy_unreachable_message(config, &error))
 }

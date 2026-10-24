@@ -246,6 +246,7 @@ export default function ArrCustomFormatImportDialog({
             </Label>
             <Textarea
               id="settings-rules-arr-custom-format-json"
+              className="bg-field font-[var(--font-code)] text-foreground"
               value={json}
               rows={10}
               disabled={reviewing || translating}

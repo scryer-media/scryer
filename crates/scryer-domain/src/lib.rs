@@ -10,6 +10,8 @@ pub mod lists;
 pub mod title_naming;
 pub mod title_normalization;
 pub use lists::*;
+mod season_numbering;
+pub use season_numbering::season_ordinal_from_title;
 mod title_sort;
 pub mod title_spelling;
 pub use title_sort::{
@@ -1200,6 +1202,64 @@ impl AnimeNumberingBridge {
         })
     }
 
+    /// The season number release groups give a community entry, or `None`
+    /// when nothing about the entry settles it.
+    ///
+    /// An entry's [`AnimeCommunitySeason::index`] is its position in air
+    /// order, and positions drift away from season numbers as soon as a
+    /// season is split into parts or the dataset carries an entry that starts
+    /// no season. So for an anime community bridge the number is derived, in
+    /// this order:
+    ///
+    /// 1. the season ordinal the entry's own names state
+    ///    ([`AnimeCommunitySeason::title_season_ordinal`]);
+    /// 2. else, when the entry's first range starts at episode 1 of a TVDB
+    ///    season, that TVDB season;
+    /// 3. else, when that TVDB season holds more than one entry (one long
+    ///    TVDB season carrying several cours), the entry's 1-based position
+    ///    among the entries of that TVDB season;
+    /// 4. else `None`.
+    ///
+    /// A bridge built from a TVDB alternate or DVD order numbers its entries
+    /// by that order's own seasons, so its index is the season number.
+    pub fn community_season_number(&self, entry: &AnimeCommunitySeason) -> Option<i32> {
+        if self.source.is_tvdb_alternate_order() {
+            return (entry.index > 0).then_some(entry.index);
+        }
+        if let Some(ordinal) = entry.title_season_ordinal() {
+            return Some(ordinal);
+        }
+        let anchor = entry.first_range()?;
+        if anchor.tvdb_season <= 0 {
+            return None;
+        }
+        if anchor.tvdb_episode_start == 1 && anchor.community_episode_start == 1 {
+            return Some(anchor.tvdb_season);
+        }
+        let mut same_tvdb_season = self
+            .seasons
+            .iter()
+            .filter(|season| {
+                season
+                    .first_range()
+                    .is_some_and(|range| range.tvdb_season == anchor.tvdb_season)
+            })
+            .collect::<Vec<_>>();
+        if same_tvdb_season.len() < 2 {
+            return None;
+        }
+        same_tvdb_season.sort_by_key(|season| {
+            (
+                season.first_range().map(|range| range.tvdb_episode_start),
+                season.index,
+            )
+        });
+        let position = same_tvdb_season
+            .iter()
+            .position(|season| *season == entry)?;
+        i32::try_from(position + 1).ok()
+    }
+
     /// Every cour name the bridge carries, as tagged aliases of the title the
     /// bridge belongs to.
     ///
@@ -1268,6 +1328,34 @@ pub struct AnimeCommunitySeasonRange {
 }
 
 impl AnimeCommunitySeason {
+    /// The season ordinal this entry's names state, when they agree on one.
+    ///
+    /// Each name is read with [`season_ordinal_from_title`]; a name stating
+    /// none says nothing, and names stating different seasons settle nothing.
+    pub fn title_season_ordinal(&self) -> Option<i32> {
+        let mut agreed = None;
+        for ordinal in self
+            .titles
+            .iter()
+            .filter_map(|title| season_ordinal_from_title(title))
+        {
+            match agreed {
+                None => agreed = Some(ordinal),
+                Some(previous) if previous == ordinal => {}
+                Some(_) => return None,
+            }
+        }
+        agreed
+    }
+
+    /// The range holding the entry's lowest community episode: where the
+    /// entry starts.
+    pub fn first_range(&self) -> Option<&AnimeCommunitySeasonRange> {
+        self.ranges
+            .iter()
+            .min_by_key(|range| range.community_episode_start)
+    }
+
     /// Whether a release that names this community season may also carry
     /// `season` as its season token without contradicting that name.
     ///
@@ -3118,6 +3206,10 @@ pub struct CompletedDownload {
     /// none; only Weaver does.
     #[serde(default)]
     pub posted_file_names: Vec<PostedFileName>,
+    /// Subtitle sidecar files an HTTP-family plugin client wrote next to the
+    /// media, as absolute paths. Empty for every other client.
+    #[serde(default)]
+    pub subtitle_paths: Vec<String>,
 }
 
 /// A downloaded file's name on disk and the name it was posted with.
@@ -4100,6 +4192,7 @@ pub enum DomainEventType {
     MediaFileImported,
     MediaFileAnalyzed,
     MediaFileRenamed,
+    MediaFileReassigned,
     MediaFileDeleted,
     MediaFileRestored,
     MediaFileUpgraded,
@@ -4163,6 +4256,7 @@ impl DomainEventType {
             Self::MediaFileImported => "media_file_imported",
             Self::MediaFileAnalyzed => "media_file_analyzed",
             Self::MediaFileRenamed => "media_file_renamed",
+            Self::MediaFileReassigned => "media_file_reassigned",
             Self::MediaFileDeleted => "media_file_deleted",
             Self::MediaFileRestored => "media_file_restored",
             Self::MediaFileUpgraded => "media_file_upgraded",
@@ -4226,6 +4320,7 @@ impl DomainEventType {
             "media_file_imported" => Some(Self::MediaFileImported),
             "media_file_analyzed" => Some(Self::MediaFileAnalyzed),
             "media_file_renamed" => Some(Self::MediaFileRenamed),
+            "media_file_reassigned" => Some(Self::MediaFileReassigned),
             "media_file_deleted" => Some(Self::MediaFileDeleted),
             "media_file_restored" => Some(Self::MediaFileRestored),
             "media_file_upgraded" => Some(Self::MediaFileUpgraded),
@@ -4659,6 +4754,29 @@ pub struct MediaFileRenamedEventData {
     pub renamed_count: i32,
     #[serde(default)]
     pub episode_ids: Vec<String>,
+}
+
+/// An operator moved one media file from the episodes it served to other
+/// episodes of the same title, the episode-level counterpart of a title
+/// rematch. The file is renamed to the name its new episodes render.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaFileReassignedEventData {
+    pub title: TitleContextSnapshot,
+    pub file_id: String,
+    /// The file's path before and after the reassignment rename. Equal when
+    /// the file already carried the name the new episodes render.
+    pub previous_path: String,
+    pub file_path: String,
+    /// Episodes the file served before the reassignment.
+    #[serde(default)]
+    pub previous_episode_ids: Vec<String>,
+    /// Episodes the file serves now.
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
+    /// Files that were primary for a target episode and were kept as
+    /// additional files of it.
+    #[serde(default)]
+    pub demoted_file_ids: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5109,6 +5227,7 @@ pub enum DomainEventPayload {
     MediaFileImported(MediaFileImportedEventData),
     MediaFileAnalyzed(MediaFileAnalyzedEventData),
     MediaFileRenamed(MediaFileRenamedEventData),
+    MediaFileReassigned(MediaFileReassignedEventData),
     MediaFileDeleted(MediaFileDeletedEventData),
     MediaFileRestored(MediaFileRestoredEventData),
     MediaFileUpgraded(MediaFileUpgradedEventData),
@@ -5174,6 +5293,7 @@ impl DomainEventPayload {
             Self::MediaFileImported(_) => DomainEventType::MediaFileImported,
             Self::MediaFileAnalyzed(_) => DomainEventType::MediaFileAnalyzed,
             Self::MediaFileRenamed(_) => DomainEventType::MediaFileRenamed,
+            Self::MediaFileReassigned(_) => DomainEventType::MediaFileReassigned,
             Self::MediaFileDeleted(_) => DomainEventType::MediaFileDeleted,
             Self::MediaFileRestored(_) => DomainEventType::MediaFileRestored,
             Self::MediaFileUpgraded(_) => DomainEventType::MediaFileUpgraded,
@@ -6484,54 +6604,42 @@ pub enum LifecycleClaimProducer {
     /// A finite lease approved on a media request.
     #[default]
     RequestLease,
-    /// A "forever" request: a permanent keep.
-    RequestPermanent,
-    /// An administrator pinned the title by hand.
-    OperatorKeep,
 }
 
 impl LifecycleClaimProducer {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::RequestLease => "request_lease",
-            Self::RequestPermanent => "request_permanent",
-            Self::OperatorKeep => "operator_keep",
         }
     }
 
     pub fn parse_storage(value: &str) -> Option<Self> {
         match value {
             "request_lease" => Some(Self::RequestLease),
-            "request_permanent" => Some(Self::RequestPermanent),
-            "operator_keep" => Some(Self::OperatorKeep),
             _ => None,
         }
     }
 }
 
-/// What a lifecycle claim holds (plan 0003 §5).
+/// What a lifecycle claim is (plan 0003 §5).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleClaimKind {
-    /// Holds until `expires_at`, which starts running at first import.
+    /// A time to delete, `expires_at`, which starts running at first import.
     #[default]
     RetainUntil,
-    /// Holds indefinitely.
-    Keep,
 }
 
 impl LifecycleClaimKind {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::RetainUntil => "retain_until",
-            Self::Keep => "keep",
         }
     }
 
     pub fn parse_storage(value: &str) -> Option<Self> {
         match value {
             "retain_until" => Some(Self::RetainUntil),
-            "keep" => Some(Self::Keep),
             _ => None,
         }
     }
@@ -6539,8 +6647,8 @@ impl LifecycleClaimKind {
 
 /// Lifecycle state of one claim (plan 0003 §5).
 ///
-/// Claims are released, never deleted (constitution C3): the terminal states are
-/// history, and only [`Self::Dormant`] and [`Self::Active`] hold anything.
+/// The terminal states are history, and only [`Self::Dormant`] and
+/// [`Self::Active`] are live.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleClaimState {
@@ -6553,7 +6661,8 @@ pub enum LifecycleClaimState {
     Expired,
     /// Withdrawn before it ran out (request canceled, title deleted, admin).
     Released,
-    /// Superseded by a permanent keep.
+    /// Ended by an administrator keeping the title permanently, which leaves
+    /// it with no expiry.
     Converted,
 }
 
@@ -7131,6 +7240,7 @@ fn default_true() -> bool {
 pub enum IndexerProtocolCapability {
     Usenet,
     Torrent,
+    Http,
     Mixed,
     #[default]
     Unknown,
@@ -7364,6 +7474,87 @@ pub struct IndexerProviderCapabilities {
     pub torrent: Option<IndexerTorrentCapabilities>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_features: Option<IndexerResponseFeatures>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<IndexerHttpCapabilities>,
+}
+
+/// How an HTTP-family release may be fetched.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpTransportCapability {
+    ProviderPage,
+    DirectFile,
+    Hls,
+    Dash,
+}
+
+impl HttpTransportCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderPage => "provider_page",
+            Self::DirectFile => "direct_file",
+            Self::Hls => "hls",
+            Self::Dash => "dash",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "provider_page" => Some(Self::ProviderPage),
+            "direct_file" => Some(Self::DirectFile),
+            "hls" => Some(Self::Hls),
+            "dash" => Some(Self::Dash),
+            _ => None,
+        }
+    }
+}
+
+/// What an HTTP-family indexer's releases may offer.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IndexerHttpCapabilities {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transports: Vec<HttpTransportCapability>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
+}
+
+/// What an HTTP-family download client can take.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadClientHttpCapabilities {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transports: Vec<HttpTransportCapability>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
+    #[serde(default)]
+    pub muxes_separate_tracks: bool,
+    #[serde(default)]
+    pub writes_subtitle_sidecars: bool,
+    #[serde(default)]
+    pub reports_final_paths: bool,
+}
+
+impl DownloadClientHttpCapabilities {
+    /// Whether some transport the indexer may emit is one this client takes,
+    /// and the indexer's providers are allowed. An indexer that declares no
+    /// transports is treated as provider-page only.
+    pub fn accepts_indexer(&self, indexer: &IndexerHttpCapabilities) -> bool {
+        let provider_ok = self.providers.is_empty()
+            || indexer.providers.is_empty()
+            || indexer.providers.iter().any(|provider| {
+                self.providers
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(provider))
+            });
+        let offered: &[HttpTransportCapability] = if indexer.transports.is_empty() {
+            &[HttpTransportCapability::ProviderPage]
+        } else {
+            &indexer.transports
+        };
+        provider_ok
+            && offered
+                .iter()
+                .any(|transport| self.transports.contains(transport))
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -7440,6 +7631,8 @@ pub enum ConfigFieldType {
     Number,
     Path,
     Tag,
+    /// Read-only guidance: shown as plain text, never an input, never saved.
+    Info,
 }
 
 impl ConfigFieldType {
@@ -7454,6 +7647,7 @@ impl ConfigFieldType {
             Self::Number => "number",
             Self::Path => "path",
             Self::Tag => "tag",
+            Self::Info => "info",
         }
     }
 
@@ -7468,6 +7662,7 @@ impl ConfigFieldType {
             "number" => Some(Self::Number),
             "path" => Some(Self::Path),
             "tag" => Some(Self::Tag),
+            "info" => Some(Self::Info),
             _ => None,
         }
     }
@@ -7485,18 +7680,22 @@ pub enum ConfigFieldValueSource {
 #[serde(rename_all = "snake_case")]
 pub enum ConfigFieldRole {
     ConnectionUrl,
+    /// Takes the operator's answer to the plugin's sign-in challenge.
+    LoginChallengeAnswer,
 }
 
 impl ConfigFieldRole {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ConnectionUrl => "connection_url",
+            Self::LoginChallengeAnswer => "login_challenge_answer",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "connection_url" => Some(Self::ConnectionUrl),
+            "login_challenge_answer" => Some(Self::LoginChallengeAnswer),
             _ => None,
         }
     }
@@ -8216,6 +8415,41 @@ pub fn normalize_tags(tags: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn http_client_accepts_indexer_by_transport_and_provider() {
+        use super::{
+            DownloadClientHttpCapabilities, HttpTransportCapability, IndexerHttpCapabilities,
+        };
+        let page_only_indexer = IndexerHttpCapabilities {
+            transports: vec![HttpTransportCapability::ProviderPage],
+            providers: vec!["youtube".to_string()],
+        };
+        let undeclared_indexer = IndexerHttpCapabilities::default();
+        let direct_client = DownloadClientHttpCapabilities {
+            transports: vec![HttpTransportCapability::DirectFile],
+            ..DownloadClientHttpCapabilities::default()
+        };
+        let page_client = DownloadClientHttpCapabilities {
+            transports: vec![
+                HttpTransportCapability::ProviderPage,
+                HttpTransportCapability::DirectFile,
+            ],
+            ..DownloadClientHttpCapabilities::default()
+        };
+        let other_provider_client = DownloadClientHttpCapabilities {
+            transports: vec![HttpTransportCapability::ProviderPage],
+            providers: vec!["mediathekviewweb".to_string()],
+            ..DownloadClientHttpCapabilities::default()
+        };
+
+        assert!(!direct_client.accepts_indexer(&page_only_indexer));
+        assert!(!direct_client.accepts_indexer(&undeclared_indexer));
+        assert!(page_client.accepts_indexer(&page_only_indexer));
+        assert!(page_client.accepts_indexer(&undeclared_indexer));
+        assert!(!other_provider_client.accepts_indexer(&page_only_indexer));
+        assert!(other_provider_client.accepts_indexer(&undeclared_indexer));
+    }
+
     use super::*;
 
     #[test]

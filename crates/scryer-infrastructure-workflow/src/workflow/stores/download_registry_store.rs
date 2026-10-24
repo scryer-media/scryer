@@ -145,6 +145,24 @@ impl DownloadRegistryRepository for DownloadRegistryStore {
         .transpose()
     }
 
+    async fn ended_bindings(&self, ids: &[DownloadId]) -> AppResult<Vec<DownloadId>> {
+        let mut ended = Vec::new();
+        for chunk in ids.chunks(256) {
+            let placeholders = vec!["{}"; chunk.len()].join(", ");
+            let query = format!(
+                "SELECT download_id FROM download_client_bindings WHERE ended_at IS NOT NULL AND download_id IN ({placeholders})"
+            );
+            let args = chunk
+                .iter()
+                .map(|id| SqlArg::Text(id.to_string()))
+                .collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &query, &args).await? {
+                ended.push(download_id_from_column(&row, "download_id")?);
+            }
+        }
+        Ok(ended)
+    }
+
     async fn find_active_binding_by_locator(
         &self,
         locator: &ClientJobLocator,
@@ -238,13 +256,66 @@ impl DownloadRegistryRepository for DownloadRegistryStore {
     /// next. Without the terminal marker written here, a listing that predates
     /// one of those deletes would rebind the item and undo the delete.
     async fn end_binding(&self, id: &DownloadId) -> AppResult<()> {
-        let id = id.to_string();
+        self.end_bindings(&[*id]).await
+    }
+
+    async fn bindings_have_password_retry(&self, ids: &[DownloadId]) -> AppResult<bool> {
+        for chunk in ids.chunks(256) {
+            let placeholders = vec!["{}"; chunk.len()].join(", ");
+            let mut args = chunk
+                .iter()
+                .map(|id| SqlArg::Text(id.to_string()))
+                .collect::<Vec<_>>();
+            args.push(SqlArg::Text(
+                scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into(),
+            ));
+            if SqlRuntime::fetch_optional(self.datastore.read_exec(),
+                &format!("SELECT id FROM download_identity_states WHERE canonical_download_id IN ({placeholders}) AND reason = {{}} AND EXISTS (SELECT 1 FROM download_client_bindings b WHERE b.download_id = download_identity_states.canonical_download_id AND b.ended_at IS NULL) LIMIT 1"),
+                &args).await?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn end_bindings(&self, ids: &[DownloadId]) -> AppResult<()> {
+        self.end_bindings_in_transaction(ids, false).await
+    }
+
+    async fn end_bindings_for_deleted_title(&self, ids: &[DownloadId]) -> AppResult<()> {
+        self.end_bindings_in_transaction(ids, true).await
+    }
+}
+
+impl DownloadRegistryStore {
+    /// End each binding and mark its download terminal under the retry lock.
+    /// A pending password retry preserves the binding unless
+    /// `retire_password_retries` is set, in which case the retry fence and the
+    /// submission's stored retry state are removed in the same transaction.
+    async fn end_bindings_in_transaction(
+        &self,
+        ids: &[DownloadId],
+        retire_password_retries: bool,
+    ) -> AppResult<()> {
+        let mut ids = ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+        // Acquire per-download locks in a stable order across concurrent batches.
+        ids.sort_unstable();
+        ids.dedup();
         SqlRuntime::run_in_transaction(&self.datastore, "end_download_client_binding", move |tx| {
-            let id = id.clone();
+            let ids = ids.clone();
             Box::pin(async move {
+                for id in ids {
                 super::import_store::lock_retry_download(tx, &id).await?;
+                if retire_password_retries {
+                    SqlRuntime::execute(SqlExec::Tx(tx),
+                        "DELETE FROM download_identity_states WHERE canonical_download_id = {} AND reason = {}",
+                        &[SqlArg::Text(id.clone()), SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?;
+                    SqlRuntime::execute(SqlExec::Tx(tx),
+                        "UPDATE download_submissions SET password_retry_state = NULL WHERE id = {}",
+                        &[SqlArg::Text(id.clone())]).await?;
+                }
                 if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason = {} LIMIT 1",
+                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason = {} AND EXISTS (SELECT 1 FROM download_client_bindings b WHERE b.download_id = download_identity_states.canonical_download_id AND b.ended_at IS NULL) LIMIT 1",
                     &[SqlArg::Text(id.clone()), SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?.is_some() {
                     return Err(AppError::Validation("password retry is awaiting reconciliation; binding preserved".into()));
                 }
@@ -267,6 +338,7 @@ impl DownloadRegistryRepository for DownloadRegistryStore {
                     &[SqlArg::Timestamp(ended_at), SqlArg::Text(id)],
                 )
                 .await?;
+                }
                 Ok(())
             })
         })
@@ -1039,7 +1111,8 @@ mod tests {
                  download_client_type TEXT NOT NULL,
                  download_client_item_id TEXT,
                  source_title TEXT,
-                 download_id TEXT
+                 download_id TEXT,
+                 password_retry_state TEXT
              );
              CREATE TABLE download_identity_states (
                  id TEXT,
@@ -1533,6 +1606,259 @@ mod tests {
                 .is_some(),
             "every end_binding caller is a terminal event, so the download is finished with it"
         );
+    }
+
+    #[tokio::test]
+    async fn password_retry_fence_does_not_block_already_retired_binding() {
+        let store = store().await;
+        let ended = DownloadId::parse(FIRST_ID).unwrap();
+        let absent = DownloadId::parse(SECOND_ID).unwrap();
+        for id in [FIRST_ID, SECOND_ID] {
+            insert_download(&store, id, "scryer_submission", None).await;
+            SqlRuntime::execute(store.datastore.read_exec(),
+                "INSERT INTO download_identity_states (canonical_download_id, reason) VALUES ({}, {})",
+                &[SqlArg::Text(id.into()), SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await.unwrap();
+        }
+        insert_binding(
+            &store,
+            FIRST_ID,
+            Some("deleted-client"),
+            Some("old-job"),
+            None,
+        )
+        .await;
+        let retired_at = Utc::now();
+        // The config-deletion transaction already retired this client's binding
+        // and terminalized its download; a leftover retry row cannot revive it.
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "UPDATE download_client_bindings SET ended_at = {} WHERE download_id = {}",
+            &[SqlArg::Timestamp(retired_at), SqlArg::Text(FIRST_ID.into())],
+        )
+        .await
+        .unwrap();
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "UPDATE downloads SET terminal_at = {} WHERE id = {}",
+            &[SqlArg::Timestamp(retired_at), SqlArg::Text(FIRST_ID.into())],
+        )
+        .await
+        .unwrap();
+        let terminal_before = store
+            .load_download(&ended)
+            .await
+            .unwrap()
+            .unwrap()
+            .terminal_at;
+        assert!(
+            !store
+                .bindings_have_password_retry(&[ended, absent])
+                .await
+                .unwrap()
+        );
+        store.end_binding(&ended).await.unwrap();
+        store.end_binding(&absent).await.unwrap();
+        assert_eq!(
+            store
+                .load_download(&ended)
+                .await
+                .unwrap()
+                .unwrap()
+                .terminal_at,
+            terminal_before
+        );
+        assert!(
+            store
+                .load_binding(&ended)
+                .await
+                .unwrap()
+                .unwrap()
+                .ended_at
+                .is_some()
+        );
+        assert!(store.load_binding(&absent).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn title_delete_binding_batch_is_atomic_and_reconciles_only_ended_ids() {
+        let store = store().await;
+        let first = DownloadId::parse(FIRST_ID).unwrap();
+        let second = DownloadId::parse(SECOND_ID).unwrap();
+        for (id, job) in [(FIRST_ID, "job-1"), (SECOND_ID, "job-2")] {
+            insert_download(&store, id, "scryer_submission", None).await;
+            insert_binding(&store, id, Some("client-1"), Some(job), None).await;
+        }
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "INSERT INTO download_identity_states (canonical_download_id, reason) VALUES ({}, {})",
+            &[
+                SqlArg::Text(SECOND_ID.into()),
+                SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into()),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(!store.bindings_have_password_retry(&[]).await.unwrap());
+        assert!(!store.bindings_have_password_retry(&[first]).await.unwrap());
+        assert!(
+            store
+                .bindings_have_password_retry(&[first, second])
+                .await
+                .unwrap()
+        );
+        // Reporting the fence retires neither binding.
+        assert!(
+            store
+                .ended_bindings(&[first, second])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store.end_bindings(&[first, second]).await.is_err());
+        assert!(
+            store
+                .ended_bindings(&[first, second])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .load_download(&first)
+                .await
+                .unwrap()
+                .unwrap()
+                .terminal_at
+                .is_none()
+        );
+        store.end_bindings(&[first]).await.unwrap();
+        assert_eq!(
+            store.ended_bindings(&[first, second]).await.unwrap(),
+            vec![first]
+        );
+        assert!(
+            store
+                .load_binding(&second)
+                .await
+                .unwrap()
+                .unwrap()
+                .ended_at
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn deleted_title_retirement_removes_password_retry_fence_and_ends_binding() {
+        let store = store().await;
+        let deleted = DownloadId::parse(FIRST_ID).unwrap();
+        let other = DownloadId::parse(SECOND_ID).unwrap();
+        for (id, job) in [(FIRST_ID, "job-1"), (SECOND_ID, "job-2")] {
+            insert_download(&store, id, "scryer_submission", None).await;
+            insert_binding(&store, id, Some("client-1"), Some(job), None).await;
+            for reason in [
+                scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON,
+                "synthetic_other_reason",
+            ] {
+                SqlRuntime::execute(
+                    store.datastore.read_exec(),
+                    "INSERT INTO download_identity_states (canonical_download_id, reason) VALUES ({}, {})",
+                    &[SqlArg::Text(id.into()), SqlArg::Text(reason.into())],
+                )
+                .await
+                .unwrap();
+            }
+            SqlRuntime::execute(
+                store.datastore.read_exec(),
+                "INSERT INTO download_submissions (id, download_client_type, password_retry_state)
+                 VALUES ({}, 'sabnzbd', {})",
+                &[
+                    SqlArg::Text(id.into()),
+                    SqlArg::Text(r#"{"claimed_at":"2026-01-01T00:00:00Z"}"#.into()),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+
+        store
+            .end_bindings_for_deleted_title(&[deleted])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.ended_bindings(&[deleted, other]).await.unwrap(),
+            vec![deleted]
+        );
+        assert!(
+            store
+                .load_download(&deleted)
+                .await
+                .unwrap()
+                .unwrap()
+                .terminal_at
+                .is_some()
+        );
+        assert!(
+            !store
+                .bindings_have_password_retry(&[deleted])
+                .await
+                .unwrap()
+        );
+        let reasons_of = |id: &'static str| {
+            let store = &store;
+            async move {
+                let rows = SqlRuntime::fetch_all(
+                    store.datastore.read_exec(),
+                    "SELECT reason FROM download_identity_states WHERE canonical_download_id = {} ORDER BY reason",
+                    &[SqlArg::Text(id.into())],
+                )
+                .await
+                .unwrap();
+                rows.iter()
+                    .map(|row| row.text("reason").unwrap())
+                    .collect::<Vec<_>>()
+            }
+        };
+        // Only the retry fence goes; other markers are the caller's to remove.
+        assert_eq!(reasons_of(FIRST_ID).await, vec!["synthetic_other_reason"]);
+        let retry_state_of = |id: &'static str| {
+            let store = &store;
+            async move {
+                SqlRuntime::fetch_optional(
+                    store.datastore.read_exec(),
+                    "SELECT password_retry_state FROM download_submissions WHERE id = {}",
+                    &[SqlArg::Text(id.into())],
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .opt_text("password_retry_state")
+                .unwrap()
+            }
+        };
+        assert_eq!(retry_state_of(FIRST_ID).await, None);
+
+        // Another title's fenced download keeps its fence, state and binding.
+        assert!(store.bindings_have_password_retry(&[other]).await.unwrap());
+        assert_eq!(
+            reasons_of(SECOND_ID).await,
+            vec![
+                scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON,
+                "synthetic_other_reason"
+            ]
+        );
+        assert!(retry_state_of(SECOND_ID).await.is_some());
+        assert!(
+            store
+                .load_binding(&other)
+                .await
+                .unwrap()
+                .unwrap()
+                .ended_at
+                .is_none()
+        );
+        // Ordinary retirement still preserves a fenced binding.
+        assert!(store.end_bindings(&[other]).await.is_err());
     }
 
     #[tokio::test]

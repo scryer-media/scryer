@@ -18,22 +18,24 @@ import {
 } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/legacy-modes/mode/javascript";
-import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { xml } from "@codemirror/legacy-modes/mode/xml";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
-import { StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { defaultHighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { setDiagnostics as setLintDiagnostics } from "@codemirror/lint";
 import { regoAssistance } from "./rego-editor-assistance";
+import { formatScriptIndentation, scriptAssistance, scriptLanguageExtensions, type ScriptEditorLanguage } from "./script-editor-assistance";
+import type { ScriptTriggerValue } from "@/lib/types/scripts";
 import type { RegoFamily } from "@/lib/utils/rego-assistance";
 import { useTheme } from "next-themes";
 import { Check, Copy } from "lucide-react";
 import "@fontsource-variable/jetbrains-mono";
 import { IconButton } from "@/components/ui/icon-button";
+import { Button } from "@/components/ui/button";
 import { CODE_FONT } from "@/lib/fonts";
 import { isDarkTheme } from "@/lib/theme";
 
-export type CodeEditorLanguage = "plain" | "javascript" | "json" | "rego" | "shell" | "xml";
+export type CodeEditorLanguage = "plain" | "javascript" | "json" | "rego" | "xml" | ScriptEditorLanguage;
 
 export type CodeEditorDiagnostic = {
   line: number;
@@ -53,6 +55,8 @@ export type CodeEditorProps = {
   language?: CodeEditorLanguage;
   regoFamily?: RegoFamily;
   regoTranslate?: (key: string) => string;
+  scriptTrigger?: ScriptTriggerValue;
+  scriptTranslate?: (key: string) => string;
   copyable?: boolean;
   copyLabel?: string;
   copiedLabel?: string;
@@ -332,23 +336,26 @@ const diagnosticTheme = EditorView.baseTheme({
 
 const lightTheme = EditorView.theme({
   "&": { backgroundColor: "var(--background)", color: "var(--foreground)" },
-  ".cm-gutters": { backgroundColor: "var(--muted)", borderRight: "1px solid var(--border)", paddingRight: "8px" },
+  ".cm-gutters": { backgroundColor: "var(--muted)", borderRight: "1px solid var(--border-color)", paddingRight: "8px" },
   ".cm-activeLineGutter": { backgroundColor: "var(--accent)" },
   "&.cm-focused": { outline: "2px solid var(--ring)" },
-  ".cm-content": { fontFamily: CODE_FONT, paddingLeft: "8px" },
+  ".cm-content": { fontFamily: CODE_FONT, caretColor: "var(--ring)", paddingLeft: "8px" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--ring)" },
+  ".cm-selectionBackground, ::selection": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.2)" },
+  "&.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.3)" },
   ".cm-gutters .cm-gutter": { fontFamily: CODE_FONT },
 });
 
 const scryerDark = EditorView.theme({
-  "&": { backgroundColor: "#0a0e1a", color: "#d4d4d8" },
-  ".cm-content": { fontFamily: CODE_FONT, caretColor: "#5b64ff", paddingLeft: "8px" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#5b64ff" },
-  ".cm-gutters": { backgroundColor: "#0a0e1a", color: "#3f3f46", borderRight: "1px solid #273255", fontFamily: CODE_FONT, paddingRight: "8px" },
-  ".cm-activeLineGutter": { backgroundColor: "rgba(255,255,255,0.03)", color: "#71717a" },
-  ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.03)" },
-  "&.cm-focused": { outline: "2px solid hsl(var(--ring))" },
-  ".cm-selectionBackground, ::selection": { backgroundColor: "rgba(91,100,255,0.2)" },
-  "&.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(91,100,255,0.3)" },
+  "&": { backgroundColor: "var(--background)", color: "var(--foreground)" },
+  ".cm-content": { fontFamily: CODE_FONT, caretColor: "var(--ring)", paddingLeft: "8px" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--ring)" },
+  ".cm-gutters": { backgroundColor: "var(--background)", color: "var(--muted-foreground)", borderRight: "1px solid var(--border-color)", fontFamily: CODE_FONT, paddingRight: "8px" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--accent)", color: "var(--foreground)" },
+  ".cm-activeLine": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.06)" },
+  "&.cm-focused": { outline: "2px solid var(--ring)" },
+  ".cm-selectionBackground, ::selection": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.2)" },
+  "&.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.3)" },
   ".cm-line": { padding: "0 4px" },
 }, { dark: true });
 
@@ -361,8 +368,8 @@ function languageExtensions(language: CodeEditorLanguage): Extension[] {
     return [StreamLanguage.define(json)];
   }
 
-  if (language === "shell") {
-    return [StreamLanguage.define(shell)];
+  if (["shell", "python", "powershell", "batch", "go"].includes(language)) {
+    return [scriptLanguageExtensions(language as ScriptEditorLanguage)];
   }
 
   if (language === "xml") {
@@ -384,6 +391,8 @@ export default function CodeEditor({
   language = "plain",
   regoFamily,
   regoTranslate,
+  scriptTrigger,
+  scriptTranslate,
   copyable = false,
   copyLabel = "Copy code",
   copiedLabel = "Copied",
@@ -436,14 +445,16 @@ export default function CodeEditor({
         onChangeRef.current(update.state.doc.toString());
       }
     });
-    const editorTheme = useDarkTheme ? scryerDark : lightTheme;
+    const editorTheme = [
+      useDarkTheme ? scryerDark : lightTheme,
+      syntaxHighlighting(useDarkTheme ? oneDarkHighlightStyle : defaultHighlightStyle),
+    ];
     const extensions = [
       lineNumbers(),
       ...languageExtensions(language),
-      syntaxHighlighting(oneDarkHighlightStyle),
-      keymap.of([...defaultKeymap, ...(language === "rego" ? historyKeymap : []), indentWithTab]),
-      ...(language === "rego" ? [history()] : []),
       assistance.of([]),
+      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      history(),
       appearance.of(editorTheme),
       editable.of([EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)]),
       updateListener,
@@ -483,11 +494,18 @@ export default function CodeEditor({
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({ effects: [
-      assistance.reconfigure(language === "rego" && regoFamily && regoTranslate ? regoAssistance(regoFamily, regoTranslate, readOnly) : []),
-      appearance.reconfigure(isDarkTheme(resolvedTheme) ? scryerDark : lightTheme),
+      assistance.reconfigure(language === "rego" && regoFamily && regoTranslate
+        ? regoAssistance(regoFamily, regoTranslate, readOnly)
+        : scriptTrigger && scriptTranslate && ["shell", "python", "powershell", "batch", "go"].includes(language)
+          ? scriptAssistance(language as ScriptEditorLanguage, scriptTrigger, scriptTranslate, readOnly)
+          : []),
+      appearance.reconfigure([
+        isDarkTheme(resolvedTheme) ? scryerDark : lightTheme,
+        syntaxHighlighting(isDarkTheme(resolvedTheme) ? oneDarkHighlightStyle : defaultHighlightStyle),
+      ]),
       editable.reconfigure([EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)]),
     ] });
-  }, [assistance, appearance, editable, language, regoFamily, regoTranslate, readOnly, resolvedTheme]);
+  }, [assistance, appearance, editable, language, regoFamily, regoTranslate, scriptTrigger, scriptTranslate, readOnly, resolvedTheme]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -523,10 +541,23 @@ export default function CodeEditor({
 
   return (
     <div className="group/code-editor relative">
+      {scriptTrigger && scriptTranslate && !readOnly ? (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">{scriptTranslate("script.editor.assistanceHint")}</span>
+          <Button type="button" variant="outline" size="sm" title={scriptTranslate("script.editor.formatHelp")} onClick={() => {
+            if (viewRef.current) {
+              formatScriptIndentation(viewRef.current);
+              viewRef.current.focus();
+            }
+          }}>
+            {scriptTranslate("script.editor.format")}
+          </Button>
+        </div>
+      ) : null}
       <div
         id={id}
         ref={containerRef}
-        className="overflow-auto rounded-lg border border-border text-sm"
+        className="overflow-hidden rounded-lg border border-border text-sm [&>.cm-editor]:h-full [&_.cm-scroller]:overflow-auto"
         style={{ height: computedHeight, minHeight: "120px" }}
       />
       {copyable ? (

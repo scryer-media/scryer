@@ -274,8 +274,6 @@ export type MaintenanceCandidate = {
   /// root. Null means no root was selected or exact ownership is unknown.
   storageRootFileCount: number | null;
   storageRootTotalSizeBytes: number | null;
-  /// The live operator keep on the subject's title; null when it is not kept.
-  operatorKeepClaimId: string | null;
   subjectLabel: string;
   subjectKind: string;
   subjectId: string;

@@ -49,3 +49,88 @@ export function mergePreferLoadedImageFields(
     metadataFetchedAt: incoming.metadataFetchedAt ?? current.metadataFetchedAt,
   };
 }
+
+export type ActiveCatalogListFilters = {
+  facet: TitleRecord["facet"];
+  query: string;
+  libraryIds: readonly string[];
+};
+
+export function buildActiveCatalogListFilters(
+  facet: TitleRecord["facet"],
+  query: string,
+  libraryIds: readonly string[],
+): ActiveCatalogListFilters {
+  return {
+    facet,
+    query: query.trim().toLocaleLowerCase(),
+    libraryIds: [...libraryIds],
+  };
+}
+
+export function catalogTitleMatchesActiveListFilters(
+  title: TitleRecord,
+  filters: ActiveCatalogListFilters,
+): boolean {
+  if (title.facet !== filters.facet) {
+    return false;
+  }
+
+  if (
+    filters.libraryIds.length > 0 &&
+    !filters.libraryIds.includes(title.libraryId)
+  ) {
+    return false;
+  }
+
+  return (
+    filters.query.length === 0 ||
+    title.name.toLocaleLowerCase().includes(filters.query)
+  );
+}
+
+export function upsertCatalogTitleRecord(
+  titles: TitleRecord[],
+  title: TitleRecord,
+  filters?: ActiveCatalogListFilters,
+): TitleRecord[] {
+  const existingIndex = titles.findIndex((item) => item.id === title.id);
+  if (filters && !catalogTitleMatchesActiveListFilters(title, filters)) {
+    if (existingIndex === -1) {
+      return titles;
+    }
+    const next = [...titles];
+    next.splice(existingIndex, 1);
+    return next;
+  }
+
+  const next = [...titles];
+  if (existingIndex === -1) {
+    next.push(title);
+  } else {
+    next[existingIndex] = mergePreferLoadedImageFields(
+      next[existingIndex],
+      title,
+    );
+  }
+  return next;
+}
+
+/**
+ * Fold a reactively refreshed title into the loaded catalog list.
+ *
+ * A title that is not loaded is inserted only when it is new
+ * (`insertIfMissing`): an update to a title on a page that has not been
+ * loaded yet must not pull it into the list out of order.
+ */
+export function applyRefreshedCatalogTitle(
+  titles: TitleRecord[],
+  title: TitleRecord,
+  filters: ActiveCatalogListFilters,
+  insertIfMissing: boolean,
+): TitleRecord[] {
+  if (!insertIfMissing && !titles.some((item) => item.id === title.id)) {
+    return titles;
+  }
+  return upsertCatalogTitleRecord(titles, title, filters);
+}

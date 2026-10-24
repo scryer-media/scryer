@@ -2567,7 +2567,7 @@ mod tests {
             ),
             (
                 "expired-request-leases",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n",
+                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n",
             ),
             (
                 "tagged-for-removal",

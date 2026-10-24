@@ -80,7 +80,7 @@ async fn execute_resolved_episode_import(
     specials_folder_template: &str,
     title_folder_path: &Path,
     source_video: &Path,
-    // Set only by the manual executor, for a source its own probe qualified.
+    // Set for an extensionless source a content probe qualified as video.
     content_qualified: Option<ContentQualifiedVideo>,
     parsed: &crate::ParsedReleaseMetadata,
     target_episodes: &[scryer_domain::Episode],

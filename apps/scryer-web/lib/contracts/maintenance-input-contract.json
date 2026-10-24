@@ -213,11 +213,6 @@
           "descKey": "settings.refMaintFactsWatchedByAllRequesters"
         },
         {
-          "field": "keep_claim_active",
-          "type": "bool",
-          "descKey": "settings.refMaintFactsKeepClaimActive"
-        },
-        {
           "field": "request_lease_state",
           "type": "string",
           "descKey": "settings.refMaintFactsRequestLeaseState"
@@ -564,11 +559,6 @@
           "field": "watched_by_all_requesters",
           "type": "object",
           "descKey": "settings.refMaintFactsWatchedByAllRequesters"
-        },
-        {
-          "field": "keep_claim_active",
-          "type": "object",
-          "descKey": "settings.refMaintFactsKeepClaimActive"
         },
         {
           "field": "request_lease_state",
@@ -1339,32 +1329,6 @@
           "field": "value",
           "type": "bool",
           "descKey": "settings.refMaintFactsWatchedByAllRequestersValue"
-        },
-        {
-          "field": "observed_at",
-          "type": "string?",
-          "descKey": "settings.refMaintObsObservedAt"
-        },
-        {
-          "field": "reason",
-          "type": "string?",
-          "descKey": "settings.refMaintObsReason"
-        }
-      ]
-    },
-    {
-      "titleKey": "settings.refMaintFactsKeepClaimActive",
-      "path": "input.observations.keep_claim_active",
-      "fields": [
-        {
-          "field": "status",
-          "type": "string",
-          "descKey": "settings.refMaintObsStatus"
-        },
-        {
-          "field": "value",
-          "type": "bool",
-          "descKey": "settings.refMaintFactsKeepClaimActiveValue"
         },
         {
           "field": "observed_at",

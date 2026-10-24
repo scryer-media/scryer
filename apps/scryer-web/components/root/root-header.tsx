@@ -1374,7 +1374,7 @@ export const RootHeader = React.memo(function RootHeader({
                   id="global-search-mobile-trigger"
                   ref={searchTriggerRef}
                   type="button"
-                  className="relative flex h-11 w-full items-center gap-3 overflow-hidden rounded-[13px] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),1),rgba(var(--scry-accent-rgb),0.48),rgba(var(--scry-accent-rgb),0.96))] py-0 pl-11 pr-3 text-left text-[15px] font-medium text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.16),0_10px_24px_rgba(var(--scry-accent-rgb),0.12)] transition before:pointer-events-none before:absolute before:inset-[2px] before:rounded-[11px] before:bg-[var(--scry-bg)] before:content-[''] active:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.28),0_12px_28px_rgba(var(--scry-accent-rgb),0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]"
+                  className="relative flex h-11 w-full items-center gap-3 overflow-hidden rounded-[13px] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),1),rgba(var(--scry-accent-rgb),0.48),rgba(var(--scry-accent-rgb),0.96))] py-0 pl-11 pr-3 text-left text-[15px] font-medium text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.16),0_10px_24px_rgba(var(--scry-accent-rgb),calc(0.12*var(--scry-glow)))] transition before:pointer-events-none before:absolute before:inset-[2px] before:rounded-[11px] before:bg-[var(--scry-bg)] before:content-[''] active:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.28),0_12px_28px_rgba(var(--scry-accent-rgb),calc(0.16*var(--scry-glow)))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]"
                   onClick={() => openGlobalSearchPanel(true)}
                   aria-label={t("search.title")}
                   aria-haspopup="dialog"
@@ -1393,9 +1393,9 @@ export const RootHeader = React.memo(function RootHeader({
                   ref={searchTriggerRef}
                   type="button"
                   className={cn(
-                    "relative flex h-12 w-full items-center gap-3 overflow-hidden rounded-[13px] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),1),rgba(var(--scry-accent-rgb),0.48),rgba(var(--scry-accent-rgb),0.96))] py-0 pl-12 pr-4 text-left text-[15px] font-medium text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.16),0_12px_28px_rgba(var(--scry-accent-rgb),0.12)] transition before:pointer-events-none before:absolute before:inset-[2px] before:rounded-[11px] before:bg-[var(--scry-bg)] before:content-[''] hover:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.28),0_14px_32px_rgba(var(--scry-accent-rgb),0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]",
+                    "relative flex h-12 w-full items-center gap-3 overflow-hidden rounded-[13px] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),1),rgba(var(--scry-accent-rgb),0.48),rgba(var(--scry-accent-rgb),0.96))] py-0 pl-12 pr-4 text-left text-[15px] font-medium text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.16),0_12px_28px_rgba(var(--scry-accent-rgb),calc(0.12*var(--scry-glow)))] transition before:pointer-events-none before:absolute before:inset-[2px] before:rounded-[11px] before:bg-[var(--scry-bg)] before:content-[''] hover:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.28),0_14px_32px_rgba(var(--scry-accent-rgb),calc(0.16*var(--scry-glow)))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]",
                     isGlobalSearchPanelOpen
-                      ? "before:bg-[rgba(var(--scry-accent-rgb),0.08)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.30),0_16px_36px_rgba(var(--scry-accent-rgb),0.18)]"
+                      ? "before:bg-[rgba(var(--scry-accent-rgb),0.08)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.30),0_16px_36px_rgba(var(--scry-accent-rgb),calc(0.18*var(--scry-glow)))]"
                       : null,
                   )}
                   onClick={() => openGlobalSearchPanel(true)}
@@ -1437,7 +1437,7 @@ export const RootHeader = React.memo(function RootHeader({
                         onKeyDown={handleSearchPanelKeyDown}
                       >
                         <div className="flex items-center gap-[13px] border-b border-[var(--scry-border)] px-[18px] py-4">
-                          <div className="relative flex h-12 min-w-0 flex-1 items-center gap-3 rounded-[14px] border-2 border-primary/70 bg-[var(--scry-bg)] px-4 shadow-none dark:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.10),0_12px_28px_rgba(var(--scry-accent-rgb),0.08)]">
+                          <div className="relative flex h-12 min-w-0 flex-1 items-center gap-3 rounded-[14px] border-2 border-primary/70 bg-[var(--scry-bg)] px-4 shadow-none dark:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.10),0_12px_28px_rgba(var(--scry-accent-rgb),calc(0.08*var(--scry-glow)))]">
                             <Search className="h-[22px] w-[22px] shrink-0 text-primary" />
                             <input
                               type="text"

@@ -9,6 +9,7 @@ import type {
   ApplicationUpgradeStatus,
   JobRun,
 } from "@/lib/types";
+import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 import { normalizeApplicationUpgradeProgress } from "@/lib/utils/application-upgrade-progress";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
 
@@ -23,6 +24,11 @@ const INSTALLATION_KINDS = new Set<ApplicationInstallationKind>([
   "DISABLED",
   "UNSUPPORTED",
 ]);
+
+// The upgrade target is the stored SMG update notice. The startup SMG check
+// rewrites it after the page may already have loaded, so a mount-time status
+// can name a version the server no longer accepts.
+const SMG_SCRYER_UPDATE_NOTICE_KEY = "smg.scryer_update_notice";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -61,7 +67,10 @@ function normalizeUpgradeStatus(value: unknown): ApplicationUpgradeStatus | null
   };
 }
 
-export function useApplicationUpgradeStatus(enabled = true) {
+export function useApplicationUpgradeStatus(
+  enabled = true,
+  { settingsSubscriptionEnabled = true }: { settingsSubscriptionEnabled?: boolean } = {},
+) {
   const client = useClient();
   const [status, setStatus] = useState<ApplicationUpgradeStatus | null>(null);
   const [loading, setLoading] = useState(enabled);
@@ -134,6 +143,18 @@ export function useApplicationUpgradeStatus(enabled = true) {
     }, 2_000);
     return () => window.clearInterval(interval);
   }, [enabled, refresh, status?.activeRun]);
+
+  useSettingsSubscription(
+    useCallback(
+      (changedKeys) => {
+        if (changedKeys.includes(SMG_SCRYER_UPDATE_NOTICE_KEY)) {
+          void refresh();
+        }
+      },
+      [refresh],
+    ),
+    { enabled: enabled && settingsSubscriptionEnabled },
+  );
 
   return { status, loading, error, refresh };
 }

@@ -26,6 +26,8 @@ import {
   FIXED_DOWNLOAD_CLIENT_CONFIG_FIELD_KEYS,
   defaultDownloadClientConfigValuesForFields,
   downloadClientConfigFieldValue,
+  isBuiltInDownloadClientConfigField,
+  isHostlessDownloadClientType,
 } from "@/lib/utils/download-clients";
 import { DEFAULT_PORT_FOR_CLIENT_TYPE } from "@/lib/constants/download-clients";
 import {
@@ -564,9 +566,18 @@ export function SettingsDownloadClientsSection({
     selectedDownloadClientTypeOption?.label ??
     (configuredClientLabel || "Download client");
   const selectedConfigFields = selectedDownloadClientTypeOption?.configFields ?? [];
-  const dynamicConfigFields = selectedConfigFields.filter(
-    (field) => !FIXED_DOWNLOAD_CLIENT_CONFIG_FIELD_KEYS.has(field.key),
-  );
+  const dynamicConfigFields = selectedConfigFields
+    .filter((field) => !FIXED_DOWNLOAD_CLIENT_CONFIG_FIELD_KEYS.has(field.key))
+    .map((field) =>
+      isBuiltInDownloadClientConfigField(normalizedClientType, field)
+        ? {
+            ...field,
+            label: t(field.label),
+            helpText: field.helpText ? t(field.helpText) : null,
+          }
+        : field,
+    );
+  const isHostless = isHostlessDownloadClientType(normalizedClientType);
   const selectedFieldKeys = new Set(selectedConfigFields.map((field) => field.key));
   const hasDescriptorApiKeyField =
     selectedFieldKeys.has("api_key") || selectedFieldKeys.has("apiKey");
@@ -975,6 +986,7 @@ export function SettingsDownloadClientsSection({
                   placeholder={t("settings.downloadClientNamePlaceholder")}
                 />
               </div>
+              {isHostless ? null : (
               <div className="md:col-span-3 grid grid-cols-1 gap-2 md:grid-cols-[220px_92px_128px_auto] md:items-end md:gap-2">
                 <div>
                   <Label className="mb-2 block" htmlFor="settings-download-client-host">
@@ -1051,18 +1063,21 @@ export function SettingsDownloadClientsSection({
                   </span>
                 </label>
               </div>
+              )}
               <div className="grid gap-3 md:col-span-3 md:grid-cols-2">
-                <label>
-                  <Label className="mb-2 block">
-                    {t("settings.downloadClientUrlPreview")}
-                  </Label>
-                  <Input
-                    value={urlPreview || "https://..."}
-                    readOnly
-                    disabled
-                    className="text-muted-foreground"
-                  />
-                </label>
+                {isHostless ? null : (
+                  <label>
+                    <Label className="mb-2 block">
+                      {t("settings.downloadClientUrlPreview")}
+                    </Label>
+                    <Input
+                      value={urlPreview || "https://..."}
+                      readOnly
+                      disabled
+                      className="text-muted-foreground"
+                    />
+                  </label>
+                )}
                 <div id="settings-download-client-proxy-field">
                   <ProxyAssignmentSelect
                     selectId="settings-download-client-proxy-select"

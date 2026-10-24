@@ -209,9 +209,13 @@ export function usePluginManagement({
     translateRef.current = t;
   }, [refreshProviderOptions, t]);
 
+  // Only the first load blanks the list. A catalog change, such as the one an
+  // install announces, refreshes it in place so the list and its scroll
+  // position stay put.
+  const pluginsLoadedRef = useRef(false);
   useEffect(() => {
     void (async () => {
-      setPluginsLoading(true);
+      if (!pluginsLoadedRef.current) setPluginsLoading(true);
       setPluginsError(null);
       try {
         await Promise.all([
@@ -225,6 +229,7 @@ export function usePluginManagement({
             : translateRef.current("status.failedToLoad"),
         );
       } finally {
+        pluginsLoadedRef.current = true;
         setPluginsLoading(false);
       }
     })();

@@ -31,26 +31,6 @@ fn claim(id: &str, title_id: &str, producer_ref: Option<&str>) -> LifecycleClaim
     }
 }
 
-fn keep(id: &str, title_id: &str, producer_ref: Option<&str>) -> LifecycleClaim {
-    let now = Utc::now();
-    LifecycleClaim {
-        id: id.to_string(),
-        title_id: title_id.to_string(),
-        library_id: "library-1".to_string(),
-        producer: LifecycleClaimProducer::RequestPermanent,
-        producer_ref: producer_ref.map(str::to_string),
-        kind: LifecycleClaimKind::Keep,
-        state: LifecycleClaimState::Active,
-        duration_days: None,
-        starts_at: Some(now),
-        expires_at: None,
-        created_by: Some("user-1".to_string()),
-        created_at: now,
-        updated_at: now,
-        released_reason: None,
-    }
-}
-
 async fn assert_claim_round_trip(store: &dyn LifecycleClaimRepository) -> AppResult<()> {
     store
         .create(&claim("claim-1", "title-1", Some("request-1")))
@@ -84,21 +64,6 @@ async fn assert_claim_round_trip(store: &dyn LifecycleClaimRepository) -> AppRes
         .await
         .expect_err("a second live claim for the same request must be refused");
 
-    // Operator pins carry no producer_ref; their own index allows one live
-    // pin per title, so a raced second Keep cannot leave a hold behind that
-    // releasing the first would not clear.
-    let mut pin_a = keep("pin-a", "title-1", None);
-    pin_a.producer = LifecycleClaimProducer::OperatorKeep;
-    let mut pin_b = keep("pin-b", "title-1", None);
-    pin_b.producer = LifecycleClaimProducer::OperatorKeep;
-    store.create(&pin_a).await?;
-    store
-        .create(&pin_b)
-        .await
-        .expect_err("a second live operator keep on a title must be refused");
-    store.release_claim("pin-a", "operator", Utc::now()).await?;
-    store.create(&pin_b).await?;
-
     let starts_at = Utc::now() - chrono::Duration::days(20);
     let expires_at = starts_at + chrono::Duration::days(14);
     let activated_at = Utc::now();
@@ -130,22 +95,35 @@ async fn assert_claim_round_trip(store: &dyn LifecycleClaimRepository) -> AppRes
         "activation is conditional on dormancy"
     );
 
+    store
+        .create(&claim(
+            "claim-1-withdrawn",
+            "title-1",
+            Some("request-withdrawn"),
+        ))
+        .await?;
+    store
+        .release_claim("claim-1-withdrawn", "operator", Utc::now())
+        .await?;
     let live = store
         .list_live_for_titles(&["title-1".to_string(), "title-missing".to_string()])
         .await?;
     assert_eq!(
-        live.get("title-1").map(Vec::len),
-        Some(2),
-        "the lease and the standing pin are live; the released pin is not"
+        live.get("title-1").map(|claims| claims
+            .iter()
+            .map(|claim| claim.id.as_str())
+            .collect::<Vec<_>>()),
+        Some(vec!["claim-1"]),
+        "the lease is live; the released claim is not"
     );
     assert!(
         !live.contains_key("title-missing"),
         "a title with no live claim is absent, not empty"
     );
 
-    assert_eq!(store.list_for_title("title-1").await?.len(), 3);
+    assert_eq!(store.list_for_title("title-1").await?.len(), 2);
 
-    // Extending a live claim moves the date; the pins are unaffected.
+    // Extending a live claim moves the date.
     let extended_to = Utc::now() + chrono::Duration::days(7);
     store.extend("claim-1", extended_to, Utc::now()).await?;
     assert_eq!(
@@ -159,6 +137,9 @@ async fn assert_claim_round_trip(store: &dyn LifecycleClaimRepository) -> AppRes
     );
 
     // Expiry only touches active retention claims whose window has elapsed.
+    store
+        .create(&claim("waiting", "title-waiting", Some("request-waiting")))
+        .await?;
     let past = Utc::now() - chrono::Duration::days(1);
     store
         .extend("claim-1", past, Utc::now())
@@ -175,9 +156,9 @@ async fn assert_claim_round_trip(store: &dyn LifecycleClaimRepository) -> AppRes
         LifecycleClaimState::Expired
     );
     assert_eq!(
-        store.get("pin-b").await?.expect("pin exists").state,
-        LifecycleClaimState::Active,
-        "a keep has no expiry and must never expire"
+        store.get("waiting").await?.expect("lease exists").state,
+        LifecycleClaimState::Dormant,
+        "a lease whose clock never started has nothing to expire"
     );
 
     // An expired lease cannot be extended back into force: that is a new claim.
@@ -271,27 +252,19 @@ async fn assert_release_and_convert(store: &dyn LifecycleClaimRepository) -> App
         LifecycleClaimState::Released
     );
 
-    // Conversion marks the lease converted and inserts the keep in one write.
+    // Conversion ends the lease and writes nothing in its place: keeping a
+    // title permanently leaves it without an expiry, not with a new hold.
     store
         .create(&claim("claim-c", "title-4", Some("request-4")))
         .await?;
-    let mut replacement = keep("claim-c-keep", "title-4", Some("request-4"));
-    replacement.producer = LifecycleClaimProducer::RequestPermanent;
-    assert_eq!(
-        store
-            .convert_to_permanent("claim-c", &replacement, Utc::now())
-            .await?,
-        "claim-c-keep"
-    );
+    store.convert_to_permanent("claim-c", Utc::now()).await?;
     let converted = store.get("claim-c").await?.expect("claim exists");
     assert_eq!(converted.state, LifecycleClaimState::Converted);
     assert_eq!(
         converted.released_reason.as_deref(),
         Some("converted_to_permanent")
     );
-    let keep_claim = store.get("claim-c-keep").await?.expect("keep exists");
-    assert_eq!(keep_claim.kind, LifecycleClaimKind::Keep);
-    assert!(keep_claim.is_live());
+    assert_eq!(store.list_for_title("title-4").await?.len(), 1);
 
     // A released or converted lease is withdrawn, not spent: it must never
     // reach the fact builder, or a title whose request was canceled would read
@@ -310,39 +283,9 @@ async fn assert_release_and_convert(store: &dyn LifecycleClaimRepository) -> App
 
     // A claim that is no longer live cannot be converted twice.
     store
-        .convert_to_permanent(
-            "claim-c",
-            &keep("claim-c-keep-2", "title-4", None),
-            Utc::now(),
-        )
+        .convert_to_permanent("claim-c", Utc::now())
         .await
         .expect_err("a converted claim must not convert again");
-    assert!(
-        store.get("claim-c-keep-2").await?.is_none(),
-        "the failed conversion must not have inserted its replacement"
-    );
-
-    // Converting a lease on a title that already has an operator keep reuses
-    // that keep rather than stacking a second one.
-    let mut standing = keep("standing-keep", "title-6", None);
-    standing.producer = LifecycleClaimProducer::OperatorKeep;
-    store.create(&standing).await?;
-    store
-        .create(&claim("claim-z", "title-6", Some("request-7")))
-        .await?;
-    let mut redundant = keep("redundant-keep", "title-6", None);
-    redundant.producer = LifecycleClaimProducer::OperatorKeep;
-    assert_eq!(
-        store
-            .convert_to_permanent("claim-z", &redundant, Utc::now())
-            .await?,
-        "standing-keep"
-    );
-    assert_eq!(
-        store.get("claim-z").await?.expect("claim exists").state,
-        LifecycleClaimState::Converted
-    );
-    assert!(store.get("redundant-keep").await?.is_none());
 
     // Releasing one claim by id — the administrator's explicit withdrawal —
     // touches exactly that row and, like every other transition here, is

@@ -82,7 +82,7 @@ impl AppUseCase {
             .await?;
 
         let client_type = client_type.trim().to_lowercase();
-        if matches!(client_type.as_str(), "nzbget" | "sabnzbd" | "weaver") {
+        if crate::NATIVE_DOWNLOAD_CLIENT_TYPES.contains(&client_type.as_str()) {
             return self
                 .services
                 .integrations

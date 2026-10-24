@@ -180,6 +180,7 @@ impl IndexerClient for ScriptedIndexerClient {
 
 fn nzb_release(title: &str, guid: &str) -> IndexerSearchResult {
     IndexerSearchResult {
+        http: None,
         indexer_id: None,
         source: "test".into(),
         title: title.to_string(),

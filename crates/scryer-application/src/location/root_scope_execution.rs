@@ -1223,6 +1223,7 @@ impl AppUseCase {
             .iter()
             .filter(|root| !(remove_source && root.id == tail.root_id))
             .map(|root| LibraryRootDraft {
+                id: None,
                 path: root.path.clone(),
                 is_default: if root.id == consolidation.destination_root_id {
                     becomes_default

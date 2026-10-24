@@ -463,8 +463,6 @@ pub struct MaintenanceCandidate {
     /// selected by this candidate's pinned revision. It is null under the same
     /// conditions as `storageRootFileCount`.
     pub storage_root_total_size_bytes: Option<i64>,
-    /// The live operator keep on the subject's title, or null when it is not kept.
-    pub operator_keep_claim_id: Option<ID>,
     /// Exact subject display label, falling back to its ID if unavailable.
     pub subject_label: String,
     /// Subject scope: title, season, or episode.

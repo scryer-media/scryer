@@ -15,15 +15,12 @@ export type RequestDecisionOutcome = "AUTO_APPROVE" | "MANUAL_REVIEW" | "DENY";
 /// abstaining, which is why the wire type is nullable.
 export type RequestVote = "APPROVE" | "DENY" | "MANUAL" | "ABSTAIN";
 
-/// What wrote a lifecycle claim. `REQUEST_LEASE` is a finite window a request
-/// asked for, `REQUEST_PERMANENT` a request approved forever, and
-/// `OPERATOR_KEEP` a hold an administrator placed by hand.
-export type LifecycleClaimProducer =
-  | "REQUEST_LEASE"
-  | "REQUEST_PERMANENT"
-  | "OPERATOR_KEEP";
+/// What wrote a lifecycle claim: the finite window a request asked for. A
+/// request approved without a lease writes no claim.
+export type LifecycleClaimProducer = "REQUEST_LEASE";
 
-export type LifecycleClaimKind = "RETAIN_UNTIL" | "KEEP";
+/// A lifecycle claim is only ever a time to delete.
+export type LifecycleClaimKind = "RETAIN_UNTIL";
 
 /// Where a claim is in its life. `DORMANT` is a lease that exists but has not
 /// started, because the title has not imported yet; `CONVERTED` is a lease that

@@ -138,7 +138,7 @@ export function deriveQueueRowPresentation(
   const trackedMatchTypeKey = normalizeQueueState(queueItem.trackedMatchType);
   const displayStateKey = queueItem.displayState;
   const statusBadgeKey = displayStateKey;
-  const reportedFailureReason = buildQueueStatusDetail(queueItem);
+  const reportedFailureReason = buildQueueStatusDetail(queueItem, t);
   const facetKey = normalizeQueueState(queueItem.facet);
   const failureReason =
     reportedFailureReason || displayStateKey !== "IMPORT_BLOCKED"

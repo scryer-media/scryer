@@ -539,13 +539,30 @@ fn sanitized_title_folder_component(raw: &str) -> String {
 }
 /// Recursively find all video files under `dir`, optionally filtering out samples.
 ///
+/// A file is video when its extension says so, or when it has no extension and
+/// a content probe of its header identifies a video container; that file
+/// carries the probe's [`ContentQualifiedVideo`] proof.
+///
 /// `dir` is usually a directory, but download clients may report a completed
 /// file path directly. Classify the source before walking it so a regular file
 /// never reaches `read_dir` (Windows reports that mistake as OS error 267).
-pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>> {
-    fn single_file(path: &Path, filter_samples: bool) -> Vec<PathBuf> {
-        (is_video_file(path) && (!filter_samples || !is_sample_file(path)))
-            .then_some(path.to_path_buf())
+pub(crate) fn discover_video_files(
+    dir: &Path,
+    filter_samples: bool,
+) -> AppResult<Vec<ImportVideoFile>> {
+    fn discovered(path: PathBuf, filter_samples: bool) -> Option<ImportVideoFile> {
+        let content_qualified = if is_video_file(&path) {
+            None
+        } else {
+            Some(content_qualify_opaque_video(&path)?)
+        };
+        if filter_samples && is_sample_file(&path) {
+            return None;
+        }
+        Some(ImportVideoFile::physical(path).with_content_qualified(content_qualified))
+    }
+    fn single_file(path: &Path, filter_samples: bool) -> Vec<ImportVideoFile> {
+        discovered(path.to_path_buf(), filter_samples)
             .into_iter()
             .collect()
     }
@@ -598,8 +615,15 @@ pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Ve
     Ok(walked
         .into_iter()
         .flat_map(|entry| entry.files.into_iter())
-        .filter(|path| is_video_file(path))
-        .filter(|path| !filter_samples || !is_sample_file(path))
+        .filter_map(|path| discovered(path, filter_samples))
+        .collect())
+}
+
+/// [`discover_video_files`] for callers that read only the paths.
+pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>> {
+    Ok(discover_video_files(dir, filter_samples)?
+        .into_iter()
+        .map(|file| file.physical)
         .collect())
 }
 
@@ -779,10 +803,98 @@ fn parsed_usable_release_from_file_stem(path: &Path) -> Option<ParsedReleaseMeta
     parse_usable_release_title(stem.as_str())
 }
 
-/// Proof that the manual import executor's own content probe qualified a
-/// source as video. Only that executor builds one, from the video facts its
-/// re-qualification returned, so automatic imports never carry it and keep
-/// rejecting sources outside the known video extensions.
+// An extensionless file has no name to say it is video, so its header is
+// probed instead. Keep small samples and sidecars out of that probe while
+// leaving known video files (including legitimate short specials) untouched.
+const OPAQUE_VIDEO_PROBE_MIN_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Whether `path` is an opaque file worth a content probe: no extension, and
+/// at least [`OPAQUE_VIDEO_PROBE_MIN_BYTES`] long. A file with any extension is
+/// never probed.
+fn opaque_video_probe_applies(path: &Path, len: u64) -> bool {
+    path.extension().is_none() && len >= OPAQUE_VIDEO_PROBE_MIN_BYTES
+}
+
+/// Bounded content probe of `path`: the video facts when it is a valid video
+/// (or, with `disc_image`, any analyzable disc image), `Ok(None)` when its
+/// content is not video, and `Err` with the I/O failure. Blocking; it never
+/// renices the calling thread.
+fn probe_video_content(
+    path: &Path,
+    disc_image: bool,
+) -> Result<Option<ManualImportVideoFacts>, String> {
+    #[cfg(feature = "runtime-media-analysis")]
+    {
+        let started = std::time::Instant::now();
+        let result = if disc_image {
+            scryer_mediainfo::analyze_disc_file(path, Default::default())
+        } else {
+            scryer_mediainfo::analyze_file_with_options(
+                path,
+                scryer_mediainfo::AnalyzeOptions {
+                    profile: scryer_mediainfo::AnalysisProfile::ContentProbe,
+                },
+            )
+        };
+        crate::media::metrics::record_probe(
+            crate::media::metrics::ProbeOperation::Discovery,
+            started.elapsed(),
+            result
+                .as_ref()
+                .ok()
+                .map(|analysis| &analysis.details.report),
+        );
+        match result {
+            Ok(analysis) if disc_image || scryer_mediainfo::is_valid_video(&analysis) => {
+                Ok(Some(ManualImportVideoFacts {
+                    container_format: analysis.container_format,
+                    video_codec: analysis.video_codec,
+                    audio_codec: analysis.audio_codec,
+                    video_width: analysis.video_width,
+                    video_height: analysis.video_height,
+                    duration_seconds: analysis.duration_seconds,
+                    disc: analysis.details.disc,
+                    report: analysis.details.report,
+                }))
+            }
+            Ok(_)
+            | Err(scryer_mediainfo::MediaInfoError::Parse(_))
+            | Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)) => Ok(None),
+            Err(scryer_mediainfo::MediaInfoError::Io(error)) => Err(error),
+        }
+    }
+    #[cfg(not(feature = "runtime-media-analysis"))]
+    {
+        let _ = (path, disc_image);
+        Ok(None)
+    }
+}
+
+/// The content-probe proof for an opaque regular file whose header identifies
+/// a video container; `None` for a file with an extension, one too small to
+/// probe, or content that is not video.
+fn content_qualify_opaque_video(path: &Path) -> Option<ContentQualifiedVideo> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() || !opaque_video_probe_applies(path, metadata.len()) {
+        return None;
+    }
+    match probe_video_content(path, false) {
+        Ok(facts) => facts.as_ref().map(ContentQualifiedVideo::from_video_facts),
+        Err(error) => {
+            tracing::debug!(
+                path = %path.display(),
+                error,
+                "extensionless file could not be content-probed; not treated as video"
+            );
+            None
+        }
+    }
+}
+
+/// Proof that a content probe qualified an extensionless source as video.
+/// Discovery ([`discover_video_files`]) and the manual import executor's
+/// re-qualification build one from the probe's video facts; it carries the
+/// source through the import checks and names the destination by container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ContentQualifiedVideo {
     /// Destination extension for the probed container, when it maps to one.
@@ -1098,13 +1210,9 @@ impl SrrdbFilenameRecovery {
         &mut self,
         app: &AppUseCase,
         completed: &CompletedDownload,
-        video_files: Vec<PathBuf>,
+        mut files: Vec<ImportVideoFile>,
         needs_own_name: bool,
     ) -> Vec<ImportVideoFile> {
-        let mut files: Vec<ImportVideoFile> = video_files
-            .into_iter()
-            .map(ImportVideoFile::physical)
-            .collect();
         let posted_file_names = self.posted_file_names(app, completed, &files).await;
         apply_posted_file_names(completed, posted_file_names, &mut files);
 

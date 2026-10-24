@@ -71,10 +71,12 @@ impl RootMoveFixture {
                 "movies".to_string(),
                 vec![
                     LibraryRootDraft {
+                        id: None,
                         path: root_a.to_string_lossy().to_string(),
                         is_default: true,
                     },
                     LibraryRootDraft {
+                        id: None,
                         path: root_b.to_string_lossy().to_string(),
                         is_default: false,
                     },
@@ -127,14 +129,17 @@ impl RootMoveFixture {
                 "movies".to_string(),
                 vec![
                     LibraryRootDraft {
+                        id: None,
                         path: self.root_a().to_string_lossy().to_string(),
                         is_default: true,
                     },
                     LibraryRootDraft {
+                        id: None,
                         path: self.root_b().to_string_lossy().to_string(),
                         is_default: false,
                     },
                     LibraryRootDraft {
+                        id: None,
                         path: root_c.to_string_lossy().to_string(),
                         is_default: false,
                     },

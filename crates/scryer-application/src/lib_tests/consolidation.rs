@@ -91,10 +91,12 @@ impl ConsolidationFixture {
                 "movies".to_string(),
                 vec![
                     LibraryRootDraft {
+                        id: None,
                         path: source.to_string_lossy().to_string(),
                         is_default: source_is_default,
                     },
                     LibraryRootDraft {
+                        id: None,
                         path: destination.to_string_lossy().to_string(),
                         is_default: !source_is_default,
                     },

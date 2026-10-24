@@ -52,6 +52,30 @@ pub(crate) const COMPONENT_STRATEGY_EVENT_CAPACITY: usize = 16;
 
 static ACTIVE_COMPONENT_HTTP: AtomicUsize = AtomicUsize::new(0);
 
+/// Whether `host` is the declared host or one of its subdomains.
+///
+/// The match is on a label boundary (`dl.tracker.example` is inside
+/// `tracker.example`; `badtracker.example` is not), so a declaration never
+/// reaches a different registrable domain. It only widens a declared domain
+/// name with at least two labels: an IP literal or a single-label name such as
+/// `localhost` matches exactly and nothing else.
+fn within_declared_domain(host: &str, declared: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let declared = declared.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || declared.is_empty() {
+        return false;
+    }
+    if host == declared {
+        return true;
+    }
+    if !matches!(url::Host::parse(&declared), Ok(url::Host::Domain(_))) || !declared.contains('.') {
+        return false;
+    }
+    host.strip_suffix(declared.as_str())
+        .and_then(|prefix| prefix.strip_suffix('.'))
+        .is_some_and(|label| !label.is_empty())
+}
+
 /// Returns true only for a top-level component binary, whatever world it
 /// implements. Every component-backed plugin kind classifies on this first and
 /// lets its generated binding validate the concrete package/world during
@@ -252,13 +276,33 @@ impl ComponentHost {
             .declared_hosts
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = hosts;
-        self.inner
-            .transport_proxy_client
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
     }
 
+    /// Whether the guest may send a request to `request_url`.
+    ///
+    /// Static allowlist entries match as written (exact host or glob). A host
+    /// the plugin declared from its configuration also covers its subdomains,
+    /// so a tracker's download or CDN host on the same domain is reachable,
+    /// but never a different domain: see [`within_declared_domain`].
+    fn request_host_allowed(&self, request_url: &str) -> bool {
+        if enforce_allowed_hosts(Some(&self.inner.allowed_hosts), request_url).is_ok() {
+            return true;
+        }
+        let Ok(url) = url::Url::parse(request_url) else {
+            return false;
+        };
+        let Some(url::Host::Domain(host)) = url.host() else {
+            return false;
+        };
+        self.inner
+            .declared_hosts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|declared| within_declared_domain(host, declared))
+    }
+
+    #[cfg(test)]
     fn allowed_hosts(&self) -> Vec<String> {
         let mut hosts = self.inner.allowed_hosts.clone();
         hosts.extend(
@@ -404,7 +448,7 @@ impl ComponentHost {
             actor: &self.inner.active,
         };
 
-        if enforce_allowed_hosts(Some(&self.allowed_hosts()), &request.url).is_err() {
+        if !self.request_host_allowed(&request.url) {
             if let Ok(mut capture) = self.inner.indexer_error_capture.lock()
                 && let Some(capture) = capture.as_mut()
             {
@@ -553,10 +597,15 @@ impl ComponentHost {
         {
             return Ok(entry.client.clone());
         }
+        // Never follow redirects here: the guest sees every 3xx, exactly as on
+        // the direct path, because it owns redirect handling (cookies set on a
+        // hop, a definition that keeps a redirect unfollowed, method rules).
+        // A redirect the guest follows is a new request through `http`, so
+        // the allowed-hosts check still applies to every hop.
         let client = transport_proxy::transport_proxied_reqwest_client_with_redirect_policy(
             config,
             extra_ca_bundle_pem,
-            crate::plugin_http_host::plugin_transport_redirect_policy(Some(self.allowed_hosts())),
+            reqwest::redirect::Policy::none(),
         )
         .map_err(|message| {
             transport_proxy::record_transport_proxy_failure(config, &message);
@@ -989,6 +1038,31 @@ impl ComponentHost {
             .lock()
             .ok()
             .and_then(|state| state.values.get(key).cloned())
+    }
+
+    /// A copy of everything the component has stored, for carrying its
+    /// sign-in session to another client of the same settings.
+    pub(crate) fn state_snapshot(&self) -> BTreeMap<String, Vec<u8>> {
+        self.inner
+            .state
+            .lock()
+            .map(|state| state.values.clone())
+            .unwrap_or_default()
+    }
+
+    /// Start this host's state from `values`, replacing what it holds. A
+    /// snapshot over the state limit is ignored.
+    pub(crate) fn seed_state(&self, values: BTreeMap<String, Vec<u8>>) {
+        let bytes = values
+            .iter()
+            .map(|(key, value)| key.len() + value.len())
+            .sum::<usize>();
+        if bytes > MAX_COMPONENT_STATE_BYTES {
+            return;
+        }
+        if let Ok(mut state) = self.inner.state.lock() {
+            *state = ComponentState { values, bytes };
+        }
     }
 
     fn state_cas(
@@ -1551,9 +1625,9 @@ pub(crate) struct ComponentActor {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GuestMemoryUsage {
     /// Linear memory resident in the Store. Memory never shrinks, so this is
-    /// also the Store's peak.
+    /// also the Store's peak, and the cap bounds it.
     pub(crate) resident_bytes: usize,
-    /// Largest single linear memory, the figure the cap is checked against.
+    /// Largest single linear memory.
     pub(crate) largest_memory_bytes: usize,
     pub(crate) cap_bytes: usize,
     /// The limiter refused a growth past `cap_bytes`.
@@ -1708,6 +1782,75 @@ mod tests {
         assert!(other.allowed_hosts().is_empty());
         host.set_declared_hosts(vec!["new.example".into()]);
         assert_eq!(host.allowed_hosts(), vec!["new.example"]);
+    }
+
+    #[test]
+    fn declared_hosts_cover_their_own_subdomains_only() {
+        for (host, declared) in [
+            ("tracker.example", "tracker.example"),
+            ("dl.tracker.example", "tracker.example"),
+            ("a.b.tracker.example", "tracker.example"),
+            ("DL.Tracker.Example", "tracker.example"),
+            ("dl.tracker.example.", "tracker.example"),
+            ("localhost", "localhost"),
+            ("192.0.2.7", "192.0.2.7"),
+        ] {
+            assert!(
+                within_declared_domain(host, declared),
+                "{host} in {declared}"
+            );
+        }
+        for (host, declared) in [
+            // A different registrable domain that merely ends the same way.
+            ("badtracker.example", "tracker.example"),
+            ("tracker.example.evil", "tracker.example"),
+            // A parent or sibling of the declared host is not inside it.
+            ("tracker.example", "www.tracker.example"),
+            ("dl.tracker.example", "www.tracker.example"),
+            ("other.example", "tracker.example"),
+            // Single-label names and IP literals never widen.
+            ("api.localhost", "localhost"),
+            ("tracker.example", "example"),
+            ("1.192.0.2.7", "192.0.2.7"),
+            ("", "tracker.example"),
+        ] {
+            assert!(
+                !within_declared_domain(host, declared),
+                "{host} must not be in {declared}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn declared_hosts_admit_same_domain_requests_and_refuse_others() {
+        let host = strategy_test_host(None);
+        host.set_declared_hosts(vec!["tracker.example".into(), "mirror.example".into()]);
+        for allowed in [
+            "https://tracker.example/login.php",
+            "https://dl.tracker.example/download.php?id=1",
+            "http://cdn.mirror.example:8080/file.torrent",
+        ] {
+            assert!(host.request_host_allowed(allowed), "{allowed}");
+        }
+        for refused in [
+            "https://badtracker.example/",
+            "https://tracker.example.evil/",
+            "https://unrelated.example/",
+            "https://127.0.0.1/",
+            "not a url",
+        ] {
+            assert!(!host.request_host_allowed(refused), "{refused}");
+        }
+        assert!(matches!(
+            host.http(HttpRequest {
+                method: "GET".into(),
+                url: "https://badtracker.example/private".into(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            })
+            .await,
+            Err(TransportError::ForbiddenOrigin)
+        ));
     }
 
     #[tokio::test]
@@ -2009,6 +2152,71 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn indexer_store_caps_the_sum_of_several_core_memories() {
+        use crate::wasmtime_host::sandbox::DEFAULT_INDEXER_MEMORY_CAP_BYTES;
+        const PAGE: usize = 65536;
+        let host = ComponentHost::for_indexer(
+            BTreeMap::new(),
+            Vec::new(),
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .expect("component host should build");
+        let engine = crate::wasmtime_host::engine::shared_async_engine();
+        let module = wasmtime::Module::new(
+            engine,
+            wat::parse_str("(module (memory (export \"a\") 1) (memory (export \"b\") 1))")
+                .expect("multi-memory WAT must parse"),
+        )
+        .expect("a two-memory core module must compile");
+        let mut store = host.new_store(engine);
+        let instance = wasmtime::Instance::new_async(&mut store, &module, &[])
+            .await
+            .expect("core module must instantiate");
+        let a = instance
+            .get_memory(&mut store, "a")
+            .expect("memory a must exist");
+        let b = instance
+            .get_memory(&mut store, "b")
+            .expect("memory b must exist");
+        let cap_pages = u64::try_from(DEFAULT_INDEXER_MEMORY_CAP_BYTES / PAGE)
+            .expect("indexer cap fits in u64");
+
+        // Memory a takes three quarters of the cap: within it on its own.
+        a.grow_async(&mut store, cap_pages * 3 / 4 - 1)
+            .await
+            .expect("growth within the cap must succeed");
+        assert!(!store.data().limits.memory_denied);
+        let resident = store.data().limits.resident_memory_bytes();
+        assert_eq!(resident, (cap_pages as usize * 3 / 4 + 1) * PAGE);
+
+        // Memory b growing to half the cap is under the per-memory cap but
+        // would put the Store past it in total.
+        assert!(
+            b.grow_async(&mut store, cap_pages / 2 - 1).await.is_err(),
+            "the Store's memories together must not exceed the cap"
+        );
+        assert!(store.data().limits.memory_denied);
+        assert_eq!(
+            store.data().limits.resident_memory_bytes(),
+            resident,
+            "a refused growth must not count as resident memory"
+        );
+
+        // Up to exactly the remaining headroom is still granted.
+        let headroom_pages =
+            u64::try_from((DEFAULT_INDEXER_MEMORY_CAP_BYTES - resident) / PAGE).expect("fits");
+        b.grow_async(&mut store, headroom_pages)
+            .await
+            .expect("growth to exactly the cap must succeed");
+        assert_eq!(
+            store.data().limits.resident_memory_bytes(),
+            DEFAULT_INDEXER_MEMORY_CAP_BYTES
+        );
+    }
+
     #[test]
     fn indexer_host_cap_override_reaches_the_store_and_the_endpoint_resolver() {
         let host = ComponentHost::for_indexer_with_provider_profile(
@@ -2217,54 +2425,53 @@ mod tests {
         );
     }
 
+    /// The guest owns redirects: a transport-proxied 3xx reaches it unfollowed,
+    /// with its `Location` and every `Set-Cookie`, exactly as the direct path
+    /// returns it, and nothing past the first hop is requested.
     #[tokio::test(flavor = "multi_thread")]
-    async fn component_transport_proxy_redirects_revalidate_every_destination() {
+    async fn component_transport_proxy_returns_redirects_unfollowed() {
         use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
-        for (destination, expected_success, expected_requests) in [
-            ("/final", true, 3),
-            ("http://outside.example/final", false, 2),
-            (
-                "/middle",
-                false,
-                scryer_outbound_http::DEFAULT_TRUSTED_REDIRECT_HOPS,
-            ),
-        ] {
-            let proxy = MockServer::start().await;
-            Mock::given(path("/start"))
-                .respond_with(ResponseTemplate::new(302).insert_header("Location", "/middle"))
-                .mount(&proxy)
-                .await;
-            Mock::given(path("/middle"))
-                .respond_with(ResponseTemplate::new(302).insert_header("Location", destination))
-                .mount(&proxy)
-                .await;
-            Mock::given(path("/final"))
-                .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
-                .mount(&proxy)
-                .await;
-            let host =
-                component_transport_test_host(scryer_domain::ProxyProviderType::Http, proxy.uri());
-            let result = host
-                .http(HttpRequest {
-                    method: "GET".into(),
-                    url: "http://indexer.example/start".into(),
-                    headers: Vec::new(),
-                    body: Vec::new(),
-                })
-                .await;
-            assert_eq!(
-                result.is_ok(),
-                expected_success,
-                "{destination}: {result:?}"
-            );
-            let requests = proxy.received_requests().await.unwrap();
-            assert_eq!(requests.len(), expected_requests, "{destination}");
-            assert!(
-                requests
-                    .iter()
-                    .all(|request| request.url.host_str() != Some("outside.example"))
-            );
-        }
+        let proxy = MockServer::start().await;
+        Mock::given(path("/start"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", "/final")
+                    .append_header("Set-Cookie", "session=one; Path=/")
+                    .append_header("Set-Cookie", "theme=dark; Path=/"),
+            )
+            .mount(&proxy)
+            .await;
+        Mock::given(path("/final"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&proxy)
+            .await;
+        let host =
+            component_transport_test_host(scryer_domain::ProxyProviderType::Http, proxy.uri());
+
+        let response = host
+            .http(HttpRequest {
+                method: "POST".into(),
+                url: "http://indexer.example/start".into(),
+                headers: Vec::new(),
+                body: b"user=fixture".to_vec(),
+            })
+            .await
+            .expect("an unfollowed redirect is a response, not an error");
+
+        assert_eq!(response.status, 302);
+        let header_values = |name: &str| {
+            response
+                .headers
+                .iter()
+                .filter(|header| header.name.eq_ignore_ascii_case(name))
+                .map(|header| header.value.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(header_values("location"), vec!["/final".to_string()]);
+        assert_eq!(header_values("set-cookie").len(), 2);
+        let requests = proxy.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "only the first hop may be sent");
+        assert_eq!(requests[0].url.path(), "/start");
     }
 
     /// A transport proxy has no solve endpoint: an unreachable one must fail

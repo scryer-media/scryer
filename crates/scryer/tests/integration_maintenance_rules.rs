@@ -1683,6 +1683,7 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
         library.name,
         library.slug,
         vec![scryer_application::LibraryRootDraft {
+            id: None,
             path: root.path().to_string_lossy().into_owned(),
             is_default: true,
         }],

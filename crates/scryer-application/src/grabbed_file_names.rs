@@ -113,53 +113,175 @@ pub fn long_file_names_from_nzb(bytes: &[u8]) -> Vec<GrabbedFileName> {
 /// The long names a torrent's file list carries, each with its exact size.
 ///
 /// Only the last path element is a file name a client writes; a torrent that
-/// does not decode yields nothing.
+/// does not decode yields nothing. The torrent is read without building a
+/// tree: every value outside `info`'s name, length and `files` entries is
+/// skipped in place, and the whole read is bounded by
+/// [`MAX_BENCODE_NODES`] and [`MAX_BENCODE_COLLECTION_WIDTH`], so a hostile
+/// torrent of millions of tiny elements costs a bounded scan and no
+/// allocation beyond the names kept.
 pub fn long_file_names_from_torrent(bytes: &[u8]) -> Vec<GrabbedFileName> {
-    let Some((Bencode::Dict(root), _)) = Bencode::parse(bytes, 0) else {
-        return Vec::new();
-    };
-    let Some(Bencode::Dict(info)) = dict_get(&root, b"info") else {
-        return Vec::new();
-    };
-    let mut files = Vec::new();
-    match dict_get(info, b"files") {
-        Some(Bencode::List(entries)) => {
-            for entry in entries {
-                let Bencode::Dict(entry) = entry else {
-                    continue;
-                };
-                let path = dict_get(entry, b"path.utf-8").or_else(|| dict_get(entry, b"path"));
-                let Some(Bencode::List(path)) = path else {
-                    continue;
-                };
-                let Some(Bencode::Bytes(name)) = path.last() else {
-                    continue;
-                };
-                files.push((*name, dict_get(entry, b"length")));
-            }
+    match torrent_long_file_names(bytes, &mut BencodeBudget::default()) {
+        Ok(names) => names,
+        Err(error @ (BencodeError::NodeBudget | BencodeError::WidthBudget)) => {
+            tracing::warn!(
+                error = error.as_str(),
+                torrent_bytes = bytes.len(),
+                "torrent exceeds the bencode parse budget; its file names are not read"
+            );
+            Vec::new()
         }
-        _ => {
-            let name = dict_get(info, b"name.utf-8").or_else(|| dict_get(info, b"name"));
-            if let Some(Bencode::Bytes(name)) = name {
-                files.push((*name, dict_get(info, b"length")));
+        Err(BencodeError::Malformed) => Vec::new(),
+    }
+}
+
+fn torrent_long_file_names(
+    bytes: &[u8],
+    budget: &mut BencodeBudget,
+) -> Result<Vec<GrabbedFileName>, BencodeError> {
+    let mut rest = budget.open(bytes, b'd', 0)?;
+    let mut width = 0;
+    let mut info = None;
+    while BencodeBudget::next_item(&mut rest)? {
+        let input = rest;
+        budget.widen(&mut width)?;
+        let (key, value) = budget.bytes(input)?;
+        if key == b"info" && info.is_none() && value.first() == Some(&b'd') {
+            let (names, next) = torrent_info_long_file_names(value, budget)?;
+            if names.len() >= MAX_GRABBED_FILE_NAMES {
+                // Everything the caller keeps is in hand.
+                return Ok(names);
+            }
+            info = Some(names);
+            rest = next;
+        } else {
+            rest = budget.skip(value, 1)?;
+        }
+    }
+    Ok(info.unwrap_or_default())
+}
+
+/// Read an `info` dict: the `files` list when it is one, else the
+/// single-file `name` and `length`.
+fn torrent_info_long_file_names<'a>(
+    bytes: &'a [u8],
+    budget: &mut BencodeBudget,
+) -> Result<(Vec<GrabbedFileName>, &'a [u8]), BencodeError> {
+    let mut rest = budget.open(bytes, b'd', 1)?;
+    let mut width = 0;
+    let mut files: Option<Vec<GrabbedFileName>> = None;
+    let mut name = None;
+    let mut name_utf8 = None;
+    let mut length = None;
+    while BencodeBudget::next_item(&mut rest)? {
+        let input = rest;
+        budget.widen(&mut width)?;
+        let (key, value) = budget.bytes(input)?;
+        rest = match key {
+            b"files" if files.is_none() && value.first() == Some(&b'l') => {
+                let (names, next) = torrent_files_long_names(value, budget)?;
+                if names.len() >= MAX_GRABBED_FILE_NAMES {
+                    return Ok((names, next));
+                }
+                files = Some(names);
+                next
+            }
+            b"name" => budget.scalar_into(value, 2, &mut name)?,
+            b"name.utf-8" => budget.scalar_into(value, 2, &mut name_utf8)?,
+            b"length" => budget.scalar_into(value, 2, &mut length)?,
+            _ => budget.skip(value, 2)?,
+        };
+    }
+    if let Some(files) = files {
+        return Ok((files, rest));
+    }
+    let name = match name_utf8.or(name) {
+        Some(BencodeScalar::Bytes(name)) => Some(name),
+        _ => None,
+    };
+    Ok((
+        name.and_then(|name| long_grabbed_file_name(name, length))
+            .into_iter()
+            .collect(),
+        rest,
+    ))
+}
+
+/// Read a `files` list, keeping the long names until the caller's limit.
+fn torrent_files_long_names<'a>(
+    bytes: &'a [u8],
+    budget: &mut BencodeBudget,
+) -> Result<(Vec<GrabbedFileName>, &'a [u8]), BencodeError> {
+    let mut rest = budget.open(bytes, b'l', 2)?;
+    let mut width = 0;
+    let mut names = Vec::new();
+    while BencodeBudget::next_item(&mut rest)? {
+        let input = rest;
+        budget.widen(&mut width)?;
+        if input.first() != Some(&b'd') {
+            rest = budget.skip(input, 3)?;
+            continue;
+        }
+        let (name, length, next) = torrent_file_entry(input, budget)?;
+        rest = next;
+        if let Some(found) = name.and_then(|name| long_grabbed_file_name(name, length)) {
+            names.push(found);
+            if names.len() >= MAX_GRABBED_FILE_NAMES {
+                return Ok((names, rest));
             }
         }
     }
-    files
-        .into_iter()
-        .filter_map(|(name, length)| {
-            let name = std::str::from_utf8(name).ok()?;
-            file_name_looks_cut(name).then(|| GrabbedFileName {
-                name: name.to_string(),
-                exact_size_bytes: match length {
-                    Some(Bencode::Int(length)) => u64::try_from(*length).ok(),
-                    _ => None,
-                },
-                posted_size_bytes: None,
-            })
-        })
-        .take(MAX_GRABBED_FILE_NAMES)
-        .collect()
+    Ok((names, rest))
+}
+
+/// One `files` entry: the last element of its path (`path.utf-8` before
+/// `path`) and its length.
+#[allow(clippy::type_complexity)]
+fn torrent_file_entry<'a>(
+    bytes: &'a [u8],
+    budget: &mut BencodeBudget,
+) -> Result<(Option<&'a [u8]>, Option<BencodeScalar<'a>>, &'a [u8]), BencodeError> {
+    let mut rest = budget.open(bytes, b'd', 3)?;
+    let mut width = 0;
+    // Outer `Some`: the key is present. A present path that is not a list,
+    // or whose last element is not a string, names no file.
+    let mut path: Option<Option<&[u8]>> = None;
+    let mut path_utf8: Option<Option<&[u8]>> = None;
+    let mut length = None;
+    while BencodeBudget::next_item(&mut rest)? {
+        let input = rest;
+        budget.widen(&mut width)?;
+        let (key, value) = budget.bytes(input)?;
+        rest = match key {
+            b"path" if path.is_none() => {
+                let (last, next) = budget.last_list_string(value, 4)?;
+                path = Some(last);
+                next
+            }
+            b"path.utf-8" if path_utf8.is_none() => {
+                let (last, next) = budget.last_list_string(value, 4)?;
+                path_utf8 = Some(last);
+                next
+            }
+            b"length" => budget.scalar_into(value, 4, &mut length)?,
+            _ => budget.skip(value, 4)?,
+        };
+    }
+    Ok((path_utf8.or(path).flatten(), length, rest))
+}
+
+fn long_grabbed_file_name(
+    name: &[u8],
+    length: Option<BencodeScalar<'_>>,
+) -> Option<GrabbedFileName> {
+    let name = std::str::from_utf8(name).ok()?;
+    file_name_looks_cut(name).then(|| GrabbedFileName {
+        name: name.to_string(),
+        exact_size_bytes: match length {
+            Some(BencodeScalar::Int(length)) => u64::try_from(length).ok(),
+            _ => None,
+        },
+        posted_size_bytes: None,
+    })
 }
 
 /// Pair each file whose name looks cut with the grabbed name it was cut from.
@@ -288,67 +410,226 @@ fn local_name(name: &str) -> &str {
     name.rsplit(':').next().unwrap_or(name)
 }
 
-/// Just enough bencode to read a torrent's file list.
-enum Bencode<'a> {
-    Int(i64),
-    Bytes(&'a [u8]),
-    List(Vec<Bencode<'a>>),
-    Dict(Vec<(&'a [u8], Bencode<'a>)>),
+/// Bencode values a torrent read may visit in total (every integer, string,
+/// list and dict counts one, dict keys included). A legitimate torrent's file
+/// entry costs about seven, so this admits well over 100,000 files, far past
+/// any real release, while bounding the scan of a hostile one.
+const MAX_BENCODE_NODES: usize = 1_000_000;
+
+/// Items one bencode list or dict may hold.
+const MAX_BENCODE_COLLECTION_WIDTH: usize = 250_000;
+
+/// Nesting a torrent read follows before it gives up.
+const MAX_BENCODE_DEPTH: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BencodeError {
+    Malformed,
+    /// The read visited more than its node budget.
+    NodeBudget,
+    /// One list or dict held more items than the width budget.
+    WidthBudget,
 }
 
-impl<'a> Bencode<'a> {
-    const MAX_DEPTH: usize = 32;
-
-    fn parse(bytes: &'a [u8], depth: usize) -> Option<(Self, &'a [u8])> {
-        if depth > Self::MAX_DEPTH {
-            return None;
-        }
-        match *bytes.first()? {
-            b'i' => {
-                let end = bytes.iter().position(|b| *b == b'e')?;
-                let value = std::str::from_utf8(&bytes[1..end]).ok()?.parse().ok()?;
-                Some((Self::Int(value), &bytes[end + 1..]))
-            }
-            b'l' => {
-                let mut rest = &bytes[1..];
-                let mut items = Vec::new();
-                while *rest.first()? != b'e' {
-                    let (item, next) = Self::parse(rest, depth + 1)?;
-                    items.push(item);
-                    rest = next;
-                }
-                Some((Self::List(items), &rest[1..]))
-            }
-            b'd' => {
-                let mut rest = &bytes[1..];
-                let mut entries = Vec::new();
-                while *rest.first()? != b'e' {
-                    let (Self::Bytes(key), next) = Self::parse(rest, depth + 1)? else {
-                        return None;
-                    };
-                    let (value, next) = Self::parse(next, depth + 1)?;
-                    entries.push((key, value));
-                    rest = next;
-                }
-                Some((Self::Dict(entries), &rest[1..]))
-            }
-            b'0'..=b'9' => {
-                let colon = bytes.iter().position(|b| *b == b':')?;
-                let len: usize = std::str::from_utf8(&bytes[..colon]).ok()?.parse().ok()?;
-                let start = colon + 1;
-                let end = start.checked_add(len)?;
-                Some((Self::Bytes(bytes.get(start..end)?), &bytes[end..]))
-            }
-            _ => None,
+impl BencodeError {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Malformed => "malformed bencode",
+            Self::NodeBudget => "more than the bencode node budget",
+            Self::WidthBudget => "a bencode list or dict wider than the width budget",
         }
     }
 }
 
-fn dict_get<'d, 'a>(entries: &'d [(&'a [u8], Bencode<'a>)], key: &[u8]) -> Option<&'d Bencode<'a>> {
-    entries
-        .iter()
-        .find(|(entry_key, _)| *entry_key == key)
-        .map(|(_, value)| value)
+/// An integer or string read in place; any other value was skipped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BencodeScalar<'a> {
+    Int(i64),
+    Bytes(&'a [u8]),
+    Other,
+}
+
+/// Just enough bencode to read a torrent's file list, without building a
+/// tree, within a node and width budget.
+struct BencodeBudget {
+    remaining_nodes: usize,
+    max_width: usize,
+}
+
+impl Default for BencodeBudget {
+    fn default() -> Self {
+        Self {
+            remaining_nodes: MAX_BENCODE_NODES,
+            max_width: MAX_BENCODE_COLLECTION_WIDTH,
+        }
+    }
+}
+
+impl BencodeBudget {
+    fn node(&mut self) -> Result<(), BencodeError> {
+        self.remaining_nodes = self
+            .remaining_nodes
+            .checked_sub(1)
+            .ok_or(BencodeError::NodeBudget)?;
+        Ok(())
+    }
+
+    fn widen(&self, width: &mut usize) -> Result<(), BencodeError> {
+        *width += 1;
+        if *width > self.max_width {
+            return Err(BencodeError::WidthBudget);
+        }
+        Ok(())
+    }
+
+    /// Enter a list (`l`) or dict (`d`), returning its body.
+    fn open<'a>(
+        &mut self,
+        bytes: &'a [u8],
+        tag: u8,
+        depth: usize,
+    ) -> Result<&'a [u8], BencodeError> {
+        if depth > MAX_BENCODE_DEPTH {
+            return Err(BencodeError::Malformed);
+        }
+        if bytes.first() != Some(&tag) {
+            return Err(BencodeError::Malformed);
+        }
+        self.node()?;
+        Ok(&bytes[1..])
+    }
+
+    /// Whether a collection body holds another item at `rest`. At its
+    /// closing `e` this steps `rest` past it and answers `false`.
+    fn next_item(rest: &mut &[u8]) -> Result<bool, BencodeError> {
+        match rest.first() {
+            None => Err(BencodeError::Malformed),
+            Some(b'e') => {
+                *rest = &rest[1..];
+                Ok(false)
+            }
+            Some(_) => Ok(true),
+        }
+    }
+
+    fn bytes<'a>(&mut self, bytes: &'a [u8]) -> Result<(&'a [u8], &'a [u8]), BencodeError> {
+        if !bytes.first().is_some_and(u8::is_ascii_digit) {
+            return Err(BencodeError::Malformed);
+        }
+        self.node()?;
+        let colon = bytes
+            .iter()
+            .position(|b| *b == b':')
+            .ok_or(BencodeError::Malformed)?;
+        let len: usize = std::str::from_utf8(&bytes[..colon])
+            .ok()
+            .and_then(|len| len.parse().ok())
+            .ok_or(BencodeError::Malformed)?;
+        let start = colon + 1;
+        let end = start.checked_add(len).ok_or(BencodeError::Malformed)?;
+        let value = bytes.get(start..end).ok_or(BencodeError::Malformed)?;
+        Ok((value, &bytes[end..]))
+    }
+
+    fn int<'a>(&mut self, bytes: &'a [u8]) -> Result<(i64, &'a [u8]), BencodeError> {
+        if bytes.first() != Some(&b'i') {
+            return Err(BencodeError::Malformed);
+        }
+        self.node()?;
+        let end = bytes
+            .iter()
+            .position(|b| *b == b'e')
+            .ok_or(BencodeError::Malformed)?;
+        let value = std::str::from_utf8(&bytes[1..end])
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .ok_or(BencodeError::Malformed)?;
+        Ok((value, &bytes[end + 1..]))
+    }
+
+    /// Read an integer or string in place, skipping any other value.
+    fn scalar<'a>(
+        &mut self,
+        bytes: &'a [u8],
+        depth: usize,
+    ) -> Result<(BencodeScalar<'a>, &'a [u8]), BencodeError> {
+        match bytes.first() {
+            Some(b'i') => self
+                .int(bytes)
+                .map(|(value, rest)| (BencodeScalar::Int(value), rest)),
+            Some(b'0'..=b'9') => self
+                .bytes(bytes)
+                .map(|(value, rest)| (BencodeScalar::Bytes(value), rest)),
+            _ => self
+                .skip(bytes, depth)
+                .map(|rest| (BencodeScalar::Other, rest)),
+        }
+    }
+
+    /// Read a scalar into `slot` when it is still empty (the first of a
+    /// repeated key wins, as a lookup would find it); skip it otherwise.
+    fn scalar_into<'a>(
+        &mut self,
+        bytes: &'a [u8],
+        depth: usize,
+        slot: &mut Option<BencodeScalar<'a>>,
+    ) -> Result<&'a [u8], BencodeError> {
+        let (value, rest) = self.scalar(bytes, depth)?;
+        if slot.is_none() {
+            *slot = Some(value);
+        }
+        Ok(rest)
+    }
+
+    /// The last element of a list when it is a string. A value that is not
+    /// a list, or a list ending in anything else, yields `None`.
+    fn last_list_string<'a>(
+        &mut self,
+        bytes: &'a [u8],
+        depth: usize,
+    ) -> Result<(Option<&'a [u8]>, &'a [u8]), BencodeError> {
+        if bytes.first() != Some(&b'l') {
+            return self.skip(bytes, depth).map(|rest| (None, rest));
+        }
+        let mut rest = self.open(bytes, b'l', depth)?;
+        let mut width = 0;
+        let mut last = None;
+        while Self::next_item(&mut rest)? {
+            let input = rest;
+            self.widen(&mut width)?;
+            let (value, next) = self.scalar(input, depth + 1)?;
+            last = match value {
+                BencodeScalar::Bytes(value) => Some(value),
+                _ => None,
+            };
+            rest = next;
+        }
+        Ok((last, rest))
+    }
+
+    /// Step over one value of any kind without keeping it.
+    fn skip<'a>(&mut self, bytes: &'a [u8], depth: usize) -> Result<&'a [u8], BencodeError> {
+        match bytes.first() {
+            Some(b'i') => self.int(bytes).map(|(_, rest)| rest),
+            Some(b'0'..=b'9') => self.bytes(bytes).map(|(_, rest)| rest),
+            Some(&tag @ (b'l' | b'd')) => {
+                let mut rest = self.open(bytes, tag, depth)?;
+                let mut width = 0;
+                while Self::next_item(&mut rest)? {
+                    let input = rest;
+                    self.widen(&mut width)?;
+                    rest = if tag == b'd' {
+                        let (_, value) = self.bytes(input)?;
+                        self.skip(value, depth + 1)?
+                    } else {
+                        self.skip(input, depth + 1)?
+                    };
+                }
+                Ok(rest)
+            }
+            _ => Err(BencodeError::Malformed),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -468,6 +749,118 @@ mod tests {
     fn a_torrent_that_does_not_decode_yields_nothing() {
         assert!(long_file_names_from_torrent(b"d4:infod4:name").is_empty());
         assert!(long_file_names_from_torrent(b"").is_empty());
+        // A files list or dict that never closes is malformed too.
+        assert!(long_file_names_from_torrent(b"d4:infod5:filesld4:pathl1:ae").is_empty());
+    }
+
+    /// A torrent whose `info` carries `count` copies of `element` in a list
+    /// under a key the reader never needs.
+    fn torrent_with_padding(element: &str, count: usize) -> Vec<u8> {
+        let mut torrent = String::from("d4:infod7:paddingl");
+        torrent.push_str(&element.repeat(count));
+        torrent.push_str("e4:name4:show12:piece lengthi16384eee");
+        torrent.into_bytes()
+    }
+
+    #[test]
+    fn a_torrent_past_the_node_budget_is_rejected_while_it_is_scanned() {
+        // Over a million tiny integers, each three bytes: about 3 MiB that a
+        // tree-building parser would expand into a million enum values.
+        let torrent = torrent_with_padding("i0e", MAX_BENCODE_NODES);
+        let mut budget = BencodeBudget {
+            // Room for the width so that only the node budget can trip.
+            max_width: usize::MAX,
+            ..BencodeBudget::default()
+        };
+        assert_eq!(
+            torrent_long_file_names(&torrent, &mut budget),
+            Err(BencodeError::NodeBudget)
+        );
+        assert_eq!(budget.remaining_nodes, 0, "the scan stopped at the budget");
+        assert!(long_file_names_from_torrent(&torrent).is_empty());
+
+        // Nested empty lists count against the same budget.
+        let torrent = torrent_with_padding("le", MAX_BENCODE_NODES);
+        assert_eq!(
+            torrent_long_file_names(
+                &torrent,
+                &mut BencodeBudget {
+                    max_width: usize::MAX,
+                    ..BencodeBudget::default()
+                }
+            ),
+            Err(BencodeError::NodeBudget)
+        );
+    }
+
+    #[test]
+    fn a_torrent_with_a_list_past_the_width_budget_is_rejected() {
+        let torrent = torrent_with_padding("i0e", MAX_BENCODE_COLLECTION_WIDTH + 1);
+        assert_eq!(
+            torrent_long_file_names(&torrent, &mut BencodeBudget::default()),
+            Err(BencodeError::WidthBudget)
+        );
+        assert!(long_file_names_from_torrent(&torrent).is_empty());
+        // Just under both budgets still reads.
+        let torrent = torrent_with_padding("i0e", MAX_BENCODE_COLLECTION_WIDTH);
+        assert_eq!(
+            torrent_long_file_names(&torrent, &mut BencodeBudget::default()),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn a_torrent_with_many_files_yields_its_first_long_names_up_to_the_limit() {
+        let count = MAX_GRABBED_FILE_NAMES + 100;
+        let mut torrent = String::from("d4:infod5:filesl");
+        let mut expected = Vec::new();
+        for index in 0..count {
+            let long = format!("{}.mkv", long_stem(&format!("{index:04}")));
+            // A short-named file between each keeps nothing.
+            torrent.push_str(&format!(
+                "d6:lengthi{index}e4:pathl{}{}eed6:lengthi1e4:pathl{}ee",
+                bencode_bytes("Season 1"),
+                bencode_bytes(&long),
+                bencode_bytes("notes.txt")
+            ));
+            if expected.len() < MAX_GRABBED_FILE_NAMES {
+                expected.push(GrabbedFileName {
+                    name: long,
+                    exact_size_bytes: Some(index as u64),
+                    posted_size_bytes: None,
+                });
+            }
+        }
+        torrent.push_str("e4:name11:Harbor Pals12:piece lengthi16384eee");
+
+        let names = long_file_names_from_torrent(torrent.as_bytes());
+
+        assert_eq!(names.len(), MAX_GRABBED_FILE_NAMES);
+        assert_eq!(names, expected);
+    }
+
+    #[test]
+    fn a_torrent_prefers_utf8_paths_and_skips_entries_without_a_file_name() {
+        let long = format!("{}.mkv", long_stem("08"));
+        let other = format!("{}.mkv", long_stem("09"));
+        let torrent = format!(
+            "d8:announce3:url4:infod5:filesl\
+             d6:lengthi5e4:pathl{}e10:path.utf-8l{}ee\
+             d6:lengthi6e4:pathli1eee\
+             i7e\
+             ee12:piece lengthi1ee",
+            bencode_bytes(&other),
+            bencode_bytes(&long),
+        );
+
+        assert_eq!(
+            long_file_names_from_torrent(torrent.as_bytes()),
+            vec![GrabbedFileName {
+                name: long,
+                exact_size_bytes: Some(5),
+                posted_size_bytes: None,
+            }]
+        );
     }
 
     #[test]

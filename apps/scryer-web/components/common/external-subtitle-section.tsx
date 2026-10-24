@@ -19,6 +19,7 @@ import { canManageLibrarySubtitles } from "@/lib/utils/permissions";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import { formatUiDateTime } from "@/lib/utils/date-format";
+import { deleteErrorMessage } from "@/lib/utils/delete-error-message";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 function formatDateTime(value: string, dateTimeFormat: UiDateTimeFormat) {
@@ -155,7 +156,7 @@ export function ExternalSubtitleSection({
       await onChanged?.();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.apiError"),
+        deleteErrorMessage(error, t, t("status.apiError")),
         { level: "ERROR" },
       );
     } finally {

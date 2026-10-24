@@ -68,9 +68,9 @@ const RELEASE_DRY_RUN_CACHE_FILE: &str = "tmp/xtask-release-dry-run.json";
 const RELEASE_DRY_RUN_BUILTINS_DIR: &str = "tmp/xtask-release-dry-run-builtins";
 const RELEASE_NOTES_DIR: &str = "release-notes";
 const OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_URL: &str =
-    "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.json";
+    "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.modern.redirect.json";
 const OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_BUNDLE_URL: &str =
-    "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.bundle.json";
+    "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.modern.redirect.bundle.json";
 const BUILTIN_ASSET_DIR: &str = "crates/scryer-plugins/builtins";
 const BUILTIN_VERSION_MANIFEST: &str = "crates/scryer-plugins/builtin-versions.json";
 const SIGSTORE_TRUST_ROOT_FILENAME: &str = "sigstore-trusted-root.json";

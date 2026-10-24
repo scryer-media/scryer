@@ -95,6 +95,7 @@ async fn set_media_path(ctx: &TestContext, key_name: &str, value: &str) {
             name.to_string(),
             slug.to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: value.to_string(),
                 is_default: true,
             }],
@@ -319,6 +320,7 @@ async fn graphql_allows_concurrent_scans_for_distinct_libraries_in_same_facet() 
             MediaFacet::Movie,
             "First Movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: first_root.to_string_lossy().to_string(),
                 is_default: true,
             }],
@@ -333,6 +335,7 @@ async fn graphql_allows_concurrent_scans_for_distinct_libraries_in_same_facet() 
             MediaFacet::Movie,
             "Second Movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: second_root.to_string_lossy().to_string(),
                 is_default: true,
             }],

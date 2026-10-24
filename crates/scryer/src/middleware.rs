@@ -3061,9 +3061,12 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         AppError::DownloadSubmitRejected(message) => {
             (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message))).into_response()
         }
+        // A plugin failure is an upstream failure; its sentence is the host's
+        // own and is not masked. The reason is a GraphQL-side contract.
         AppError::DownloadSourceGone(message)
         | AppError::DownloadSubmitUnavailable(message)
-        | AppError::DownloadSubmitFailoverExhausted(message) => {
+        | AppError::DownloadSubmitFailoverExhausted(message)
+        | AppError::PluginFailed { message, .. } => {
             (StatusCode::BAD_GATEWAY, Json(ErrorResponse::new(message))).into_response()
         }
         AppError::ArchiveExtractionPluginRequired { message, .. } => {
@@ -3136,7 +3139,9 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
             )
                 .into_response()
         }
-        AppError::ImportEvidenceUnavailable(message) | AppError::Repository(message) => {
+        AppError::ImportEvidenceUnavailable(message)
+        | AppError::Repository(message)
+        | AppError::RepositoryFailed { message, .. } => {
             let error_id = Id::new().0;
             tracing::error!(
                 error_id = %error_id,

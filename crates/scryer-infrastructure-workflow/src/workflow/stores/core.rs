@@ -1315,9 +1315,12 @@ pub fn build_title_history_filter_sql(
                         ));
                     }
                     TitleHistoryEventType::Rematched => {
-                        parts.push("event_type = {}".to_string());
+                        parts.push("event_type IN ({}, {})".to_string());
                         args.push(SqlArg::Text(
                             DomainEventType::TitleRematched.as_str().into(),
+                        ));
+                        args.push(SqlArg::Text(
+                            DomainEventType::MediaFileReassigned.as_str().into(),
                         ));
                     }
                     TitleHistoryEventType::TitleMoved => {
@@ -1453,6 +1456,7 @@ pub fn build_dashboard_activity_stats_sql(
 pub const TITLE_HISTORY_PAGE_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
     DomainEventType::TitleMoved,
     DomainEventType::TitleRematched,
+    DomainEventType::MediaFileReassigned,
     DomainEventType::ReleaseGrabbed,
     DomainEventType::ImportCompleted,
     DomainEventType::ImportRejected,

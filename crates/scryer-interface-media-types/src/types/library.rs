@@ -1161,6 +1161,14 @@ pub struct DeleteTitleInput {
 pub struct DeleteTitlePayload {
     /// Deleted title identity.
     pub id: async_graphql::ID,
+    /// Recycle entries purged during this deletion.
+    pub recycle_purged: i32,
+    /// Recycle entries preserved after revalidation.
+    pub recycle_preserved: i32,
+    /// Recycle entries held by another operation.
+    pub recycle_busy: i32,
+    /// Recycle cleanup failures; catalog deletion still succeeded.
+    pub recycle_failed: i32,
 }
 
 #[derive(InputObject)]
@@ -1326,6 +1334,10 @@ pub struct CreateLibraryRootInput {
 #[derive(InputObject, Clone)]
 /// Replacement library root path and default marker.
 pub struct UpdateLibraryRootInput {
+    /// Id of the stored root this entry edits. A root keeps its identity, and the
+    /// titles under it keep their root, when its path changes under the same id.
+    /// Omit it for a new root; an entry without one is matched by path.
+    pub id: Option<ID>,
     /// Absolute filesystem path for the root.
     pub path: String,
     /// Whether this root is the library default.
@@ -1432,6 +1444,19 @@ pub struct DeleteMediaFileInput {
     pub preview_fingerprint: Option<String>,
     /// Required typed confirmation for destructive deletion.
     pub typed_confirmation: Option<String>,
+}
+
+#[derive(InputObject)]
+/// Operator request to assign an imported series file to different episodes of
+/// its own title. The file is renamed on disk to the new episodes' name.
+pub struct ReassignEpisodeFileInput {
+    /// Media-file identity to reassign.
+    pub file_id: ID,
+    /// Episodes of the file's own title the file represents after the change.
+    pub episode_ids: Vec<ID>,
+    /// Whether a primary file already on a target episode is demoted to an
+    /// additional file. When false, such a conflict refuses the request.
+    pub replace: Option<bool>,
 }
 
 #[derive(SimpleObject, Clone)]

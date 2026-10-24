@@ -4,10 +4,13 @@
 // sorting, the advanced limits and the retry merge — is derived here from the
 // snapshots that loop reports, so partial results render as they arrive.
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router";
 import { useClient } from "urql";
 
 import { GrabDialog } from "@/components/common/grab-dialog";
+import { SETTINGS_REFERENCE_SLOT_ID } from "@/components/containers/settings/settings-container";
+import { FilteredPluginList } from "@/components/views/settings/filtered-plugin-list";
 import {
   SettingsIndexerSearchSection,
   type IndexerSearchAdvancedLimits,
@@ -51,6 +54,9 @@ import {
 
 /** Stable identity for the closed grab dialog, so it never re-renders on it. */
 const NO_GRAB_TARGETS: Release[] = [];
+// Indexer plugins add provider types, not indexers, so this pane has nothing to
+// reload after an install.
+const refreshNoProviderOptions = async () => {};
 
 const EMPTY_ADVANCED: IndexerSearchAdvancedLimits = {
   minSizeGiB: "",
@@ -73,6 +79,10 @@ export function SettingsIndexerSearchContainer() {
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const [searchParams] = useSearchParams();
+  const [pluginsTarget, setPluginsTarget] = React.useState<HTMLElement | null>(null);
+  React.useEffect(() => {
+    setPluginsTarget(document.getElementById(SETTINGS_REFERENCE_SLOT_ID));
+  }, []);
   const presetIndexerId = searchParams.get("indexer");
 
   const [indexerOptions, setIndexerOptions] = React.useState<
@@ -518,6 +528,15 @@ export function SettingsIndexerSearchContainer() {
 
   return (
     <>
+      {pluginsTarget
+        ? createPortal(
+            <FilteredPluginList
+              family="INDEXER"
+              refreshProviderOptions={refreshNoProviderOptions}
+            />,
+            pluginsTarget,
+          )
+        : null}
       <SettingsIndexerSearchSection
         query={query}
         onQueryChange={setQuery}

@@ -86,6 +86,7 @@ impl TransferFixture {
                     source_facet.clone(),
                     format!("Source {}", source_facet.as_str()),
                     vec![LibraryRootDraft {
+                        id: None,
                         path: root.to_string_lossy().to_string(),
                         is_default: true,
                     }],
@@ -112,6 +113,7 @@ impl TransferFixture {
                     destination_facet.clone(),
                     format!("Destination {}", destination_facet.as_str()),
                     vec![LibraryRootDraft {
+                        id: None,
                         path: root.to_string_lossy().to_string(),
                         is_default: true,
                     }],
@@ -196,6 +198,7 @@ impl TransferFixture {
                 MediaFacet::Movie,
                 "Archive Movies".to_string(),
                 vec![LibraryRootDraft {
+                    id: None,
                     path: destination_root.to_string_lossy().to_string(),
                     is_default: true,
                 }],

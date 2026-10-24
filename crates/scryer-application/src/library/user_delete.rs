@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 const DELETE_PREVIEW_SAMPLE_PATH_LIMIT: usize = 5;
 const LARGE_DELETE_MEDIA_THRESHOLD: usize = 50;
-const DELETE_TYPED_CONFIRMATION_VALUE: &str = "DELETE";
+pub(crate) const DELETE_TYPED_CONFIRMATION_VALUE: &str = "DELETE";
 const DELETE_TYPED_CONFIRMATION_PROMPT: &str = "Type DELETE to confirm this large delete.";
 const BULK_DELETE_PREVIEW_CONCURRENCY: usize = 4;
 
@@ -621,7 +621,11 @@ impl AppUseCase {
         title_id: &str,
         preview_fingerprint: &str,
         typed_confirmation: Option<&str>,
+        deletion_guard: &crate::title_delete::TitleDeletionGuard,
     ) -> AppResult<()> {
+        // Permission and retirement preflight have passed. Stop new import
+        // admissions before capturing the file set; Drop clears this on refusal.
+        deletion_guard.activate();
         let context = self
             .resolve_title_delete_context(title_id, MissingTitleFolder::Derive)
             .await?;
@@ -642,7 +646,7 @@ impl AppUseCase {
                 .get_by_id(title_id)
                 .await?
                 .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
-            crate::folder_ownership::claim_title_folder_if_missing(
+            crate::folder_ownership::claim_title_folder_for_delete(
                 self,
                 &mut title,
                 &stored_path_to_path_buf(&folder),
@@ -662,7 +666,9 @@ impl AppUseCase {
         title_id: &str,
         preview_fingerprint: &str,
         authorization: &PolicyDeleteAuthorization,
+        deletion_guard: &crate::title_delete::TitleDeletionGuard,
     ) -> AppResult<()> {
+        deletion_guard.activate();
         let context = self
             .resolve_title_delete_context(title_id, MissingTitleFolder::Refuse)
             .await?;
@@ -680,12 +686,14 @@ impl AppUseCase {
                     .map_err(title_delete_boundary_error)?;
             }
         }
-        self.execute_delete_context(
-            context,
-            preview_fingerprint,
-            DeleteConfirmationAuthority::Policy(authorization),
-        )
-        .await
+        let manifest = self
+            .validate_delete_context(
+                context,
+                preview_fingerprint,
+                DeleteConfirmationAuthority::Policy(authorization),
+            )
+            .await?;
+        apply_delete_manifest(&manifest).await
     }
 
     /// Capture the existing per-file ownership manifest and replacement proofs
@@ -959,7 +967,10 @@ impl AppUseCase {
                     .iter()
                     .any(|(_, file)| file.title_id != title.title_id)
                 {
-                    return Err(AppError::Validation("title folder contains media recorded for another title; files and catalog rows were preserved".into()));
+                    return Err(AppError::validation_refused(
+                        crate::title_delete::FOREIGN_MEDIA,
+                        "title folder contains media recorded for another title; files and catalog rows were preserved",
+                    ));
                 }
             }
         }
@@ -999,9 +1010,21 @@ impl AppUseCase {
         authority: DeleteConfirmationAuthority<'_>,
     ) -> AppResult<UserDeleteManifest> {
         let manifest = self.build_delete_manifest(context.clone()).await?;
+        let (stale_reason, typed_reason) = if matches!(context, UserDeleteContext::Title(_)) {
+            (
+                crate::title_delete::PREVIEW_STALE,
+                crate::title_delete::TYPED_CONFIRMATION_REQUIRED,
+            )
+        } else {
+            (
+                crate::delete_refusal::PREVIEW_STALE,
+                crate::delete_refusal::TYPED_CONFIRMATION_REQUIRED,
+            )
+        };
         if manifest.fingerprint != preview_fingerprint {
-            return Err(AppError::Validation(
-                "delete preview is stale; refresh the delete dialog and confirm again".into(),
+            return Err(AppError::validation_refused(
+                stale_reason,
+                "delete preview is stale; refresh the delete dialog and confirm again",
             ));
         }
 
@@ -1011,9 +1034,12 @@ impl AppUseCase {
                     if typed_confirmation.unwrap_or_default().trim()
                         != DELETE_TYPED_CONFIRMATION_VALUE
                     {
-                        return Err(AppError::Validation(format!(
-                            "typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"
-                        )));
+                        return Err(AppError::validation_refused(
+                            typed_reason,
+                            format!(
+                                "typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"
+                            ),
+                        ));
                     }
                 }
                 // RFC 137 §9.6: a policy deletion never synthesizes the human
@@ -1085,23 +1111,6 @@ impl AppUseCase {
         let root_folders = self
             .root_folders_for_library(&title.library_id, &title.facet)
             .await?;
-        // Only the id, name and folder path survive into a tracked folder, so
-        // this all-title read skips the canonical-tag hydration.
-        let other_titles = self
-            .services
-            .catalog
-            .titles
-            .list_with_projection(
-                None,
-                None,
-                None,
-                crate::TitleListProjection::without_canonical_tags(),
-            )
-            .await?
-            .into_iter()
-            .filter(|candidate| candidate.id != title.id)
-            .filter_map(tracked_title_folder_from_title)
-            .collect();
         let recorded_paths: Vec<String> = self
             .services
             .library
@@ -1114,6 +1123,21 @@ impl AppUseCase {
         let folder_path = self
             .title_delete_folder(&mut title, &recorded_paths, missing_folder)
             .await?;
+
+        // Read fresh ownership for each execution, but never hydrate full titles.
+        let other_titles = if folder_path.is_some() {
+            self.services
+                .catalog
+                .titles
+                .list_delete_preview_info()
+                .await?
+                .into_iter()
+                .filter(|candidate| candidate.title_id != title.id)
+                .filter_map(tracked_title_folder_from_preview_info)
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         Ok(UserDeleteContext::Title(TitleDeleteContext {
             title_id: title.id,
@@ -1279,15 +1303,6 @@ impl AppUseCase {
     }
 }
 
-fn tracked_title_folder_from_title(title: Title) -> Option<TrackedTitleFolder> {
-    let folder_path = normalize_optional_path_string(title.folder_path)?;
-    Some(TrackedTitleFolder {
-        title_id: title.id,
-        title_name: title.name,
-        folder_path,
-    })
-}
-
 fn tracked_title_folder_from_preview_info(
     title: TitleDeletePreviewInfo,
 ) -> Option<TrackedTitleFolder> {
@@ -1308,8 +1323,9 @@ fn normalize_optional_path_string(path: Option<String>) -> Option<String> {
 /// layout; the message says how to resolve it instead of naming a selection.
 fn title_delete_boundary_error(error: AppError) -> AppError {
     match error {
-        AppError::Validation(_) => AppError::Validation(
-            "title folder also holds other titles or a mixed layout; change this title's folder to the one that directly holds its media, then delete again".into(),
+        AppError::Validation(_) => AppError::validation_refused(
+            crate::title_delete::MIXED_LAYOUT,
+            "title folder also holds other titles or a mixed layout; change this title's folder to the one that directly holds its media, then delete again",
         ),
         error => error,
     }
@@ -1470,25 +1486,53 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
     let normalized_roots = normalize_root_folders(root_folders, facet)?;
 
     if normalized_roots.contains(&normalized_folder) {
-        return Err(AppError::Validation(format!(
-            "refusing to delete title folder {} because it matches a configured root folder",
-            normalized_folder.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::title_delete::FOLDER_IS_ROOT,
+            format!(
+                "refusing to delete title folder {} because it matches a configured root folder",
+                normalized_folder.display()
+            ),
+        ));
     }
 
     if !path_is_under_any_root(&normalized_folder, &normalized_roots) {
-        return Err(AppError::Validation(format!(
-            "refusing to delete title folder {} because it is outside the configured root folders",
-            normalized_folder.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::title_delete::FOLDER_OUTSIDE_ROOTS,
+            format!(
+                "refusing to delete title folder {} because it is outside the configured root folders",
+                normalized_folder.display()
+            ),
+        ));
     }
 
+    let roots = normalized_roots
+        .iter()
+        .map(|root| path_to_stored_string(root))
+        .collect::<Vec<_>>();
+    // Failure to prepare a prefilter must fall through to the original exact check.
+    let mut overlap =
+        crate::folder_ownership::FolderOverlapKeys::from_roots(&raw_folder_path, &roots).ok();
     for tracked in other_titles {
-        if crate::folder_ownership::title_folders_overlap(&raw_folder_path, &tracked.folder_path)? {
-            return Err(AppError::Validation(format!(
-                "refusing to delete title folder {raw_folder_path} because it overlaps another title's recorded folder {} ({})",
-                tracked.title_name, tracked.folder_path
-            )));
+        let needs_exact = overlap
+            .as_mut()
+            .map(|keys| {
+                keys.needs_exact_comparison(&tracked.folder_path)
+                    .unwrap_or(true)
+            })
+            .unwrap_or(true);
+        if needs_exact
+            && crate::folder_ownership::title_folders_overlap(
+                &raw_folder_path,
+                &tracked.folder_path,
+            )?
+        {
+            return Err(AppError::validation_refused(
+                crate::title_delete::FOLDER_OVERLAPS_TITLE,
+                format!(
+                    "refusing to delete title folder {raw_folder_path} because it overlaps another title's recorded folder {} ({})",
+                    tracked.title_name, tracked.folder_path
+                ),
+            ));
         }
     }
 
@@ -1496,16 +1540,22 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
         Ok(metadata) => {
             let file_type = metadata.file_type();
             if file_type.is_symlink() {
-                return Err(AppError::Validation(format!(
-                    "refusing to delete title folder {} because it is a symlink",
-                    normalized_folder.display()
-                )));
+                return Err(AppError::validation_refused(
+                    crate::title_delete::FOLDER_IS_SYMLINK,
+                    format!(
+                        "refusing to delete title folder {} because it is a symlink",
+                        normalized_folder.display()
+                    ),
+                ));
             }
             if !metadata.is_dir() {
-                return Err(AppError::Validation(format!(
-                    "refusing to delete title folder {} because it is not a directory",
-                    normalized_folder.display()
-                )));
+                return Err(AppError::validation_refused(
+                    crate::title_delete::FOLDER_NOT_DIRECTORY,
+                    format!(
+                        "refusing to delete title folder {} because it is not a directory",
+                        normalized_folder.display()
+                    ),
+                ));
             }
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -1532,8 +1582,13 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
     if !path_is_under_any_root(&resolved_folder, &resolved_roots)
         || resolved_roots.contains(&resolved_folder)
     {
-        return Err(AppError::Validation(
-            "resolved title folder is not strictly within its library root".into(),
+        return Err(AppError::validation_refused(
+            if resolved_roots.contains(&resolved_folder) {
+                crate::title_delete::FOLDER_IS_ROOT
+            } else {
+                crate::title_delete::FOLDER_OUTSIDE_ROOTS
+            },
+            "resolved title folder is not strictly within its library root",
         ));
     }
     let has_recorded_media = recorded_paths.iter().any(|path| {
@@ -1543,8 +1598,9 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
             && std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(&resolved_folder))
     });
     if !has_recorded_media {
-        return Err(AppError::Validation(
-            "title folder has no verified recorded media, so nothing was deleted; rescan the title folder to record its files, then delete again".into(),
+        return Err(AppError::validation_refused(
+            crate::title_delete::NO_VERIFIED_MEDIA,
+            "title folder has no verified recorded media, so nothing was deleted; rescan the title folder to record its files, then delete again",
         ));
     }
 
@@ -1602,7 +1658,23 @@ fn ensure_delete_context_roots_available(context: &UserDeleteContext) -> AppResu
             let roots =
                 normalize_root_folders(context.root_folders.clone(), context.facet.clone())?;
             let path = normalize_absolute_path(&stored_path_to_path_buf(folder_path))?;
-            crate::fs_safety::resolve_available_root_for_path(&path, &roots)?;
+            crate::fs_safety::resolve_available_root_for_path(&path, &roots).map_err(|error| {
+                match error {
+                    // Title deletion has its own code for a folder outside the roots.
+                    AppError::ValidationRefused {
+                        message, reason, ..
+                    } if reason == crate::delete_refusal::PATH_OUTSIDE_ROOTS => {
+                        AppError::validation_refused(
+                            crate::title_delete::FOLDER_OUTSIDE_ROOTS,
+                            message,
+                        )
+                    }
+                    error => crate::delete_refusal::classify_validation(
+                        error,
+                        crate::title_delete::ROOT_UNAVAILABLE,
+                    ),
+                }
+            })?;
             Ok(())
         }
         UserDeleteContext::MediaFile(context) => {
@@ -1613,7 +1685,14 @@ fn ensure_delete_context_roots_available(context: &UserDeleteContext) -> AppResu
             raw_paths.extend(context.subtitle_paths.iter().map(String::as_str));
             for raw_path in raw_paths {
                 let path = normalize_absolute_path(&stored_path_to_path_buf(raw_path))?;
-                crate::fs_safety::resolve_available_root_for_path(&path, &roots)?;
+                crate::fs_safety::resolve_available_root_for_path(&path, &roots).map_err(
+                    |error| {
+                        crate::delete_refusal::classify_validation(
+                            error,
+                            crate::delete_refusal::ROOT_UNAVAILABLE,
+                        )
+                    },
+                )?;
             }
             Ok(())
         }
@@ -1621,7 +1700,12 @@ fn ensure_delete_context_roots_available(context: &UserDeleteContext) -> AppResu
             let roots =
                 normalize_root_folders(context.root_folders.clone(), context.facet.clone())?;
             let path = normalize_absolute_path(&stored_path_to_path_buf(&context.file_path))?;
-            crate::fs_safety::resolve_available_root_for_path(&path, &roots)?;
+            crate::fs_safety::resolve_available_root_for_path(&path, &roots).map_err(|error| {
+                crate::delete_refusal::classify_validation(
+                    error,
+                    crate::delete_refusal::ROOT_UNAVAILABLE,
+                )
+            })?;
             Ok(())
         }
     }
@@ -2066,17 +2150,19 @@ pub(crate) fn ensure_aggregate_delete_confirmation(
     typed_confirmation: Option<&str>,
 ) -> AppResult<()> {
     if preview.fingerprint != preview_fingerprint {
-        return Err(AppError::Validation(
-            "delete preview is stale; refresh the delete dialog and confirm again".into(),
+        return Err(AppError::validation_refused(
+            crate::delete_refusal::PREVIEW_STALE,
+            "delete preview is stale; refresh the delete dialog and confirm again",
         ));
     }
 
     if preview.requires_typed_confirmation
         && typed_confirmation.unwrap_or_default().trim() != DELETE_TYPED_CONFIRMATION_VALUE
     {
-        return Err(AppError::Validation(format!(
-            "typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::delete_refusal::TYPED_CONFIRMATION_REQUIRED,
+            format!("typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"),
+        ));
     }
 
     Ok(())
@@ -2442,7 +2528,8 @@ mod tests {
 
         let empty_result = ensure_delete_context_roots_available(&context);
         assert!(
-            matches!(empty_result, Err(AppError::Validation(_))),
+            empty_result.unwrap_err().validation_reason()
+                == Some(crate::delete_refusal::ROOT_UNAVAILABLE),
             "empty roots should not prove that a disk-delete target's root is mounted"
         );
 
@@ -2555,17 +2642,21 @@ mod tests {
 
         ensure_aggregate_delete_confirmation(&preview, &preview.fingerprint.clone(), None)
             .expect("matching fingerprint is accepted");
-        assert!(matches!(
-            ensure_aggregate_delete_confirmation(&preview, "stale", None),
-            Err(AppError::Validation(_))
-        ));
+        assert_eq!(
+            ensure_aggregate_delete_confirmation(&preview, "stale", None)
+                .unwrap_err()
+                .validation_reason(),
+            Some(crate::delete_refusal::PREVIEW_STALE)
+        );
 
         preview.requires_typed_confirmation = true;
         let fingerprint = preview.fingerprint.clone();
-        assert!(matches!(
-            ensure_aggregate_delete_confirmation(&preview, &fingerprint, None),
-            Err(AppError::Validation(_))
-        ));
+        assert_eq!(
+            ensure_aggregate_delete_confirmation(&preview, &fingerprint, None)
+                .unwrap_err()
+                .validation_reason(),
+            Some(crate::delete_refusal::TYPED_CONFIRMATION_REQUIRED)
+        );
         ensure_aggregate_delete_confirmation(
             &preview,
             &fingerprint,

@@ -2059,6 +2059,7 @@ fn build_completed_download(
     category: Option<&str>,
 ) -> CompletedDownload {
     CompletedDownload {
+        subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "client-1".to_string(),
         download_client_item_id: "dl-1".to_string(),

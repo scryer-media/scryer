@@ -166,7 +166,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     subjectFacets: ["movie", "show"],
     destructive: true,
     regoSource:
-      "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n",
+      "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n",
   },
   {
     id: "tagged-for-removal",

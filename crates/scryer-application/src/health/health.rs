@@ -583,6 +583,7 @@ mod tests {
         last_observed_at: &str,
     ) -> PendingRelease {
         PendingRelease {
+            http_release: None,
             id: format!("pending-{added_at}"),
             wanted_item_id: "wanted-1".to_string(),
             title_id: "title-1".to_string(),

@@ -16,6 +16,7 @@ struct PreparedReleaseScoringInputs {
     blocklist: TitleReleaseBlocklistSignatures,
     has_usenet_client: bool,
     has_torrent_client: bool,
+    has_http_client: bool,
     preferred_source_kind: String,
     enabled_protocols: Option<(bool, bool)>,
     title: Title,
@@ -199,6 +200,7 @@ fn source_kind_matches_preference(result: &IndexerSearchResult, preferred: &str)
         Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
             preferred == "torrent"
         }
+        Some(DownloadSourceKind::HttpResource) => preferred == "http",
         None => false,
     }
 }
@@ -924,8 +926,17 @@ pub(crate) fn dedupe_cross_indexer_release_results(
     deduped
 }
 
+/// Which protocol families the enabled download clients cover, and the
+/// source kind the highest-priority client prefers.
+pub(crate) struct DownloadSourceCapabilities {
+    pub(crate) has_usenet: bool,
+    pub(crate) has_torrent: bool,
+    pub(crate) has_http: bool,
+    pub(crate) preferred: String,
+}
+
 impl AppUseCase {
-    pub(crate) async fn download_source_capabilities(&self) -> (bool, bool, String) {
+    pub(crate) async fn download_source_capabilities(&self) -> DownloadSourceCapabilities {
         let clients = self
             .services
             .integrations
@@ -951,6 +962,9 @@ impl AppUseCase {
             client_accepts(c, DownloadSourceKind::TorrentFile)
                 || client_accepts(c, DownloadSourceKind::MagnetUri)
         });
+        let has_http = enabled
+            .iter()
+            .any(|c| client_accepts(c, DownloadSourceKind::HttpResource));
         let preferred = enabled
             .iter()
             .min_by_key(|c| c.client_priority)
@@ -964,7 +978,12 @@ impl AppUseCase {
             .unwrap_or("nzb")
             .to_string();
 
-        (has_usenet, has_torrent, preferred)
+        DownloadSourceCapabilities {
+            has_usenet,
+            has_torrent,
+            has_http,
+            preferred,
+        }
     }
 
     pub(crate) async fn build_indexer_priority_by_name(
@@ -1070,8 +1089,12 @@ impl AppUseCase {
             .increment(raw_results.len() as u64);
         if prepared.is_none() {
             let blocklist = self.load_title_release_blocklist_signatures(title_id).await;
-            let (has_usenet_client, has_torrent_client, client_preferred_source_kind) =
-                self.download_source_capabilities().await;
+            let DownloadSourceCapabilities {
+                has_usenet: has_usenet_client,
+                has_torrent: has_torrent_client,
+                has_http: has_http_client,
+                preferred: client_preferred_source_kind,
+            } = self.download_source_capabilities().await;
             let scored_title = self.services.catalog.titles.get_by_id(title_id).await?;
             let Some(scored_title) = scored_title else {
                 return Err(AppError::NotFound(format!(
@@ -1130,6 +1153,7 @@ impl AppUseCase {
                 blocklist,
                 has_usenet_client,
                 has_torrent_client,
+                has_http_client,
                 preferred_source_kind,
                 enabled_protocols,
                 title: scored_title,
@@ -1154,6 +1178,7 @@ impl AppUseCase {
             Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
                 prepared.has_torrent_client
             }
+            Some(DownloadSourceKind::HttpResource) => prepared.has_http_client,
             None => true,
         });
         let requested_episode = resolve_requested_episode(
@@ -1359,7 +1384,7 @@ impl AppUseCase {
                     Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
                         torrent
                     }
-                    None => true,
+                    Some(DownloadSourceKind::HttpResource) | None => true,
                 }
             });
             rank_by_key.insert(
@@ -2343,6 +2368,7 @@ impl AppUseCase {
                             result, now,
                         ),
                     ),
+                    result.http.clone(),
                     &signing_key,
                 ) {
                     Ok(token) => Some(token),

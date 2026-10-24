@@ -113,6 +113,7 @@ fn scryer_completed(
     facet_id: &str,
 ) -> CompletedDownload {
     CompletedDownload {
+        subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "test-client".to_string(),
         download_client_item_id: item_id.to_string(),
@@ -203,6 +204,7 @@ async fn configure_default_library_root(
             library.name,
             library.slug,
             vec![LibraryRootDraft {
+                id: None,
                 path: media_root.to_string(),
                 is_default: true,
             }],
@@ -844,6 +846,7 @@ async fn import_returns_unmatched_when_title_not_found() {
     .expect("write");
 
     let completed = CompletedDownload {
+        subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "test-client".to_string(),
         download_client_item_id: "dl-no-title".to_string(),
@@ -1107,6 +1110,7 @@ async fn import_movie_decypharr_symlink_release_folder_succeeds() {
     .await;
 
     let completed = CompletedDownload {
+        subtitle_paths: Vec::new(),
         client_type: "qbittorrent".to_string(),
         client_id: "test-client".to_string(),
         download_client_item_id: "dl-movie-decypharr-1".to_string(),
@@ -1198,6 +1202,7 @@ async fn import_movie_decypharr_symlink_release_folder_uses_remote_path_mapping(
     .await;
 
     let completed = CompletedDownload {
+        subtitle_paths: Vec::new(),
         client_type: "qbittorrent".to_string(),
         client_id: config.id,
         download_client_item_id: "dl-movie-decypharr-2".to_string(),
@@ -3675,6 +3680,7 @@ async fn a_titleless_obfuscated_download_matches_and_imports_on_its_recovered_na
     .await;
     let episode = seed_short_form_series_episode(&ctx, &title).await;
     let completed = CompletedDownload {
+        subtitle_paths: Vec::new(),
         client_type: "sabnzbd".to_string(),
         client_id: "test-client".to_string(),
         download_client_item_id: "dl-srrdb-titleless".to_string(),

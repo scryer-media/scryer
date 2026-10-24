@@ -355,6 +355,7 @@ impl AppUseCase {
             .verify_release_candidate_token_with_listing(actor, title_id, candidate_token)
             .await?;
         let release_listing_json = self.listing_json_at_grab(verified.listing);
+        let http_release = verified.http_release;
         let (queued_release, scope) = (verified.selection, verified.scope);
         if announced_size_bytes.is_some_and(|size| queued_release.size_bytes != Some(size)) {
             return Err(AppError::Validation(
@@ -414,6 +415,7 @@ impl AppUseCase {
                 purpose,
                 Some(routing),
                 release_listing_json,
+                http_release,
             )
             .await?;
         Ok(match outcome {
@@ -438,6 +440,7 @@ impl AppUseCase {
         conflict_policy: SubmissionConflictPolicy,
         purpose: DownloadSubmissionPurpose,
         release_listing_json: Option<String>,
+        http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
     ) -> AppResult<QueueDownloadOutcome> {
         self.queue_manual_release_for_title_with_routing(
             actor,
@@ -448,6 +451,7 @@ impl AppUseCase {
             purpose,
             None,
             release_listing_json,
+            http_release,
         )
         .await
     }
@@ -466,6 +470,7 @@ impl AppUseCase {
         purpose: DownloadSubmissionPurpose,
         routing: Option<crate::IndexerGrabSelection>,
         release_listing_json: Option<String>,
+        http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
     ) -> AppResult<QueueDownloadOutcome> {
         validate_manual_queue_purpose(purpose, title, &scope)?;
         let QueuedReleaseSelection {
@@ -520,7 +525,9 @@ impl AppUseCase {
         let download_id = scryer_domain::download_identity::DownloadId::new();
         let job_result = self
             .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                http_release,
                 request: DownloadClientAddRequest {
+                    http: None,
                     title: title.clone(),
                     search_facet: matches!(scope, SubmissionScope::SeriesMovie { .. })
                         .then_some(scryer_domain::MediaFacet::Movie),
@@ -836,6 +843,7 @@ impl AppUseCase {
                 DownloadSubmissionPurpose::OperatorQueued,
                 // The caller hands over a resolved source, not an indexer listing.
                 None,
+                None,
             )
             .await?;
         let QueueDownloadOutcome::Queued(queued) = queued else {
@@ -904,6 +912,7 @@ impl AppUseCase {
             purpose,
             // The caller hands over a resolved source, not an indexer listing.
             None,
+            None,
         )
         .await
     }
@@ -935,6 +944,7 @@ impl AppUseCase {
         conflict_policy: SubmissionConflictPolicy,
         purpose: DownloadSubmissionPurpose,
         release_listing_json: Option<String>,
+        http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
     ) -> AppResult<QueueDownloadOutcome> {
         let title = self
             .services
@@ -957,6 +967,7 @@ impl AppUseCase {
             conflict_policy,
             purpose,
             release_listing_json,
+            http_release,
         )
         .await
     }
@@ -983,10 +994,12 @@ impl AppUseCase {
             conflict_policy,
             // The caller hands over a resolved source, not an indexer listing.
             None,
+            None,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn queue_replacement_release_with_listing(
         &self,
         actor: &User,
@@ -995,6 +1008,7 @@ impl AppUseCase {
         scope: SubmissionScope,
         conflict_policy: SubmissionConflictPolicy,
         release_listing_json: Option<String>,
+        http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
     ) -> AppResult<QueueDownloadOutcome> {
         let title = self
             .services
@@ -1019,6 +1033,7 @@ impl AppUseCase {
             conflict_policy,
             DownloadSubmissionPurpose::ManualReplacement,
             release_listing_json,
+            http_release,
         )
         .await
     }
@@ -1037,6 +1052,7 @@ impl AppUseCase {
             .verify_release_candidate_token_with_listing(actor, title_id, candidate_token)
             .await?;
         let release_listing_json = self.listing_json_at_grab(verified.listing);
+        let http_release = verified.http_release;
         let (queued_release, signed_scope) = (verified.selection, verified.scope);
         if let Some(announced_size_bytes) = announced_size_bytes
             && queued_release.size_bytes != Some(announced_size_bytes)
@@ -1053,6 +1069,7 @@ impl AppUseCase {
                 signed_scope,
                 conflict_policy,
                 release_listing_json,
+                http_release,
             )
             .await?;
         Ok(match outcome {
@@ -1178,6 +1195,7 @@ impl AppUseCase {
             .verify_release_candidate_token_with_listing(actor, title_id, candidate_token)
             .await?;
         let release_listing_json = self.listing_json_at_grab(verified.listing);
+        let http_release = verified.http_release;
         let (queued_release, signed_scope) = (verified.selection, verified.scope);
         if let Some(announced_size_bytes) = announced_size_bytes
             && queued_release.size_bytes != Some(announced_size_bytes)
@@ -1195,6 +1213,7 @@ impl AppUseCase {
                 conflict_policy,
                 purpose,
                 release_listing_json,
+                http_release,
             )
             .await?;
         let _ = scope;
@@ -1336,6 +1355,19 @@ impl AppUseCase {
                 .as_ref()
                 .map(|decision| decision.preference_score)
                 .unwrap_or_default();
+            // The background lane records this verdict for every candidate it
+            // walks; this lane does not, so record the one it parks so the
+            // title's acquisition diagnostics explain the review row.
+            crate::acquisition_workflow::record_release_decision(
+                self,
+                wanted,
+                &title,
+                candidate,
+                crate::acquisition_release_search::ReleaseAutoDecisionCode::AmbiguousIdentity,
+                None,
+                &now,
+            )
+            .await;
             self.park_pending_release_for_review(
                 wanted,
                 &title,
@@ -1422,6 +1454,7 @@ impl AppUseCase {
             conflict_policy,
             DownloadSubmissionPurpose::Standard,
             release_listing_json,
+            best.http.clone(),
         )
         .await
     }
@@ -1495,6 +1528,7 @@ mod auto_eligibility_reason_tests {
 
     fn rejected(code: &str, summary: &str, block_codes: &[&str]) -> IndexerSearchResult {
         IndexerSearchResult {
+            http: None,
             indexer_id: None,
             source: "indexer-a".to_string(),
             title: "Silver.Horizon.2024.1080p.WEB-DL".to_string(),

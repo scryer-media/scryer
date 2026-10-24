@@ -2,7 +2,7 @@ use super::*;
 use std::future::Future;
 
 pub(crate) const INHERIT_QUALITY_PROFILE_VALUE: &str = "__inherit__";
-pub(crate) const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 3] = ["nzbget", "sabnzbd", "weaver"];
+pub(crate) const NATIVE_DOWNLOAD_CLIENT_TYPES: [&str; 4] = ["nzbget", "sabnzbd", "weaver", "http"];
 
 pub(crate) fn parsed_episode_lookup_season(
     ep_meta: &ParsedEpisodeMetadata,
@@ -42,7 +42,38 @@ pub fn accepted_inputs_for_client(
 fn native_accepted_inputs(client_type: &str) -> Vec<DownloadSourceKind> {
     match client_type {
         "nzbget" | "sabnzbd" | "weaver" => vec![DownloadSourceKind::NzbFile],
+        "http" => vec![DownloadSourceKind::HttpResource],
         _ => vec![],
+    }
+}
+
+/// The `http` capability block of a download client type: the plugin's
+/// declaration first, then the native clients'. `None` means the client
+/// cannot take any HTTP-family release.
+pub fn http_capabilities_for_client(
+    client_type: &str,
+    plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
+) -> Option<scryer_domain::DownloadClientHttpCapabilities> {
+    plugin_provider
+        .and_then(|provider| provider.http_capabilities_for_provider(client_type))
+        .or_else(|| native_http_capabilities(client_type))
+}
+
+/// The native HTTP downloader fetches direct files only. It writes subtitle
+/// sidecars and reports exact output paths, and it does not mux separate
+/// audio and video tracks.
+fn native_http_capabilities(
+    client_type: &str,
+) -> Option<scryer_domain::DownloadClientHttpCapabilities> {
+    match client_type {
+        "http" => Some(scryer_domain::DownloadClientHttpCapabilities {
+            transports: vec![scryer_domain::HttpTransportCapability::DirectFile],
+            providers: Vec::new(),
+            muxes_separate_tracks: false,
+            writes_subtitle_sidecars: true,
+            reports_final_paths: true,
+        }),
+        _ => None,
     }
 }
 
@@ -832,6 +863,33 @@ mod tests {
             }
             Vec::new()
         }
+    }
+
+    #[test]
+    fn native_http_client_accepts_http_resources_and_declares_direct_files_only() {
+        assert_eq!(
+            accepted_inputs_for_client("http", None),
+            vec![DownloadSourceKind::HttpResource]
+        );
+        let capabilities = http_capabilities_for_client("http", None)
+            .expect("the native http client declares an http block");
+        assert_eq!(
+            capabilities.transports,
+            vec![scryer_domain::HttpTransportCapability::DirectFile]
+        );
+        assert!(capabilities.providers.is_empty());
+        assert!(capabilities.reports_final_paths);
+        assert!(capabilities.writes_subtitle_sidecars);
+        assert!(!capabilities.muxes_separate_tracks);
+        assert!(http_capabilities_for_client("nzbget", None).is_none());
+
+        let page_only_indexer = scryer_domain::IndexerHttpCapabilities::default();
+        assert!(!capabilities.accepts_indexer(&page_only_indexer));
+        let direct_file_indexer = scryer_domain::IndexerHttpCapabilities {
+            transports: vec![scryer_domain::HttpTransportCapability::DirectFile],
+            providers: vec!["example".to_string()],
+        };
+        assert!(capabilities.accepts_indexer(&direct_file_indexer));
     }
 
     #[test]

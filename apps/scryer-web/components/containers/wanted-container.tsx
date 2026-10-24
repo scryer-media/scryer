@@ -44,7 +44,7 @@ import {
   normalizeLibraryFilterSelection,
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { pluginErrorMessage } from "@/lib/utils/plugin-error-message";
 import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
 import { releaseQueueScopeInput } from "@/lib/utils/release-queue-scope";
 import { createWantedNavigationCountsCache } from "@/lib/utils/wanted-navigation-counts";
@@ -520,7 +520,7 @@ export const WantedContainer = memo(function WantedContainer({
           setGlobalStatus(t("wanted.searchJobStarted"));
         }
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
       } finally {
         setSearchJobStarting(false);
       }
@@ -693,7 +693,7 @@ export const WantedContainer = memo(function WantedContainer({
         if (outcome) {
           setGlobalStatus(outcome, { level: "WARNING" });
         } else {
-          setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), {
+          setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), {
             level: "ERROR",
           });
         }
@@ -784,7 +784,7 @@ export const WantedContainer = memo(function WantedContainer({
         assertNoReplaceConflict(payload, conflictMessage);
         setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
       } catch (error) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
       }
     },
     [client, confirmReplaceConflict, setGlobalStatus, t],

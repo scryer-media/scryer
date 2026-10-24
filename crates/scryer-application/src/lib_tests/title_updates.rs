@@ -188,10 +188,12 @@ async fn bootstrap_two_root_movie_library(
             name.to_string(),
             vec![
                 LibraryRootDraft {
+                    id: None,
                     path: format!("/Volumes/Media/{name}/RootA"),
                     is_default: true,
                 },
                 LibraryRootDraft {
+                    id: None,
                     path: format!("/Volumes/Media/{name}/RootB"),
                     is_default: false,
                 },
@@ -430,6 +432,7 @@ async fn fix_title_match_conflicts_are_scoped_to_the_title_library_and_facet() {
             MediaFacet::Movie,
             "Rematch Movies B".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/RematchMoviesB".to_string(),
                 is_default: true,
             }],
@@ -937,6 +940,7 @@ async fn external_import_monitor_snapshots_are_scoped_and_consumed_per_library()
             MediaFacet::Movie,
             "Snapshot Movies B".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/SnapshotMoviesB".to_string(),
                 is_default: true,
             }],
@@ -2529,6 +2533,7 @@ async fn a_bulk_tag_patch_writes_nothing_when_one_library_is_denied() {
             MediaFacet::Movie,
             "Restricted Movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/RestrictedMovies".to_string(),
                 is_default: true,
             }],

@@ -12,6 +12,7 @@ import {
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useSessionUser } from "@/lib/hooks/use-auth";
+import type { GutterPanelMemory } from "@/lib/hooks/use-gutter-panel";
 import { useListAccountLink } from "@/lib/hooks/use-list-account-link";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import { listAccountQuery, listTabCountsQuery, myListAccountsQuery, myListSubscriptionsQuery, personalListRouteOptionsQuery, unlinkListAccountMutation } from "@/lib/graphql/list-accounts";
@@ -84,11 +85,14 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
   const location = useLocation();
   const section = listsSectionFromPath(location.pathname);
   const tabCounts = useListTabCounts(canManageLists, section);
+  // The body remounts on every tab; the plugins panel stays as it was.
+  const pluginsPanelMemory: GutterPanelMemory = React.useRef(null);
   return (
     <ListsContainerBody
       key={`${user?.id ?? "anonymous"}:${section}`}
       canManageLists={canManageLists}
       tabCounts={tabCounts}
+      pluginsPanelMemory={pluginsPanelMemory}
     />
   );
 }
@@ -136,9 +140,10 @@ function useListTabCounts(canManageLists: boolean, section: ListsSection): ListT
 
 type ListsContainerBodyProps = ListsContainerProps & {
   tabCounts: ListTabCounts;
+  pluginsPanelMemory: GutterPanelMemory;
 };
 
-function ListsContainerBody({ canManageLists, tabCounts }: ListsContainerBodyProps) {
+function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: ListsContainerBodyProps) {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -801,6 +806,7 @@ function ListsContainerBody({ canManageLists, tabCounts }: ListsContainerBodyPro
       tabCounts={shownTabCounts}
       canManageLists={canManageLists}
       canManageProviderApps={canManageProviderApps}
+      pluginsPanelMemory={pluginsPanelMemory}
       onRefreshProviders={refreshProviders}
       accounts={accounts}
       managedAccounts={managedAccounts}

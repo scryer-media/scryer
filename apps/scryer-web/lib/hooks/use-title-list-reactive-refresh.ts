@@ -14,6 +14,7 @@ type UseTitleListReactiveRefreshOptions = {
     titleId: string,
     title: TitleRecord | null,
     requestEpoch: number,
+    event: { added: boolean },
   ) => void;
 };
 
@@ -34,6 +35,10 @@ export function useTitleListReactiveRefresh({
 }: UseTitleListReactiveRefreshOptions) {
   const { queueCatalogTitleRefresh } = useReactiveRefresh();
   const onTitleRefreshedRef = useRef(onTitleRefreshed);
+  // Refreshes coalesce per title, so a `title_added` followed by a hydration
+  // event can arrive as one apply. Remember the addition per title instead of
+  // reading it from whichever event's callback survives.
+  const addedTitleIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
     onTitleRefreshedRef.current = onTitleRefreshed;
@@ -57,12 +62,16 @@ export function useTitleListReactiveRefresh({
       if (!titleId) {
         return;
       }
+      if (activity.kind === "title_added") {
+        addedTitleIdsRef.current.add(titleId);
+      }
 
       queueCatalogTitleRefresh({
         titleId,
         projection,
         apply(title, requestEpoch) {
-          onTitleRefreshedRef.current(titleId, title, requestEpoch);
+          const added = addedTitleIdsRef.current.delete(titleId);
+          onTitleRefreshedRef.current(titleId, title, requestEpoch, { added });
         },
         onError(error) {
           console.error("[title-list-reactive-refresh] refresh failed:", error);

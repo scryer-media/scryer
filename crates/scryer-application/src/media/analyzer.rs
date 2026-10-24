@@ -8,6 +8,11 @@ use crate::{AppError, AppResult, MediaAnalysisOutcome, MediaAnalyzer};
 
 pub struct NativeMediaAnalyzer;
 
+/// The `Invalid` reason for a container the analyzer read in full and found
+/// no video stream in. Callers that treat "no video" differently from an
+/// unreadable file match on this exact text.
+pub const NOT_A_VALID_VIDEO_REASON: &str = "file is not a valid video";
+
 #[cfg(any(feature = "runtime-media-analysis", test))]
 #[derive(Clone, PartialEq, Eq)]
 struct AnalysisKey {
@@ -292,7 +297,7 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
                 )))
             }
             Ok(_) => Ok(MediaAnalysisOutcome::Invalid(
-                "file is not a valid video".to_string(),
+                NOT_A_VALID_VIDEO_REASON.to_string(),
             )),
             Err(error) => Ok(MediaAnalysisOutcome::Invalid(error.to_string())),
         }

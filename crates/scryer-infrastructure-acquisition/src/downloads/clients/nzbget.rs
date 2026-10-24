@@ -1797,6 +1797,7 @@ impl DownloadClient for NzbgetDownloadClient {
         };
         Ok(Some(scryer_application::DownloadCleanupPayload {
             download: scryer_domain::CompletedDownload {
+                subtitle_paths: Vec::new(),
                 client_type: "nzbget".into(),
                 client_id: client_id.into(),
                 download_client_item_id: nzb_id.to_string(),
@@ -1934,6 +1935,7 @@ fn completed_download_from_nzbget_history_entry(
     );
 
     Some(scryer_domain::CompletedDownload {
+        subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: String::new(),
         download_client_item_id: nzb_id.to_string(),

@@ -21,7 +21,7 @@ use scryer_plugin_sdk::{
 
 use super::gateway::{ListChartItem, chart_items_to_plugin_items};
 use super::plugin::ListPluginProvider;
-use crate::AppError;
+use crate::{AppError, plugin_codes};
 
 /// A provider paging past this many pages is treated as a runaway cursor.
 pub(crate) const MAX_FETCH_PAGES: usize = 100;
@@ -141,18 +141,31 @@ impl ListFailure {
 
     /// Classify a provider-reported plugin error.
     pub fn from_plugin_error(error: &PluginError, provider: &str) -> Self {
-        let class = match error.code {
-            PluginErrorCode::AuthFailed => ListFailureClass::Unauthorized,
-            PluginErrorCode::RateLimited => ListFailureClass::RateLimited {
+        // Codes are compared by their wire string, so a well-known code sent
+        // as an open string still matches and an unknown code fails plainly.
+        let code = error.code.as_str();
+        let class = if error.code == PluginErrorCode::AuthFailed
+            || plugin_codes::CREDENTIAL_OR_ACCOUNT_REFUSALS.contains(&code)
+        {
+            ListFailureClass::Unauthorized
+        } else if error.code == PluginErrorCode::RateLimited || code == plugin_codes::QUOTA_EXCEEDED
+        {
+            ListFailureClass::RateLimited {
                 retry_after_seconds: error
                     .retry_after_seconds
                     .and_then(|seconds| u64::try_from(seconds).ok()),
-            },
-            PluginErrorCode::UpstreamUnavailable | PluginErrorCode::Temporary => {
-                ListFailureClass::Unavailable
             }
-            PluginErrorCode::Permanent if is_not_found(error) => ListFailureClass::NotFound,
-            _ => ListFailureClass::Failed,
+        } else if error.code == PluginErrorCode::UpstreamUnavailable
+            || error.code == PluginErrorCode::Temporary
+        {
+            ListFailureClass::Unavailable
+        } else if code == plugin_codes::ITEM_NOT_FOUND
+            // Plugins built before `item_not_found` say so only in prose.
+            || (error.code == PluginErrorCode::Permanent && is_not_found(error))
+        {
+            ListFailureClass::NotFound
+        } else {
+            ListFailureClass::Failed
         };
         Self::new(class, provider)
     }
@@ -570,6 +583,116 @@ mod tests {
             options: options.iter().map(|value| (*value).into()).collect(),
             required: true,
         }
+    }
+
+    fn plugin_error(code: &str, public_message: &str, retry_after: Option<i64>) -> PluginError {
+        PluginError {
+            code: PluginErrorCode::from(code),
+            public_message: public_message.to_string(),
+            debug_message: None,
+            retry_after_seconds: retry_after,
+            details: None,
+        }
+    }
+
+    fn class_of(code: &str, public_message: &str, retry_after: Option<i64>) -> ListFailureClass {
+        ListFailure::from_plugin_error(&plugin_error(code, public_message, retry_after), "Example")
+            .class
+    }
+
+    #[test]
+    fn a_refused_credential_or_account_code_is_unauthorized() {
+        for code in [
+            "auth_failed",
+            "invalid_username_password",
+            "invalid_api_key",
+            "invalid_passkey",
+            "invalid_cookie",
+            "captcha_required",
+            "two_factor_required",
+            "account_banned",
+            "account_disabled",
+        ] {
+            assert_eq!(
+                class_of(code, "refused", None),
+                ListFailureClass::Unauthorized,
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_well_known_code_sent_as_an_open_string_keeps_its_class() {
+        let error = PluginError {
+            code: PluginErrorCode::Other("auth_failed".into()),
+            ..plugin_error("permanent", "refused", None)
+        };
+        assert_eq!(
+            ListFailure::from_plugin_error(&error, "Example").class,
+            ListFailureClass::Unauthorized
+        );
+    }
+
+    #[test]
+    fn item_not_found_is_not_found_whatever_the_sentence() {
+        assert_eq!(
+            class_of(
+                "item_not_found",
+                "the plugin could not complete the request",
+                None
+            ),
+            ListFailureClass::NotFound
+        );
+    }
+
+    #[test]
+    fn a_legacy_permanent_not_found_sentence_is_still_not_found() {
+        assert_eq!(
+            class_of("permanent", "list not found", None),
+            ListFailureClass::NotFound
+        );
+        assert_eq!(
+            class_of("permanent", "gone", None),
+            ListFailureClass::Failed
+        );
+    }
+
+    #[test]
+    fn quota_exceeded_is_rate_limited_with_the_plugins_pause() {
+        assert_eq!(
+            class_of("quota_exceeded", "daily quota used", Some(3600)),
+            ListFailureClass::RateLimited {
+                retry_after_seconds: Some(3600)
+            }
+        );
+        assert_eq!(
+            class_of("quota_exceeded", "daily quota used", None),
+            ListFailureClass::RateLimited {
+                retry_after_seconds: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_transport_or_unknown_code_fails_plainly() {
+        for code in [
+            "endpoint_not_found",
+            "invalid_response",
+            "tls_error",
+            "something_new",
+        ] {
+            // A sentence that mentions "not found" must not turn these into a
+            // missing list; only `permanent` keeps that legacy reading.
+            assert_eq!(
+                class_of(code, "endpoint not found", None),
+                ListFailureClass::Failed,
+                "{code}"
+            );
+        }
+        assert_eq!(
+            class_of("upstream_unavailable", "down", None),
+            ListFailureClass::Unavailable
+        );
     }
 
     #[test]

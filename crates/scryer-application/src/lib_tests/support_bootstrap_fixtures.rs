@@ -1074,6 +1074,13 @@ pub(super) fn bootstrap_with_cutoff_projection_state(
     let download_client = Arc::new(StubDownloadClient::default());
     let indexer_client = Arc::new(MockIndexerClient);
 
+    let admin = test_admin_user();
+    let libraries = MockLibraryRepo::default();
+    libraries
+        .app_permissions
+        .try_lock()
+        .expect("new fixture store")
+        .insert(admin.id.clone(), admin.authorization.app);
     let services = AppServices::builder(
         titles.clone(),
         shows,
@@ -1089,7 +1096,7 @@ pub(super) fn bootstrap_with_cutoff_projection_state(
     )
     .with_domain_events(Arc::new(MockDomainEventRepo::default()))
     .with_media_files(media_files)
-    .with_libraries(Arc::new(MockLibraryRepo::default()))
+    .with_libraries(Arc::new(libraries))
     .build_partial_for_tests();
 
     let mut registry = FacetRegistry::new();
@@ -1109,7 +1116,7 @@ pub(super) fn bootstrap_with_cutoff_projection_state(
         Arc::new(registry),
     );
 
-    (app, test_admin_user(), titles)
+    (app, admin, titles)
 }
 
 pub(super) fn bootstrap_with_delete_queue(
@@ -1675,6 +1682,12 @@ pub(super) async fn bootstrap_movie_scan_app(
         unmatched_items.clone(),
         metadata_gateway,
     );
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+        .await
+        .expect("persist fixture administrator permissions");
     app.reconcile_default_library_roots()
         .await
         .expect("reconcile movie root");
@@ -2023,6 +2036,7 @@ pub(super) fn completed_download_fixture_item(
     dest_dir: &str,
 ) -> CompletedDownload {
     CompletedDownload {
+        subtitle_paths: Vec::new(),
         client_type: "nzbget".to_string(),
         client_id: "primary".to_string(),
         download_client_item_id: download_client_item_id.to_string(),
@@ -2178,6 +2192,7 @@ pub(super) fn pending_movie_release(
 ) -> PendingRelease {
     let now = Utc::now();
     PendingRelease {
+        http_release: None,
         id: Id::new().0,
         wanted_item_id: wanted_id.to_string(),
         title_id: title.id.clone(),

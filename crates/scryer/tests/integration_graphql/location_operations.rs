@@ -232,10 +232,12 @@ async fn configure_two_movie_roots(
             library.slug,
             vec![
                 LibraryRootDraft {
+                    id: None,
                     path: first.to_string_lossy().to_string(),
                     is_default: true,
                 },
                 LibraryRootDraft {
+                    id: None,
                     path: second.to_string_lossy().to_string(),
                     is_default: false,
                 },
@@ -1241,6 +1243,7 @@ async fn create_second_movie_library(
                 updated_at: Utc::now(),
             },
             vec![LibraryRootDraft {
+                id: None,
                 path: root.to_string_lossy().to_string(),
                 is_default: true,
             }],

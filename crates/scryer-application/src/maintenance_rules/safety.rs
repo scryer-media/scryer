@@ -152,7 +152,7 @@ pub fn fold_playback_hold(snapshot: &PlaybackActivitySnapshot) -> MaintenancePla
 /// `None` means the row exists but names no title — a foreign import whose
 /// title is resolved from release evidence at execution time. The caller must
 /// treat that as unknown, never as "not this title".
-fn queued_import_title_id(record: &ImportRecord) -> Option<String> {
+pub(crate) fn queued_import_title_id(record: &ImportRecord) -> Option<String> {
     let payload = serde_json::from_str::<serde_json::Value>(&record.payload_json).ok()?;
 
     let direct = ["title_id", "target_title_id", "manual_title_id"]

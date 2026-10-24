@@ -702,6 +702,22 @@ export const deleteMediaFileMutation = `mutation DeleteMediaFile($input: DeleteM
   }
 }`;
 
+export const reassignEpisodeFileMutation = `mutation ReassignEpisodeFile($input: ReassignEpisodeFileInput!) {
+  reassignEpisodeFile(input: $input) {
+    file {
+      id
+      episodeId
+      role
+      filePath
+    }
+    previousPath
+    previousEpisodeIds
+    episodeIds
+    demotedFileIds
+    promotedFileIds
+  }
+}`;
+
 export const deleteEpisodeFilesMutation = `mutation DeleteEpisodeFiles($input: DeleteEpisodeFilesInput!) {
   deleteEpisodeFiles(input: $input) {
     acceptedFileIds
@@ -899,12 +915,14 @@ export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($in
 export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUiSettingsInput!) {
   setMyUiSettings(input: $input) {
     theme
+    palette
     dateTimeFormat
     highlightColor
     secondaryColor
     highContrastMode
     reduceMotion
     hideSponsorButton
+    noGlow
     density
     sidebarMode
     defaultLandingView
@@ -928,12 +946,14 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
 export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMyCatalogViewInput!) {
   setMyCatalogView(input: $input) {
     theme
+    palette
     dateTimeFormat
     highlightColor
     secondaryColor
     highContrastMode
     reduceMotion
     hideSponsorButton
+    noGlow
     density
     sidebarMode
     defaultLandingView
@@ -2745,9 +2765,9 @@ export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: P
 
 // ── Title retention claims ────────────────────────────────────────────
 //
-// Converting a lease to a permanent hold leaves the original CONVERTED as
-// history and writes a fresh OPERATOR_KEEP beside it, so the three mutations
-// each return the claim the operator should now be looking at.
+// Keeping a title permanently ends its lease: the lease is left CONVERTED as
+// history and nothing replaces it, so the title carries no expiry. Each of the
+// three mutations returns the claim it changed.
 
 export const extendTitleClaimMutation = `mutation ExtendTitleClaim($input: ExtendTitleClaimInput!) {
   extendTitleClaim(input: $input) {${TITLE_CLAIM_FIELDS}
@@ -2756,13 +2776,6 @@ export const extendTitleClaimMutation = `mutation ExtendTitleClaim($input: Exten
 
 export const convertTitleClaimToPermanentMutation = `mutation ConvertTitleClaimToPermanent($input: ConvertTitleClaimToPermanentInput!) {
   convertTitleClaimToPermanent(input: $input) {${TITLE_CLAIM_FIELDS}
-  }
-}`;
-
-/// Keep a title. Returns the live operator keep it already has instead of
-/// stacking a second one.
-export const createOperatorKeepClaimMutation = `mutation CreateOperatorKeepClaim($titleId: ID!) {
-  createOperatorKeepClaim(titleId: $titleId) {${TITLE_CLAIM_FIELDS}
   }
 }`;
 

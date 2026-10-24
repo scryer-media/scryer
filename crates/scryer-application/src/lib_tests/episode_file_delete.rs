@@ -118,9 +118,18 @@ async fn rejected_title_delete_does_not_record_an_inferred_folder() {
         }
         let error = fixture
             .app
-            .execute_delete_title_files(&fixture.title_id, fingerprint, None)
+            .delete_title(
+                &fixture.admin,
+                &fixture.title_id,
+                true,
+                Some(DeleteExecutionConfirmation {
+                    preview_fingerprint: fingerprint.to_string(),
+                    typed_confirmation: None,
+                }),
+            )
             .await
             .unwrap_err();
+        assert!(!fixture.app.title_is_being_deleted(&fixture.title_id));
         assert!(
             matches!(
                 error,
@@ -645,7 +654,7 @@ async fn delete_episode_files_rejects_a_stale_aggregate_fingerprint() {
         .expect_err("stale fingerprint must be rejected");
 
     assert!(
-        matches!(&error, AppError::Validation(message) if message.contains("stale")),
+        error.validation_reason() == Some(crate::delete_refusal::PREVIEW_STALE),
         "expected a stale-preview validation error, got {error:?}"
     );
     assert_eq!(fixture.remaining_file_ids().await, vec![file_id]);

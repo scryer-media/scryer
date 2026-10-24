@@ -71,6 +71,11 @@ async fn run_import(
         import_id,
         &subtitle_videos,
         &subtitle_roots,
+        &completed
+            .subtitle_paths
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
     )
     .await;
     let mut subtitle_failed = subtitle_plan.is_err() || target.archive_processing_pending;
@@ -689,13 +694,14 @@ async fn try_match_titleless_archive_from_inner_video(
     workspace_reference.track(Some(&extracted_dir));
     let is_series = matches!(facet, MediaFacet::Series | MediaFacet::Anime);
     let video_files = match (|| {
-        let mut files = find_video_files(&extracted_dir, is_series)?;
+        let mut files = discover_video_files(&extracted_dir, is_series)?;
         let replaced = crate::archive_extractor::replaced_archive_sources(&extracted_dir)?;
         files.extend(
-            find_video_files(dest_dir, is_series)?
+            discover_video_files(dest_dir, is_series)?
                 .into_iter()
-                .filter(|path| {
-                    path.canonicalize()
+                .filter(|file| {
+                    file.path()
+                        .canonicalize()
                         .is_ok_and(|path| !replaced.contains(&path))
                 }),
         );
@@ -715,12 +721,7 @@ async fn try_match_titleless_archive_from_inner_video(
     // The titleless-archive probe predates filename recovery and is untouched
     // by it: SAB and NZBGet unpack before Scryer sees the download, so the
     // gated clients never reach this path.
-    let probe_files: Vec<ImportVideoFile> = video_files
-        .iter()
-        .cloned()
-        .map(ImportVideoFile::physical)
-        .collect();
-    for candidate in title_evidence_candidates_from_video_files(&probe_files) {
+    for candidate in title_evidence_candidates_from_video_files(&video_files) {
         if let Some(title) = resolve_title_from_release_candidate_via_port(
             &app.services.catalog.titles,
             &candidate,
@@ -899,10 +900,10 @@ async fn resolve_completed_import_target(
         // again with those. The results are memoized and reused by the file
         // list built further down.
         let probe_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
-        let probe_files = find_video_files(probe_dir, true)
+        let probe_files = discover_video_files(probe_dir, true)
             .ok()
             .filter(|files| !files.is_empty())
-            .or_else(|| find_video_files(probe_dir, false).ok())
+            .or_else(|| discover_video_files(probe_dir, false).ok())
             .unwrap_or_default();
         if !probe_files.is_empty() {
             // Nothing has identified the title, so every obfuscated-stem file
@@ -1088,14 +1089,15 @@ async fn resolve_completed_import_target(
     }
     let effective_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
     let video_files = match (|| {
-        let mut files = find_video_files(effective_dir, is_series)?;
+        let mut files = discover_video_files(effective_dir, is_series)?;
         if extracted_dir.is_some() {
             let replaced = crate::archive_extractor::replaced_archive_sources(effective_dir)?;
             files.extend(
-                find_video_files(dest_dir, is_series)?
+                discover_video_files(dest_dir, is_series)?
                     .into_iter()
-                    .filter(|path| {
-                        path.canonicalize()
+                    .filter(|file| {
+                        file.path()
+                            .canonicalize()
                             .is_ok_and(|path| !replaced.contains(&path))
                     }),
             );
@@ -2727,9 +2729,7 @@ async fn import_series_movie_download(
         &search_title,
     );
 
-    let ext = scryer_domain::canonical_video_extension(&source_video)
-        .unwrap_or("mkv")
-        .to_string();
+    let ext = import_video_destination_extension(&source_video, largest.content_qualified).to_string();
 
     let linked_episode = resolve_series_movie_linked_episode(app, title, &link).await?;
     // The resolved episode, not `link.linked_episode_id`, is this import's episode
@@ -2807,7 +2807,7 @@ async fn import_series_movie_download(
             completed,
             release_evidence,
             &source_video,
-            None,
+            largest.content_qualified,
             largest.disc_selection.as_ref(),
             source_size,
             &parsed,

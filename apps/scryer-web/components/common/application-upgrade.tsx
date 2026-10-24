@@ -65,13 +65,25 @@ function operatorGuidanceKey(kind: ApplicationInstallationKind): string {
   }
 }
 
+function canStartUpgrade(status: ApplicationUpgradeStatus): boolean {
+  return (
+    status.eligible &&
+    status.updateAvailable &&
+    !status.activeRun &&
+    Boolean(status.updateTag?.trim()) &&
+    Boolean(status.updateVersion?.trim())
+  );
+}
+
 export function ApplicationUpgradeAction({
   status,
   className,
+  refreshStatus,
   onStatusChanged,
 }: {
   status: ApplicationUpgradeStatus;
   className?: string;
+  refreshStatus: () => Promise<ApplicationUpgradeStatus | null>;
   onStatusChanged?: () => void;
 }) {
   const client = useClient();
@@ -79,27 +91,35 @@ export function ApplicationUpgradeAction({
   const { registerInteractiveJobRun } = useJobRunToasts();
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  const canStart =
-    status.eligible &&
-    status.updateAvailable &&
-    !status.activeRun &&
-    Boolean(status.updateTag?.trim()) &&
-    Boolean(status.updateVersion?.trim());
+  const canStart = canStartUpgrade(status);
 
   const startUpgrade = React.useCallback(async () => {
-    if (!canStart || !status.updateTag || !status.updateVersion) {
+    if (!canStart) {
       return;
     }
 
     setBusy(true);
     try {
+      // The server only accepts the current update notice, which can change
+      // after this status was loaded, so start from a fresh read.
+      const latest = await refreshStatus();
+      if (!latest) {
+        throw new Error(t("appUpgrade.startFailed"));
+      }
+      if (!canStartUpgrade(latest) || !latest.updateTag || !latest.updateVersion) {
+        setOpen(false);
+        onStatusChanged?.();
+        toast.info(t("appUpgrade.targetChanged"));
+        return;
+      }
+
       const result = await client
         .mutation<{ startApplicationUpgrade?: { jobRun?: unknown } }>(
           startApplicationUpgradeMutation,
           {
             input: {
-              expectedTag: status.updateTag,
-              expectedVersion: status.updateVersion,
+              expectedTag: latest.updateTag,
+              expectedVersion: latest.updateVersion,
             },
           },
         )
@@ -121,7 +141,7 @@ export function ApplicationUpgradeAction({
     } finally {
       setBusy(false);
     }
-  }, [canStart, client, onStatusChanged, registerInteractiveJobRun, status.updateTag, status.updateVersion, t]);
+  }, [canStart, client, onStatusChanged, refreshStatus, registerInteractiveJobRun, t]);
 
   return (
     <>
@@ -219,6 +239,7 @@ export function ApplicationUpgradeSection() {
           <ApplicationUpgradeAction
             status={status}
             className="w-full sm:w-auto"
+            refreshStatus={refresh}
             onStatusChanged={() => void refresh()}
           />
         ) : null}

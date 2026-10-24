@@ -3,6 +3,10 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
+/** The round arrow that pages a scroll container toward its hidden content. */
+export const SCROLL_FADE_CONTROL_CLASS =
+  "absolute z-20 inline-flex size-14 items-center justify-center rounded-full border-[3px] border-[var(--scry-ink2)] bg-[var(--scry-bg)] text-[var(--scry-ink2)] shadow-[0_8px_28px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors hover:bg-[var(--scry-card2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]";
+
 type HorizontalRailProps = {
   children: React.ReactNode;
   className?: string;
@@ -113,7 +117,7 @@ export function HorizontalRail({
             aria-label={scrollBackControlLabel}
             onClick={() => scrollByPage(-1)}
             style={{ borderColor: "var(--scry-ink2)" }}
-            className="absolute top-1/2 left-3 z-20 inline-flex size-14 -translate-y-1/2 items-center justify-center rounded-full border-[3px] border-[var(--scry-ink2)] bg-[var(--scry-bg)] text-[var(--scry-ink2)] shadow-[0_8px_28px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors hover:bg-[var(--scry-card2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]"
+            className={cn(SCROLL_FADE_CONTROL_CLASS, "top-1/2 left-3 -translate-y-1/2")}
           >
             <ChevronLeft className="size-7 stroke-[3]" aria-hidden="true" />
           </button>
@@ -133,7 +137,7 @@ export function HorizontalRail({
             aria-label={scrollControlLabel}
             onClick={() => scrollByPage(1)}
             style={{ borderColor: "var(--scry-ink2)" }}
-            className="absolute top-1/2 right-3 z-20 inline-flex size-14 -translate-y-1/2 items-center justify-center rounded-full border-[3px] border-[var(--scry-ink2)] bg-[var(--scry-bg)] text-[var(--scry-ink2)] shadow-[0_8px_28px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors hover:bg-[var(--scry-card2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]"
+            className={cn(SCROLL_FADE_CONTROL_CLASS, "top-1/2 right-3 -translate-y-1/2")}
           >
             <ChevronRight className="size-7 stroke-[3]" aria-hidden="true" />
           </button>

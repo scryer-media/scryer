@@ -1313,22 +1313,20 @@ impl AppUseCase {
         for (request_id, lease_days) in targets {
             if existing.iter().any(|claim| {
                 claim.producer_ref.as_deref() == Some(&request_id)
-                    && matches!(
-                        claim.producer,
-                        LifecycleClaimProducer::RequestLease
-                            | LifecycleClaimProducer::RequestPermanent
-                    )
+                    && claim.producer == LifecycleClaimProducer::RequestLease
             }) {
                 continue;
             }
-            let claim = new_request_lifecycle_claim(
+            let Some(claim) = new_request_lifecycle_claim(
                 &request_id,
                 title_id,
                 &request.library_id,
                 lease_days,
                 &actor.id,
                 now,
-            );
+            ) else {
+                continue;
+            };
             if let Err(error) = self.services.catalog.lifecycle_claims.create(&claim).await {
                 tracing::error!(
                     request_id = request_id.as_str(),
@@ -1369,25 +1367,24 @@ impl AppUseCase {
     /// Withdraw whatever a request was holding. Best effort and idempotent: a
     /// request that never reached approval has no claim.
     async fn release_request_lifecycle_claims(&self, request_id: &str, reason: &str) {
-        let now = chrono::Utc::now();
-        for producer in [
-            LifecycleClaimProducer::RequestLease,
-            LifecycleClaimProducer::RequestPermanent,
-        ] {
-            if let Err(error) = self
-                .services
-                .catalog
-                .lifecycle_claims
-                .release_for_producer_ref(producer, request_id, reason, now)
-                .await
-            {
-                tracing::warn!(
-                    request_id,
-                    reason,
-                    error = %error,
-                    "could not release a request's lifecycle claim"
-                );
-            }
+        if let Err(error) = self
+            .services
+            .catalog
+            .lifecycle_claims
+            .release_for_producer_ref(
+                LifecycleClaimProducer::RequestLease,
+                request_id,
+                reason,
+                chrono::Utc::now(),
+            )
+            .await
+        {
+            tracing::warn!(
+                request_id,
+                reason,
+                error = %error,
+                "could not release a request's lifecycle claim"
+            );
         }
     }
 
@@ -1417,51 +1414,6 @@ impl AppUseCase {
             .lifecycle_claims
             .list_for_title(title_id)
             .await
-    }
-
-    /// Keep a title: place an operator keep on it, or return the one already
-    /// live, so a second click never stacks a second hold to release.
-    pub async fn create_operator_keep_claim(
-        &self,
-        actor: &User,
-        title_id: &str,
-    ) -> AppResult<LifecycleClaim> {
-        let title = self
-            .services
-            .catalog
-            .titles
-            .get_by_id_without_external_ids(title_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("title not found".into()))?;
-        self.require_library_permission(actor, &title.library_id, LibraryPermission::ManageTitles)
-            .await?;
-        if let Some(existing) = self.live_operator_keep(title_id).await? {
-            return Ok(existing);
-        }
-        let now = chrono::Utc::now();
-        let keep = operator_keep(title.id, title.library_id, &actor.id, now);
-        if let Err(error) = self.services.catalog.lifecycle_claims.create(&keep).await {
-            // A title holds one live operator keep. A concurrent Keep that won
-            // the race is the keep this click asked for.
-            return match self.live_operator_keep(title_id).await? {
-                Some(existing) => Ok(existing),
-                None => Err(error),
-            };
-        }
-        self.reload_claim(&keep.id).await
-    }
-
-    async fn live_operator_keep(&self, title_id: &str) -> AppResult<Option<LifecycleClaim>> {
-        Ok(self
-            .services
-            .catalog
-            .lifecycle_claims
-            .list_for_title(title_id)
-            .await?
-            .into_iter()
-            .find(|claim| {
-                claim.producer == LifecycleClaimProducer::OperatorKeep && claim.is_live()
-            }))
     }
 
     /// Push a live claim's window out to `expires_at`.
@@ -1495,27 +1447,24 @@ impl AppUseCase {
         self.reload_claim(&claim.id).await
     }
 
-    /// Replace a live claim with an operator keep.
+    /// Keep a title permanently: end its lease, so the title carries no
+    /// expiry.
     ///
-    /// The replacement is a *new* claim with a different producer, not a mutated
-    /// one: the original stays as history in the `converted` state, so the trail
-    /// still says a request produced the original hold and an administrator
-    /// chose to make it permanent.
+    /// Nothing replaces the lease. The original stays as history in the
+    /// `converted` state, so the trail still says a request produced it and an
+    /// administrator chose to drop the expiry.
     pub async fn convert_title_claim_to_permanent(
         &self,
         actor: &User,
         claim_id: &str,
     ) -> AppResult<LifecycleClaim> {
         let claim = self.require_manageable_claim(actor, claim_id).await?;
-        let now = chrono::Utc::now();
-        let replacement = operator_keep(claim.title_id, claim.library_id, &actor.id, now);
-        let keep_id = self
-            .services
+        self.services
             .catalog
             .lifecycle_claims
-            .convert_to_permanent(&claim.id, &replacement, now)
+            .convert_to_permanent(&claim.id, chrono::Utc::now())
             .await?;
-        self.reload_claim(&keep_id).await
+        self.reload_claim(&claim.id).await
     }
 
     /// Withdraw a claim by hand.
@@ -1978,8 +1927,9 @@ fn request_draft_from_new_media_request(
     }
 }
 
-/// A retention claim for one request. Finite ⇒ dormant `retain_until`; forever
-/// ⇒ active `keep`.
+/// The lease for one request: a dormant `retain_until` whose window starts at
+/// the title's first import. A request approved without a lease, or with a
+/// zero-day one, has no time to delete, so it gets no claim.
 fn new_request_lifecycle_claim(
     request_id: &str,
     title_id: &str,
@@ -1987,66 +1937,24 @@ fn new_request_lifecycle_claim(
     lease_days: Option<i64>,
     created_by: &str,
     now: chrono::DateTime<chrono::Utc>,
-) -> LifecycleClaim {
-    let (producer, kind, state, starts_at) = match lease_days {
-        // Dormant: the window starts at the title's first import, not now.
-        Some(_) => (
-            LifecycleClaimProducer::RequestLease,
-            LifecycleClaimKind::RetainUntil,
-            LifecycleClaimState::Dormant,
-            None,
-        ),
-        // A keep has no clock to start, so it is live from the moment it exists.
-        None => (
-            LifecycleClaimProducer::RequestPermanent,
-            LifecycleClaimKind::Keep,
-            LifecycleClaimState::Active,
-            Some(now),
-        ),
-    };
-    LifecycleClaim {
+) -> Option<LifecycleClaim> {
+    let lease_days = lease_days.filter(|days| *days > 0)?;
+    Some(LifecycleClaim {
         id: Id::new().0,
         title_id: title_id.to_string(),
         library_id: library_id.to_string(),
-        producer,
+        producer: LifecycleClaimProducer::RequestLease,
         producer_ref: Some(request_id.to_string()),
-        kind,
-        state,
-        duration_days: lease_days,
-        starts_at,
+        kind: LifecycleClaimKind::RetainUntil,
+        state: LifecycleClaimState::Dormant,
+        duration_days: Some(lease_days),
+        starts_at: None,
         expires_at: None,
         created_by: Some(created_by.to_string()),
         created_at: now,
         updated_at: now,
         released_reason: None,
-    }
-}
-
-/// A live operator keep. No `producer_ref`: an operator keep has nothing
-/// upstream to release against, and it is what keeps two keeps on one title
-/// from colliding on the live-claim unique index.
-fn operator_keep(
-    title_id: String,
-    library_id: String,
-    created_by: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> LifecycleClaim {
-    LifecycleClaim {
-        id: Id::new().0,
-        title_id,
-        library_id,
-        producer: LifecycleClaimProducer::OperatorKeep,
-        producer_ref: None,
-        kind: LifecycleClaimKind::Keep,
-        state: LifecycleClaimState::Active,
-        duration_days: None,
-        starts_at: Some(now),
-        expires_at: None,
-        created_by: Some(created_by.to_string()),
-        created_at: now,
-        updated_at: now,
-        released_reason: None,
-    }
+    })
 }
 
 /// Overwrite the provenance fields the stored row cannot yet carry — at submit

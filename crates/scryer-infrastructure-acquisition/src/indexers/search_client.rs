@@ -1444,6 +1444,7 @@ fn reusable_candidate_from_record(
     }
 
     Some(IndexerSearchResult {
+        http: None,
         indexer_id: Some(config.id.clone()),
         source: if normalized.source.trim().is_empty() {
             config.name.clone()
@@ -1821,6 +1822,8 @@ enum IndexerSkipReason {
     Backoff,
     /// Not enabled for this search mode (interactive / automatic / RSS).
     ModeDisabled,
+    /// The provider's declared `feed_modes` leave automatic search out.
+    AutoSearchNotDeclared,
     /// Excluded by a per-search indexer restriction.
     SearchRestriction,
     /// Disabled for this scope by the routing config.
@@ -1849,6 +1852,7 @@ impl IndexerSkipReason {
             Self::SystemBackoff => "system_backoff",
             Self::Backoff => "backoff",
             Self::ModeDisabled => "mode_disabled",
+            Self::AutoSearchNotDeclared => "auto_search_not_declared",
             Self::SearchRestriction => "search_restriction",
             Self::RoutingDisabled => "routing_disabled",
             Self::NoRssSupport => "no_rss_support",
@@ -1870,6 +1874,7 @@ impl IndexerSkipReason {
             Self::SystemBackoff => "temporarily disabled (system backoff)",
             Self::Backoff => "temporarily disabled (backoff)",
             Self::ModeDisabled => "disabled for search mode",
+            Self::AutoSearchNotDeclared => "automatic search not declared by provider",
             Self::SearchRestriction => "excluded by per-search restriction",
             Self::RoutingDisabled => "disabled for scope via routing config",
             Self::NoRssSupport => "does not support RSS sync",
@@ -1955,6 +1960,23 @@ fn record_indexer_skip(
         "mode" => search_mode_label(mode, is_rss_request)
     )
     .increment(1);
+}
+
+/// Whether a provider's declared `feed_modes` admit automatic search.
+///
+/// A provider that declares no search mode at all (an empty list, or only
+/// `Recent` / `Rss`) predates the vocabulary or is feed-only, and keeps the
+/// behaviour it always had. Only a provider that names a search mode and
+/// leaves `AutomaticSearch` out is opting out of automatic search.
+pub(crate) fn provider_declares_automatic_search(
+    capabilities: &IndexerProviderCapabilities,
+) -> bool {
+    use scryer_domain::IndexerFeedModeCapability as Mode;
+    let declares_search_mode = capabilities
+        .feed_modes
+        .iter()
+        .any(|mode| matches!(mode, Mode::AutomaticSearch | Mode::InteractiveSearch));
+    !declares_search_mode || capabilities.feed_modes.contains(&Mode::AutomaticSearch)
 }
 
 fn log_indexer_skip(
@@ -5129,9 +5151,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 SearchMode::Interactive => c.enable_interactive_search,
                 SearchMode::Auto => Self::auto_mode_enabled(c, is_rss_request),
             };
-            if mode_ok {
-                enabled.push((c, had_persisted_system_backoff));
-            } else {
+            if !mode_ok {
                 log_indexer_skip(
                     mode,
                     is_rss_request,
@@ -5139,7 +5159,26 @@ impl IndexerClient for MultiIndexerSearchClient {
                     IndexerSkipReason::ModeDisabled,
                     None,
                 );
+                continue;
             }
+            if matches!(mode, SearchMode::Auto)
+                && !is_rss_request
+                && !provider_declares_automatic_search(
+                    &self
+                        .plugin_provider
+                        .capabilities_for_provider(&c.provider_type),
+                )
+            {
+                log_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    c.name.as_str(),
+                    IndexerSkipReason::AutoSearchNotDeclared,
+                    None,
+                );
+                continue;
+            }
+            enabled.push((c, had_persisted_system_backoff));
         }
 
         if enabled.is_empty() {
@@ -9727,6 +9766,30 @@ mod tests {
         assert_eq!(freshness.latest_safe_poll_at, expected);
     }
 
+    #[test]
+    fn automatic_search_follows_declared_feed_modes() {
+        use scryer_domain::IndexerFeedModeCapability as Mode;
+        let with_modes = |feed_modes: Vec<Mode>| IndexerProviderCapabilities {
+            feed_modes,
+            ..IndexerProviderCapabilities::default()
+        };
+        // Legacy and feed-only declarations keep automatic search.
+        assert!(provider_declares_automatic_search(&with_modes(vec![])));
+        assert!(provider_declares_automatic_search(&with_modes(vec![
+            Mode::Recent,
+            Mode::Rss
+        ])));
+        // A provider that names search modes is taken at its word.
+        assert!(provider_declares_automatic_search(&with_modes(vec![
+            Mode::Rss,
+            Mode::AutomaticSearch,
+            Mode::InteractiveSearch,
+        ])));
+        assert!(!provider_declares_automatic_search(&with_modes(vec![
+            Mode::InteractiveSearch
+        ])));
+    }
+
     fn managed_auto_mode_metadata(enable_rss: bool, enable_automatic_search: bool) -> String {
         serde_json::json!({
             "enable_rss": enable_rss,
@@ -10305,6 +10368,7 @@ mod tests {
 
     fn search_result(title: &str) -> IndexerSearchResult {
         IndexerSearchResult {
+            http: None,
             indexer_id: None,
             source: "mock".into(),
             title: title.into(),

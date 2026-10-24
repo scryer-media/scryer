@@ -5,12 +5,15 @@ mod authorization;
 mod catalog;
 pub mod challenge_solver;
 mod contracts;
+pub mod delete_refusal;
 mod discovery;
 mod download_client_config;
 mod download_client_path_mappings;
 mod download_identity;
+pub mod login_challenge_refusal;
 pub mod public_url;
 pub mod rate_limit_proxy_policy;
+pub mod title_delete;
 
 /// Completed-history rows the poller considers each cycle.
 ///
@@ -59,6 +62,7 @@ pub use indexer_category::{
     CATEGORY_MISMATCH_CODE, IndexerCategoryFamily, NZB_HEAD_PROBE_BYTES, enforce_nzb_category_gate,
     indexer_category_contradicts_facet, indexer_category_family, nzb_head_category,
 };
+pub mod episode_file_reassign_refusal;
 mod integration;
 mod jobs;
 mod library;
@@ -90,6 +94,8 @@ mod notifications;
 mod null_repositories;
 mod oauth;
 pub mod persisted_records;
+pub mod plugin_failure;
+pub use plugin_failure::{PluginFailure, PluginFailureReason, plugin_codes};
 mod plugins;
 mod polling_worker;
 mod ports;
@@ -346,8 +352,9 @@ pub use contracts::{
     DownloadClientBindingRecord, DownloadClientConfigUpdate, DownloadClientMarkImportedRequest,
     DownloadClientRetryOutcome, DownloadClientStatus, DownloadOrigin, DownloadPasswordCandidates,
     DownloadRecord, DownloadSubmission, DownloadSubmissionActorSnapshot,
-    DownloadSubmissionIdentity, DownloadSubmissionPurpose, EpisodeLinkReplacement, EpisodeUpdate,
-    ImportArtifact, IndexerArtifactLease, IndexerArtifactResolutionRequest,
+    DownloadSubmissionIdentity, DownloadSubmissionPurpose, EpisodeFileReassignOutcome,
+    EpisodeFileReassignRequest, EpisodeFileReassignment, EpisodeLinkReplacement, EpisodeUpdate,
+    FileEpisodeLinkRecord, ImportArtifact, IndexerArtifactLease, IndexerArtifactResolutionRequest,
     IndexerConfigSyncResult, IndexerConfigUpdate, IndexerDownloadClientMappingCatalog,
     IndexerDownloadClientMappingClient, IndexerDownloadClientMappingIndexer,
     IndexerDownloadClientProviderCompatibility, IndexerRoutingEntry, IndexerRoutingPlan,
@@ -362,7 +369,7 @@ pub use contracts::{
     SubmissionConflictPolicy, SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
     SubtitleProviderConfigUpdate, SubtitleProviderValidationResult, SubtitleStreamDetail,
     SuccessfulGrabCommit, TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
-    WantedSearchOutcome, indexer_search_eligibility,
+    UnconfirmedDownloadSubmission, WantedSearchOutcome, indexer_search_eligibility,
 };
 pub use domain_events::DomainEventActor;
 pub use download_client_path_mappings::{
@@ -488,8 +495,8 @@ pub use acquisition::release_search::release_strategy_kind_for_label;
 pub use helpers::{
     HashDomain, MAX_USER_TAGS_PER_TITLE, MAX_USER_TITLE_TAG_LEN, RESERVED_TITLE_TAG_PREFIX,
     accepted_inputs_for_client, background_worker_priority, blake3_identity_hex,
-    is_reserved_title_tag, nice_thread, normalize_release_name, normalize_release_password,
-    normalize_user_title_tag, normalize_user_title_tags,
+    http_capabilities_for_client, is_reserved_title_tag, nice_thread, normalize_release_name,
+    normalize_release_password, normalize_user_title_tag, normalize_user_title_tags,
 };
 pub(crate) use helpers::{
     INHERIT_QUALITY_PROFILE_VALUE, NATIVE_DOWNLOAD_CLIENT_TYPES, await_cancellable,
@@ -543,7 +550,7 @@ pub use library_scan_progress::{
     LibraryScanTracker,
 };
 pub use location::model::VerificationDepth;
-pub use media::analyzer::NativeMediaAnalyzer;
+pub use media::analyzer::{NOT_A_VALID_VIDEO_REASON, NativeMediaAnalyzer};
 pub use notifications::dispatcher::start_notification_dispatcher;
 pub use null_repositories::NullIndexerErrorRepository;
 pub use null_repositories::{
@@ -612,16 +619,17 @@ pub use ports::{
     ImportFileTransferProgressSender, ImportRepository, ImportRetryClaim, ImportRetryClaimOutcome,
     ImportRetryFinishOutcome, IndexerAccountingContext, IndexerArtifactResolver,
     IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository, IndexerDispatchGate,
-    IndexerGrabClient, IndexerGrabSelection, IndexerManagementClient, IndexerPluginProvider,
-    IndexerSearchCandidateWrite, IndexerSearchLearningContext, IndexerSearchLearningKey,
-    IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerSearchRunWrite,
-    IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser, JobRunRepository,
-    LibraryProbeRepository, LibraryRepository, LibraryScanUnmatchedItemRepository,
-    LifecycleActionRunRepository, LifecycleClaimRepository, LocationOperationProgress,
-    LocationOperationRepository, LocationOwnershipClaim, LocationOwnershipOutcome,
-    LogicalBackupExporter, MaintenanceActionJobReceiptClaim, MaintenanceActionJobReceiptTransition,
-    MaintenanceActionStepCandidateKey, MaintenanceActionStepClaim, MaintenanceActionStepRepository,
-    MaintenanceCandidateQuery, MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
+    IndexerGrabClient, IndexerGrabSelection, IndexerLoginChallenge, IndexerManagementClient,
+    IndexerPluginProvider, IndexerSearchCandidateWrite, IndexerSearchLearningContext,
+    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
+    IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
+    JobRunRepository, LibraryProbeRepository, LibraryRepository,
+    LibraryScanUnmatchedItemRepository, LifecycleActionRunRepository, LifecycleClaimRepository,
+    LocationOperationProgress, LocationOperationRepository, LocationOwnershipClaim,
+    LocationOwnershipOutcome, LogicalBackupExporter, MaintenanceActionJobReceiptClaim,
+    MaintenanceActionJobReceiptTransition, MaintenanceActionStepCandidateKey,
+    MaintenanceActionStepClaim, MaintenanceActionStepRepository, MaintenanceCandidateQuery,
+    MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
     MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
     MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
     MaintenanceSequenceCompletionRepository, MediaAnalyzer, MediaFileHashCandidate,
@@ -637,14 +645,14 @@ pub use ports::{
     NotificationPluginProvider, NotificationReleasePayload, NotificationSeverityPayload,
     NotificationSubscriptionRepository, NotificationTitleMovePayload, NotificationTitlePayload,
     OAuthRepository, PendingReleaseRepository, PlexServerDiscovery, PlexServerUser,
-    PluginDescriptorLoader, PluginHttpTrustConfigRuntime, PluginInstallationRepository,
-    PostProcessingScriptRepository, PrefetchedCompletedDownloads, ProxyConfigRepository,
-    QualityProfileRepository, ReleaseAttemptRepository, RequestRuleDecisionRepository,
-    RequestRuleSetRepository, ReusableIndexerSearchCandidate, ReusableIndexerSearchCandidatePage,
-    ReusableIndexerSearchStrategy, RuleSetRepository, RuntimePluginLoad, SEARCH_STRATEGY_CONTAINED,
-    SEARCH_STRATEGY_CONVERGED, SEARCH_STRATEGY_OPEN, ScopeCoverageRow,
-    ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository, ShowRepository,
-    SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore, SubtitleDownloadRepository,
+    PluginDescriptorLoader, PluginDynamicConfigFields, PluginHttpTrustConfigRuntime,
+    PluginInstallationRepository, PostProcessingScriptRepository, PrefetchedCompletedDownloads,
+    ProxyConfigRepository, QualityProfileRepository, ReleaseAttemptRepository,
+    RequestRuleDecisionRepository, RequestRuleSetRepository, ReusableIndexerSearchCandidate,
+    ReusableIndexerSearchCandidatePage, ReusableIndexerSearchStrategy, RuleSetRepository,
+    RuntimePluginLoad, SEARCH_STRATEGY_CONTAINED, SEARCH_STRATEGY_CONVERGED, SEARCH_STRATEGY_OPEN,
+    ScopeCoverageRow, ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository,
+    ShowRepository, SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore, SubtitleDownloadRepository,
     SubtitlePluginProvider, SubtitleProviderClient, SubtitleProviderConfigRepository,
     SystemInfoProvider, TitleImageProcessor, TitleImageRepository, TitleListProjection,
     TitleNameBucketQuery, TitleNameCandidate, TitleRepository, TotpRepository,
@@ -772,12 +780,12 @@ pub use types::{
     PendingImportReasonClass, PendingImportSearchAttempt, PendingImportStatus,
     PendingImportTitleSearchItem, PendingRelease, PendingReleaseObservation, PendingReleaseRole,
     PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
-    PrimaryCollectionSummary, RecycleBinBatchJobAccepted, RecycleBinSettings,
-    RecycleRestoreConflictPolicy, RecycleRestorePreview, RecycleRestorePreviewItem, RecycledItem,
-    ReleaseDecision, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureRecord,
-    ReleaseDownloadFailureSignature, ResolvePendingImportResult, RuntimePathStyle,
-    ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics, TitleAward,
-    TitleCatalogAggregates, TitleCatalogContentStatus, TitleCatalogFilter,
+    PrimaryCollectionSummary, ReassignEpisodeFileResult, RecycleBinBatchJobAccepted,
+    RecycleBinSettings, RecycleRestoreConflictPolicy, RecycleRestorePreview,
+    RecycleRestorePreviewItem, RecycledItem, ReleaseDecision, ReleaseDownloadAttemptOutcome,
+    ReleaseDownloadFailureRecord, ReleaseDownloadFailureSignature, ResolvePendingImportResult,
+    RuntimePathStyle, ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics,
+    TitleAward, TitleCatalogAggregates, TitleCatalogContentStatus, TitleCatalogFilter,
     TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogPresence,
     TitleCatalogProfileNames, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary, TitleExternalRating,
@@ -789,7 +797,7 @@ pub use types::{
     TotpEnrollmentChallengeRecord, TotpEnrollmentComplete, TotpEnrollmentStart,
     TotpFailedAttemptRecord, TotpRecoveryCodeRecord, TotpStatus, UiCatalogViewMode,
     UiCatalogViewSetting, UiCatalogViewUpdate, UiDateTimeFormat, UiDefaultLandingView, UiDensity,
-    UiDeviceClass, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
+    UiDeviceClass, UiPalette, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
     UiTableColumnSetting, UiTableViewMode, UiTheme, UpdateRecycleBinSettings,
     UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot, VerificationSettings,
     VerifiedLocalCredentials, WantedKind, WantedStatusCount, WebauthnChallengePurpose,
@@ -833,6 +841,23 @@ pub struct AutoEligibilityReason {
     pub block_codes: Vec<String>,
 }
 
+/// One value a refusal hands its client, published as the GraphQL extension
+/// named `key`. The key is API once released, like the reason it travels with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefusalFact {
+    pub key: &'static str,
+    pub value: String,
+}
+
+impl RefusalFact {
+    pub fn new(key: &'static str, value: impl Into<String>) -> Self {
+        Self {
+            key,
+            value: value.into(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("unauthorized: {0}")]
@@ -851,10 +876,15 @@ pub enum AppError {
     /// reasons in SCREAMING_SNAKE (lists keep theirs in `lists::refusal`), not
     /// by adding a variant. A reason names the condition, never the wording,
     /// and is part of the API once released.
+    ///
+    /// `facts` are values a client needs to act on the refusal (the id of the
+    /// record in the way, say). Each travels as its own extension beside
+    /// `reason`, never inside the sentence. Most refusals carry none.
     #[error("validation: {message}")]
     ValidationRefused {
         message: String,
         reason: &'static str,
+        facts: Vec<RefusalFact>,
     },
 
     /// A title mutation is deferred until its location operation releases ownership.
@@ -1022,8 +1052,26 @@ pub enum AppError {
     #[error("discovery run {run_id} was superseded by a presentation change")]
     DiscoveryPresentationSuperseded { run_id: String },
 
+    /// A plugin call failed. A repository failure to every workflow that
+    /// retries, records, or reports it, but `message` is the host's own
+    /// sentence and safe to show, and `failure` names why the call failed so a
+    /// client can say it in its own language. See `plugin_failure`.
+    #[error("{message}")]
+    PluginFailed {
+        message: String,
+        failure: PluginFailure,
+    },
+
     #[error("repository: {0}")]
     Repository(String),
+
+    /// A repository fault with a stable workflow reason. The diagnostic remains
+    /// internal; API adapters mask it just like `Repository` while exposing the reason.
+    #[error("repository: {message}")]
+    RepositoryFailed {
+        message: String,
+        reason: &'static str,
+    },
 }
 
 impl AppError {
@@ -1037,6 +1085,29 @@ impl AppError {
         Self::ValidationRefused {
             message: message.into(),
             reason,
+            facts: Vec::new(),
+        }
+    }
+
+    /// A named validation failure that also hands the client the values it
+    /// needs to act on it. See [`AppError::ValidationRefused`].
+    pub fn validation_refused_with_facts(
+        reason: &'static str,
+        message: impl Into<String>,
+        facts: Vec<RefusalFact>,
+    ) -> Self {
+        Self::ValidationRefused {
+            message: message.into(),
+            reason,
+            facts,
+        }
+    }
+
+    /// The facts a named validation failure carries beside its reason.
+    pub fn refusal_facts(&self) -> &[RefusalFact] {
+        match self {
+            Self::ValidationRefused { facts, .. } => facts,
+            _ => &[],
         }
     }
 
@@ -1045,6 +1116,14 @@ impl AppError {
         match self {
             Self::ValidationRefused { reason, .. } => Some(reason),
             _ => None,
+        }
+    }
+
+    /// The stable condition named by a validation or repository failure.
+    pub fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::RepositoryFailed { reason, .. } => Some(reason),
+            _ => self.validation_reason(),
         }
     }
 

@@ -149,6 +149,7 @@ fn domain_field_type(value: ConfigFieldType) -> scryer_domain::ConfigFieldType {
         ConfigFieldType::Number => Domain::Number,
         ConfigFieldType::Path => Domain::Path,
         ConfigFieldType::Tag => Domain::Tag,
+        ConfigFieldType::Info => Domain::Info,
     }
 }
 

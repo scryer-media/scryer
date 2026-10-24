@@ -373,9 +373,13 @@ pub(crate) struct SeedingGateReport {
 pub(crate) struct TerminalDownloadCleanup {
     pub outcome: TerminalDownloadCleanupOutcome,
     pub seeding: Option<SeedingGateReport>,
-    /// What host-side payload deletion achieved, when Scryer managed it.
-    /// `None` when the client deleted its own data or no data removal ran.
+    /// What the host deletion found. `None` when no payload removal was
+    /// requested, or the client reported no payload location to inspect.
     pub payload: Option<HostPayloadDisposition>,
+    /// Whether this cleanup removed the payload along with the entry.
+    pub payload_requested: bool,
+    /// Whether the client was asked to delete its own files, and its answer.
+    pub client_payload: ClientPayloadDeletion,
 }
 
 impl TerminalDownloadCleanup {
@@ -384,15 +388,177 @@ impl TerminalDownloadCleanup {
             outcome,
             seeding: None,
             payload: None,
+            payload_requested: false,
+            client_payload: ClientPayloadDeletion::NotRequested,
         }
     }
 
     fn gated(outcome: TerminalDownloadCleanupOutcome, seeding: SeedingGateReport) -> Self {
         Self {
-            outcome,
             seeding: Some(seeding),
-            payload: None,
+            ..Self::bare(outcome)
         }
+    }
+
+    /// The settled outcome of a cleanup that removed the client entry.
+    fn removed_settlement(&self) -> CleanupSettlement {
+        if !self.payload_requested {
+            return CleanupSettlement::EntryRemoved;
+        }
+        match (self.payload, self.client_payload) {
+            (Some(HostPayloadDisposition::Removed), _) => {
+                CleanupSettlement::PayloadAndEntryRemoved
+            }
+            (_, ClientPayloadDeletion::Requested) => {
+                CleanupSettlement::EntryAndPayloadRemovedByClient
+            }
+            (Some(HostPayloadDisposition::PartiallyRetained), _) => {
+                CleanupSettlement::EntryRemovedPayloadPartiallyRetained
+            }
+            _ => CleanupSettlement::EntryRemovedPayloadUnverified,
+        }
+    }
+}
+
+/// Whether terminal cleanup asked the client to delete its own files. The
+/// strings are stored on the cleanup row's payload checkpoint: never rename
+/// one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClientPayloadDeletion {
+    /// The client was asked for the entry only.
+    NotRequested,
+    /// The client was asked to delete its files with the entry.
+    Requested,
+}
+
+impl ClientPayloadDeletion {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NotRequested => "not_requested",
+            Self::Requested => "requested",
+        }
+    }
+}
+
+/// How a durable terminal cleanup attempt ended, as stored on its cleanup
+/// row. The stored strings are the row format: never rename one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CleanupSettlement {
+    PolicyRetained,
+    HandedOff,
+    SeedingEntryKept,
+    SeedingHold,
+    /// The host deletion verified the payload gone, and the entry was removed.
+    PayloadAndEntryRemoved,
+    /// Only the entry was removed; no payload removal was requested.
+    EntryRemoved,
+    /// The client was asked to delete its files and removed the entry; the
+    /// host deletion had nothing it could verify.
+    EntryAndPayloadRemovedByClient,
+    EntryRemovedPayloadPartiallyRetained,
+    EntryRemovedPayloadUnverified,
+    EntryAbsent,
+    PayloadRemovedEntryAbsent,
+    NativeRemovalRecovered,
+    EntryAbsentPayloadUnverified,
+    ClientRemoved,
+    ClientUnresolved,
+    CleanupAbandoned,
+    CleanupDeferred,
+    CleanupFailed,
+    ObservationUnknown,
+}
+
+impl CleanupSettlement {
+    pub(crate) const ALL: [Self; 19] = [
+        Self::PolicyRetained,
+        Self::HandedOff,
+        Self::SeedingEntryKept,
+        Self::SeedingHold,
+        Self::PayloadAndEntryRemoved,
+        Self::EntryRemoved,
+        Self::EntryAndPayloadRemovedByClient,
+        Self::EntryRemovedPayloadPartiallyRetained,
+        Self::EntryRemovedPayloadUnverified,
+        Self::EntryAbsent,
+        Self::PayloadRemovedEntryAbsent,
+        Self::NativeRemovalRecovered,
+        Self::EntryAbsentPayloadUnverified,
+        Self::ClientRemoved,
+        Self::ClientUnresolved,
+        Self::CleanupAbandoned,
+        Self::CleanupDeferred,
+        Self::CleanupFailed,
+        Self::ObservationUnknown,
+    ];
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::PolicyRetained => "policy_retained",
+            Self::HandedOff => "handed_off",
+            Self::SeedingEntryKept => "seeding_entry_kept",
+            Self::SeedingHold => "seeding_hold",
+            Self::PayloadAndEntryRemoved => "payload_and_entry_removed",
+            Self::EntryRemoved => "entry_removed",
+            Self::EntryAndPayloadRemovedByClient => "entry_and_payload_removed_by_client",
+            Self::EntryRemovedPayloadPartiallyRetained => {
+                "entry_removed_payload_partially_retained"
+            }
+            Self::EntryRemovedPayloadUnverified => "entry_removed_payload_unverified",
+            Self::EntryAbsent => "entry_absent",
+            Self::PayloadRemovedEntryAbsent => "payload_removed_entry_absent",
+            Self::NativeRemovalRecovered => "native_removal_recovered",
+            Self::EntryAbsentPayloadUnverified => "entry_absent_payload_unverified",
+            Self::ClientRemoved => "client_removed",
+            Self::ClientUnresolved => "client_unresolved",
+            Self::CleanupAbandoned => "cleanup_abandoned",
+            Self::CleanupDeferred => "cleanup_deferred",
+            Self::CleanupFailed => "cleanup_failed",
+            Self::ObservationUnknown => "observation_unknown",
+        }
+    }
+
+    /// Reads a stored outcome, including rows written before this enum.
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|settlement| settlement.as_str() == value)
+    }
+
+    /// The cleanup outcome a settled row reports to the reconcile tick.
+    fn settled_outcome(self) -> TerminalDownloadCleanupOutcome {
+        match self {
+            Self::PolicyRetained => TerminalDownloadCleanupOutcome::NotConfigured,
+            Self::HandedOff => TerminalDownloadCleanupOutcome::HandedOff,
+            Self::SeedingEntryKept => TerminalDownloadCleanupOutcome::SeedingEntryKept,
+            Self::PayloadAndEntryRemoved
+            | Self::EntryRemoved
+            | Self::EntryAndPayloadRemovedByClient
+            | Self::EntryRemovedPayloadPartiallyRetained
+            | Self::EntryRemovedPayloadUnverified => TerminalDownloadCleanupOutcome::Removed,
+            Self::EntryAbsent
+            | Self::PayloadRemovedEntryAbsent
+            | Self::NativeRemovalRecovered
+            | Self::EntryAbsentPayloadUnverified => TerminalDownloadCleanupOutcome::AlreadyGone,
+            // Nothing left for Scryer to do: the client is gone, the row
+            // could never be attributed, or the operator must finish by
+            // hand. The scope is released either way.
+            Self::ClientRemoved | Self::ClientUnresolved | Self::CleanupAbandoned => {
+                TerminalDownloadCleanupOutcome::NotConfigured
+            }
+            Self::SeedingHold
+            | Self::CleanupDeferred
+            | Self::CleanupFailed
+            | Self::ObservationUnknown => TerminalDownloadCleanupOutcome::RetryableFailure,
+        }
+    }
+
+    /// Whether the entry is gone with payload Scryer could not account for.
+    fn leaves_payload_for_operator(self) -> bool {
+        matches!(
+            self,
+            Self::EntryRemovedPayloadPartiallyRetained | Self::EntryRemovedPayloadUnverified
+        )
     }
 }
 
@@ -651,28 +817,12 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
         Ok(crate::DownloadCleanupClaim::Deferred) => {
             TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure)
         }
-        Ok(crate::DownloadCleanupClaim::Settled { outcome }) => {
-            TerminalDownloadCleanup::bare(match outcome.as_str() {
-                "policy_retained" => TerminalDownloadCleanupOutcome::NotConfigured,
-                "handed_off" => TerminalDownloadCleanupOutcome::HandedOff,
-                "seeding_entry_kept" => TerminalDownloadCleanupOutcome::SeedingEntryKept,
-                "payload_and_entry_removed"
-                | "entry_removed"
-                | "entry_removed_payload_partially_retained"
-                | "entry_removed_payload_unverified" => TerminalDownloadCleanupOutcome::Removed,
-                "entry_absent"
-                | "payload_removed_entry_absent"
-                | "native_removal_recovered"
-                | "entry_absent_payload_unverified" => TerminalDownloadCleanupOutcome::AlreadyGone,
-                // Nothing left for Scryer to do: the client is gone, the row
-                // could never be attributed, or the operator must finish by
-                // hand. The scope is released either way.
-                "client_removed" | "client_unresolved" | "cleanup_abandoned" => {
-                    TerminalDownloadCleanupOutcome::NotConfigured
-                }
-                _ => TerminalDownloadCleanupOutcome::RetryableFailure,
-            })
-        }
+        Ok(crate::DownloadCleanupClaim::Settled { outcome }) => TerminalDownloadCleanup::bare(
+            CleanupSettlement::parse(&outcome).map_or(
+                TerminalDownloadCleanupOutcome::RetryableFailure,
+                CleanupSettlement::settled_outcome,
+            ),
+        ),
         Err(error) => {
             tracing::warn!(download_id = %tracked.download_id, error = %error, "failed to claim terminal cleanup");
             TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure)
@@ -758,7 +908,7 @@ pub(crate) async fn run_claimed_download_cleanup(
     );
     let result = async {
         if app.services.workflow.imports.archive_processing_pending_for_download(&record.download_id).await? {
-            finish_cleanup_attempt(app, &record, "cleanup_deferred", false, record.history_offset,
+            finish_cleanup_attempt(app, &record, CleanupSettlement::CleanupDeferred, false, record.history_offset,
                 Some("archive or subtitle delivery is pending; sources preserved")).await;
             return Ok(None);
         }
@@ -772,7 +922,7 @@ pub(crate) async fn run_claimed_download_cleanup(
             // A genuine deferral, not a failure: the job re-entered the import
             // pipeline and the state transition will re-enqueue cleanup once
             // it settles again.
-            finish_cleanup_attempt(app, &record, "cleanup_deferred", false, record.history_offset,
+            finish_cleanup_attempt(app, &record, CleanupSettlement::CleanupDeferred, false, record.history_offset,
                 Some("import is no longer settled; cleanup deferred")).await;
             return Ok(None);
         }
@@ -784,18 +934,22 @@ pub(crate) async fn run_claimed_download_cleanup(
             app.services.integrations.download_client_configs.get_by_id(&record.client_id).await?
         };
         if client_config.is_none() {
-            let outcome = if record.client_id.trim().is_empty() { "client_unresolved" } else { "client_removed" };
+            let outcome = if record.client_id.trim().is_empty() {
+                CleanupSettlement::ClientUnresolved
+            } else {
+                CleanupSettlement::ClientRemoved
+            };
             if !finish_cleanup_attempt(app, &record, outcome, true, 0,
                 Some("download client is no longer configured; nothing to clean up")).await {
                 return Ok(None);
             }
-            if outcome == "client_removed" {
+            if outcome == CleanupSettlement::ClientRemoved {
                 tracing::info!(download_id = %record.download_id, client_id = %record.client_id,
-                    client_type = %record.client_type, item_id = %record.item_id, outcome,
+                    client_type = %record.client_type, item_id = %record.item_id, outcome = outcome.as_str(),
                     "terminal download cleanup settled without a client; any client entry or payload is left as-is");
             } else {
                 tracing::debug!(download_id = %record.download_id, client_type = %record.client_type,
-                    item_id = %record.item_id, outcome,
+                    item_id = %record.item_id, outcome = outcome.as_str(),
                     "terminal download cleanup settled without a client; any client entry or payload is left as-is");
             }
             return Ok(Some((record.download_id, None,
@@ -828,7 +982,7 @@ pub(crate) async fn run_claimed_download_cleanup(
             if state.counts_as_imported() { policy.remove_completed } else { policy.remove_failed }
         };
         if !remove {
-            if !finish_cleanup_attempt(app, &record, "policy_retained", true, 0, None).await {
+            if !finish_cleanup_attempt(app, &record, CleanupSettlement::PolicyRetained, true, 0, None).await {
                 return Ok(None);
             }
             tracing::debug!(download_id = %record.download_id, "terminal download retained by removal policy");
@@ -863,24 +1017,26 @@ pub(crate) async fn run_claimed_download_cleanup(
                 // flight (the plan and inventory are checkpointed): finish the
                 // verified deletion from that checkpoint, then settle.
                 let host_payload_in_flight = !payload_removed
-                    && checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.get("completed").is_some())
-                    && (record.client_type.trim() != "weaver"
-                        || client_refused_payload_deletion(checkpoint.as_ref()))
-                    && !plugin_has_native_data_removal(app, &record.client_id).await;
+                    && checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.get("completed").is_some());
                 let payload_removed = if host_payload_in_flight {
-                    match remove_host_payload_before_entry_cleanup(
+                    match remove_host_payload(
                         app, Some(&record.download_id), &record.client_id, &record.client_type,
-                        &record.item_id, Some(&record), None,
+                        &record.item_id, Some(&record), None, None,
                     ).await {
-                        Ok(report) => {
+                        Ok(Some(report)) => {
                             if let Some(marker) = report.filesystem_checkpoint.as_deref()
                                 && let Err(error) = clear_host_payload_cleanup_checkpoint(marker).await
                             {
                                 tracing::warn!(download_id = %record.download_id, error = %error,
                                     "failed to clear payload cleanup checkpoint after entry absence");
                             }
-                            true
+                            // Retained files (content that changed since the
+                            // inventory) do not count as a removed payload.
+                            report.disposition == HostPayloadDisposition::Removed
                         }
+                        // Unreachable while the checkpoint names the payload;
+                        // settled below as unverified all the same.
+                        Ok(None) => false,
                         Err(error) => {
                             tracing::warn!(download_id = %record.download_id, client_id = %record.client_id,
                                 attempts = record.attempts, error = %error,
@@ -903,13 +1059,14 @@ pub(crate) async fn run_claimed_download_cleanup(
                             .acquisition
                             .invalidate_download_registry_observations();
                     }
-                    let outcome = if payload_removed { "payload_removed_entry_absent" }
-                        else if native_requested { "native_removal_recovered" } else { "entry_absent" };
+                    let outcome = if payload_removed { CleanupSettlement::PayloadRemovedEntryAbsent }
+                        else if native_requested { CleanupSettlement::NativeRemovalRecovered }
+                        else { CleanupSettlement::EntryAbsent };
                     if !finish_cleanup_attempt(app, &record, outcome, true, 0, None).await {
                         return Ok(None);
                     }
                     tracing::debug!(download_id = %record.download_id, client_id = %record.client_id,
-                        outcome, "cleanup recovered after authoritative entry absence");
+                        outcome = outcome.as_str(), "cleanup recovered after authoritative entry absence");
                     return Ok(Some((record.download_id, None,
                         TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::AlreadyGone))));
                 }
@@ -920,7 +1077,7 @@ pub(crate) async fn run_claimed_download_cleanup(
                 // existed (no checkpoint) land here in bulk on upgrade and are
                 // routine; a row whose host cleanup was actually planned gets
                 // one warning.
-                if !finish_cleanup_attempt(app, &record, "entry_absent_payload_unverified", true, 0,
+                if !finish_cleanup_attempt(app, &record, CleanupSettlement::EntryAbsentPayloadUnverified, true, 0,
                     Some("client entry vanished before Scryer verified payload cleanup; payload may remain on disk")).await {
                     return Ok(None);
                 }
@@ -937,7 +1094,7 @@ pub(crate) async fn run_claimed_download_cleanup(
                     TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::AlreadyGone))));
             }
             crate::DownloadClientObservation::Unknown { reason, next_history_offset } => {
-                finish_cleanup_attempt(app, &record, "observation_unknown", false,
+                finish_cleanup_attempt(app, &record, CleanupSettlement::ObservationUnknown, false,
                     next_history_offset, Some(&reason)).await;
                 return Ok(None);
             }
@@ -993,18 +1150,13 @@ pub(crate) async fn run_claimed_download_cleanup(
         let cleanup = reconcile_unclaimed_terminal_cleanup(app, &tracked, state, cache, Some(&record)).await;
         let complete = terminal_download_cleanup_is_complete(cleanup.outcome);
         let outcome = match cleanup.outcome {
-            TerminalDownloadCleanupOutcome::Removed if state == TrackedDownloadState::Ignored => "entry_removed",
-            TerminalDownloadCleanupOutcome::Removed => match cleanup.payload {
-                Some(HostPayloadDisposition::PartiallyRetained) => "entry_removed_payload_partially_retained",
-                Some(HostPayloadDisposition::Unverified) => "entry_removed_payload_unverified",
-                Some(HostPayloadDisposition::Removed) | None => "payload_and_entry_removed",
-            },
-            TerminalDownloadCleanupOutcome::AlreadyGone => "entry_absent",
-            TerminalDownloadCleanupOutcome::NotConfigured => "policy_retained",
-            TerminalDownloadCleanupOutcome::HeldForSeeding => "seeding_hold",
-            TerminalDownloadCleanupOutcome::SeedingEntryKept => "seeding_entry_kept",
-            TerminalDownloadCleanupOutcome::HandedOff => "handed_off",
-            TerminalDownloadCleanupOutcome::RetryableFailure => "cleanup_failed",
+            TerminalDownloadCleanupOutcome::Removed => cleanup.removed_settlement(),
+            TerminalDownloadCleanupOutcome::AlreadyGone => CleanupSettlement::EntryAbsent,
+            TerminalDownloadCleanupOutcome::NotConfigured => CleanupSettlement::PolicyRetained,
+            TerminalDownloadCleanupOutcome::HeldForSeeding => CleanupSettlement::SeedingHold,
+            TerminalDownloadCleanupOutcome::SeedingEntryKept => CleanupSettlement::SeedingEntryKept,
+            TerminalDownloadCleanupOutcome::HandedOff => CleanupSettlement::HandedOff,
+            TerminalDownloadCleanupOutcome::RetryableFailure => CleanupSettlement::CleanupFailed,
         };
         let error = (cleanup.outcome == TerminalDownloadCleanupOutcome::RetryableFailure)
             .then_some("required payload or entry operation failed; see client cleanup log");
@@ -1012,13 +1164,14 @@ pub(crate) async fn run_claimed_download_cleanup(
             return Ok(None);
         }
         if complete {
-            if matches!(cleanup.payload, Some(HostPayloadDisposition::PartiallyRetained | HostPayloadDisposition::Unverified)) {
+            if outcome.leaves_payload_for_operator() {
                 tracing::warn!(download_id = %record.download_id, client_id = %record.client_id,
-                    item_id = %record.item_id, outcome,
+                    item_id = %record.item_id, outcome = outcome.as_str(),
                     "terminal download cleanup completed with payload left on disk for the operator");
             } else {
                 tracing::info!(download_id = %record.download_id, client_id = %record.client_id,
-                    item_id = %record.item_id, outcome, "terminal download cleanup completed");
+                    item_id = %record.item_id, outcome = outcome.as_str(),
+                    "terminal download cleanup completed");
             }
         }
         Ok(Some((record.download_id, Some(tracked), cleanup)))
@@ -1050,7 +1203,7 @@ pub(crate) async fn run_claimed_download_cleanup(
                 finish_cleanup_attempt(
                     app,
                     &record,
-                    "cleanup_abandoned",
+                    CleanupSettlement::CleanupAbandoned,
                     true,
                     0,
                     Some(&error.to_string()),
@@ -1074,7 +1227,7 @@ pub(crate) async fn run_claimed_download_cleanup(
             finish_cleanup_attempt(
                 app,
                 &record,
-                "cleanup_failed",
+                CleanupSettlement::CleanupFailed,
                 false,
                 record.history_offset,
                 Some(&error.to_string()),
@@ -1149,7 +1302,7 @@ fn cleanup_error_is_permanent(error: &AppError) -> bool {
 async fn finish_cleanup_attempt(
     app: &AppUseCase,
     record: &crate::DownloadCleanupRecord,
-    outcome: &str,
+    outcome: CleanupSettlement,
     complete: bool,
     offset: usize,
     error: Option<&str>,
@@ -1159,7 +1312,14 @@ async fn finish_cleanup_attempt(
         .services
         .workflow
         .download_submissions
-        .finish_download_cleanup(&record.download_id, outcome, complete, delay, offset, error)
+        .finish_download_cleanup(
+            &record.download_id,
+            outcome.as_str(),
+            complete,
+            delay,
+            offset,
+            error,
+        )
         .await
     {
         Ok(()) => true,

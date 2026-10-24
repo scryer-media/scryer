@@ -130,6 +130,7 @@ import {
   resolveTitleOverviewTargetBySlug,
 } from "@/lib/title-overview-loader";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { overviewTargetFromNavigation } from "@/lib/utils/overview-route-target";
 
 const DashboardContainer = lazy(() =>
   import("@/components/containers/dashboard-container").then((m) => ({
@@ -317,11 +318,13 @@ function SmgUpgradeBanner({
 
 function SmgScryerUpdateBanner({
   canManageSystemSettings,
+  settingsSubscriptionEnabled,
   notice,
   t,
   onDismiss,
 }: {
   canManageSystemSettings: boolean;
+  settingsSubscriptionEnabled: boolean;
   notice: SmgScryerUpdateNotice;
   t: TranslateFn;
   onDismiss: () => void;
@@ -329,12 +332,14 @@ function SmgScryerUpdateBanner({
   const currentVersion = notice.currentVersion.trim();
   const latestVersion = notice.latestVersion.trim();
   const releaseUrl = notice.releaseUrl?.trim() || null;
-  const { status, refresh } = useApplicationUpgradeStatus(canManageSystemSettings);
+  const { status, refresh } = useApplicationUpgradeStatus(canManageSystemSettings, {
+    settingsSubscriptionEnabled,
+  });
 
   return (
     <div
       data-slot="root-shell-notice"
-      className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] text-[var(--scry-body)] shadow-[0_8px_28px_rgba(var(--scry-accent-rgb),0.10)] backdrop-blur"
+      className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] text-[var(--scry-body)] shadow-[0_8px_28px_rgba(var(--scry-accent-rgb),calc(0.10*var(--scry-glow)))] backdrop-blur"
     >
       <div className="mx-auto flex w-full max-w-[1480px] items-center gap-3 px-4 py-2 text-sm">
         <CircleFadingArrowUp
@@ -366,6 +371,7 @@ function SmgScryerUpdateBanner({
           <ApplicationUpgradeAction
             status={status}
             className="flex-none"
+            refreshStatus={refresh}
             onStatusChanged={() => void refresh()}
           />
         ) : null}
@@ -849,8 +855,23 @@ function AuthenticatedHomePage({
   } = useSmgNotices({
     settingsSubscriptionEnabled: canSubscribeToLibraryEvents,
   });
-  const [resolvedOverviewTarget, setResolvedOverviewTarget] =
-    useState<OverviewTitleTarget | null>(null);
+  const overviewRouteKey = JSON.stringify([view, parsedOverviewLibrarySlug, parsedOverviewSlug]);
+  const navigationOverviewTarget = useMemo(
+    () => overviewTargetFromNavigation(location.state, {
+      view, librarySlug: parsedOverviewLibrarySlug, slug: parsedOverviewSlug,
+    }),
+    [location.state, parsedOverviewLibrarySlug, parsedOverviewSlug, view],
+  );
+  const [overviewResolution, setOverviewResolution] = useState<{
+    key: string;
+    target: OverviewTitleTarget | null;
+  } | null>(null);
+  const resolvedOverviewTarget = overviewResolution?.key === overviewRouteKey
+    ? overviewResolution.target
+    : navigationOverviewTarget;
+  const setResolvedOverviewTarget = useCallback((target: OverviewTitleTarget | null) => {
+    setOverviewResolution({ key: overviewRouteKey, target });
+  }, [overviewRouteKey]);
   const [overviewSlugLoading, setOverviewSlugLoading] = useState(false);
   const [legacyOverviewResolution, setLegacyOverviewResolution] = useState<{
     requestedId: string;
@@ -1096,7 +1117,7 @@ function AuthenticatedHomePage({
       };
     }
 
-    setResolvedOverviewTarget(null);
+    setResolvedOverviewTarget(navigationOverviewTarget);
     setOverviewSlugLoading(true);
     const lookupLibrarySlug =
       parsedOverviewLibrarySlug === view ? null : parsedOverviewLibrarySlug;
@@ -1150,6 +1171,7 @@ function AuthenticatedHomePage({
     };
   }, [
     contentSettingsSection,
+    navigationOverviewTarget,
     navigateTo,
     navigate,
     navigateToOverview,
@@ -1157,6 +1179,7 @@ function AuthenticatedHomePage({
     parsedOverviewLibrarySlug,
     parsedOverviewSlug,
     setGlobalStatus,
+    setResolvedOverviewTarget,
     t,
     view,
   ]);
@@ -1257,7 +1280,10 @@ function AuthenticatedHomePage({
       : null;
   const overviewTitleRoutePending = Boolean(
     isMediaView(view) &&
-      overviewSlugLoading &&
+      (overviewSlugLoading ||
+        (parsedOverviewSlug
+          ? overviewResolution?.key !== overviewRouteKey
+          : legacyOverviewResolution?.requestedId !== legacyOverviewTitleId)) &&
       !overviewTitleId &&
       (parsedOverviewSlug || legacyOverviewTitleId),
   );
@@ -1769,6 +1795,7 @@ function AuthenticatedHomePage({
                       updateNoticeMatchesRunningVersion ? (
                         <SmgScryerUpdateBanner
                           canManageSystemSettings={canManageSystemSettings}
+                          settingsSubscriptionEnabled={canSubscribeToLibraryEvents}
                           notice={smgScryerUpdateNotice}
                           t={t}
                           onDismiss={dismissSmgScryerUpdateReminder}
@@ -1790,7 +1817,7 @@ function AuthenticatedHomePage({
                       {showInstallBanner ? (
                         <div
                           data-slot="root-shell-notice"
-                          className="flex items-center justify-center gap-3 border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] px-4 py-2 text-sm text-[var(--scry-body)] shadow-[0_8px_28px_rgba(var(--scry-accent-rgb),0.10)] backdrop-blur"
+                          className="flex items-center justify-center gap-3 border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] px-4 py-2 text-sm text-[var(--scry-body)] shadow-[0_8px_28px_rgba(var(--scry-accent-rgb),calc(0.10*var(--scry-glow)))] backdrop-blur"
                         >
                           <Download className="h-4 w-4 flex-none text-[var(--scry-accent-ring)]" />
                           <span className="text-[var(--scry-muted)]">

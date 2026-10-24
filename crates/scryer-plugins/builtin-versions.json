@@ -1,12 +1,12 @@
 {
   "plugins": {
     "newznab": {
-      "version": "2.2.3",
-      "wasm_blake3": "ffbb7154691ade9bafc0ea344ac8034d4320fcb2f4b0692ee03c42b223566182"
+      "version": "3.1.0",
+      "wasm_blake3": "04d5b70b0105ea6b352b52abf7906379de0bd616b3ff1915bc02334e59917280"
     },
     "torznab": {
-      "version": "2.2.3",
-      "wasm_blake3": "d23b314e55a2692208403ac6fb623cae26464b8e66875395d1d8b9819a09661a"
+      "version": "3.1.0",
+      "wasm_blake3": "8d36d5ad6afce88ff7c88d2e11c85f8bbccb9fe112c8e72385fbb41834d68a0f"
     }
   },
   "schemaVersion": 2

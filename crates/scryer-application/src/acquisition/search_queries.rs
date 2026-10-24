@@ -26,6 +26,10 @@ pub(crate) struct SearchQueryResult {
 ///
 /// `absolute_scale` is the title's absolute scale; every absolute number a
 /// query carries is read on it.
+///
+/// `catalog_episodes` is the title's episode list when the caller has it; the
+/// community forms never name one of those other episodes. See
+/// [`crate::anime_numbering::community_coordinates_for_tvdb_episode`].
 pub(crate) fn build_search_queries(
     title: &Title,
     item: &AcquisitionScopeState,
@@ -33,6 +37,7 @@ pub(crate) fn build_search_queries(
     facet_registry: &FacetRegistry,
     anime_numbering_bridge: Option<&AnimeNumberingBridge>,
     absolute_scale: AbsoluteScale,
+    catalog_episodes: Option<&[Episode]>,
 ) -> SearchQueryResult {
     let imdb_id = imdb_id_from_title(title);
     let tmdb_id = tmdb_id_from_external_ids(&title.external_ids);
@@ -128,12 +133,14 @@ pub(crate) fn build_search_queries(
                     episode_num as i32,
                     anime_numbering_bridge,
                     absolute_scale,
+                    catalog_episodes,
                 ));
                 numbering_context = community_numbering_context(
                     title,
                     season_num as i32,
                     episode_num as i32,
                     anime_numbering_bridge,
+                    catalog_episodes,
                 );
 
                 if !queries.is_empty() {
@@ -200,6 +207,7 @@ fn community_numbering_scope(
     season_num: i32,
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
+    catalog_episodes: Option<&[Episode]>,
 ) -> Option<crate::anime_numbering::CommunityCoordinates> {
     if title.name.trim().is_empty() {
         return None;
@@ -222,7 +230,12 @@ fn community_numbering_scope(
     if season_num <= 0 || episode_num <= 0 {
         return None;
     }
-    crate::anime_numbering::community_coordinates_for_tvdb_episode(bridge, season_num, episode_num)
+    crate::anime_numbering::community_coordinates_for_tvdb_episode(
+        bridge,
+        season_num,
+        episode_num,
+        catalog_episodes,
+    )
 }
 
 /// The AniDB entry of the bridge cour a wanted TVDB episode sits in, read from
@@ -234,7 +247,7 @@ pub(crate) fn community_cour_anidb_id(
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
 ) -> Option<String> {
-    community_numbering_scope(title, season_num, episode_num, bridge)?
+    community_numbering_scope(title, season_num, episode_num, bridge, None)?
         .anidb_id
         .map(|id| id.to_string())
 }
@@ -246,17 +259,24 @@ pub(crate) fn community_numbering_queries(
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
     absolute_scale: AbsoluteScale,
+    catalog_episodes: Option<&[Episode]>,
 ) -> Vec<String> {
-    let Some(coordinates) = community_numbering_scope(title, season_num, episode_num, bridge)
+    let Some(coordinates) =
+        community_numbering_scope(title, season_num, episode_num, bridge, catalog_episodes)
     else {
         return Vec::new();
     };
 
     let mut queries = Vec::new();
-    if coordinates.season > 0 && coordinates.episode > 0 {
+    // Only a season number the bridge settles, and one that names no other
+    // real episode of the title; the cour-title and absolute forms below do
+    // not depend on it.
+    if let Some(season) = coordinates.season.filter(|&season| season > 0)
+        && coordinates.episode > 0
+    {
         queries.push(format!(
             "{} S{:0>2}E{:0>2}",
-            title.name, coordinates.season, coordinates.episode
+            title.name, season, coordinates.episode
         ));
     }
     // A cour with its own name is posted under that name with a bare episode
@@ -281,7 +301,7 @@ pub(crate) fn community_numbering_queries(
         .filter(|&value| value > 0)
         .or_else(|| {
             bridge
-                .and_then(|bridge| bridge.season(coordinates.season))
+                .and_then(|bridge| bridge.season(coordinates.entry_index))
                 .and_then(|season| absolute_scale.season_absolute_start(season))
                 .map(|start| start + coordinates.episode - 1)
                 .filter(|&value| value > 0)
@@ -304,8 +324,10 @@ pub(crate) fn community_numbering_queries(
 /// discards them before the numbering translator can read them. Handing it
 /// every numbering that means the same episode keeps them.
 ///
-/// Empty for a title with no bridge and for an episode no bridge season
-/// covers — the guard then keeps its single-pair behaviour.
+/// Empty for a title with no bridge, for an episode no bridge season covers,
+/// and for one whose community season the bridge does not settle or whose
+/// community pair is another real episode of the title — the guard then keeps
+/// its single-pair behaviour.
 /// The application-only search-guard context for one official anime episode.
 /// Both automatic and interactive search call this constructor so neither can
 /// widen the accepted numbering forms without the bridge snapshot and exact
@@ -315,10 +337,17 @@ pub(crate) fn community_numbering_context(
     season_num: i32,
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
+    catalog_episodes: Option<&[Episode]>,
 ) -> IndexerSearchNumberingContext {
-    let admissible_episode_numberings =
-        community_numbering_admissible_pairs(title, season_num, episode_num, bridge);
-    if community_numbering_scope(title, season_num, episode_num, bridge).is_none() {
+    let admissible_episode_numberings = community_numbering_admissible_pairs(
+        title,
+        season_num,
+        episode_num,
+        bridge,
+        catalog_episodes,
+    );
+    if community_numbering_scope(title, season_num, episode_num, bridge, catalog_episodes).is_none()
+    {
         return IndexerSearchNumberingContext::default();
     }
 
@@ -338,9 +367,16 @@ pub(crate) fn community_numbering_admissible_pairs(
     season_num: i32,
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
+    catalog_episodes: Option<&[Episode]>,
 ) -> Vec<(u32, u32)> {
-    let Some(coordinates) = community_numbering_scope(title, season_num, episode_num, bridge)
+    let Some(coordinates) =
+        community_numbering_scope(title, season_num, episode_num, bridge, catalog_episodes)
     else {
+        return Vec::new();
+    };
+    // No settled community season, or one that names another real episode:
+    // there is no second numbering to admit, only the dispatched one.
+    let Some(community_season) = coordinates.season else {
         return Vec::new();
     };
 
@@ -350,7 +386,7 @@ pub(crate) fn community_numbering_admissible_pairs(
         return Vec::new();
     };
     let (Ok(community_season), Ok(community_episode)) = (
-        u32::try_from(coordinates.season),
+        u32::try_from(community_season),
         u32::try_from(coordinates.episode),
     ) else {
         return Vec::new();
@@ -657,6 +693,7 @@ mod tests {
             &FacetRegistry::new(),
             bridge,
             AbsoluteScale::for_catalog([episode]),
+            None,
         )
         .queries
     }
@@ -696,6 +733,7 @@ mod tests {
             56,
             Some(&bridge()),
             AbsoluteScale::Raw,
+            None,
         );
 
         assert_eq!(
@@ -766,6 +804,7 @@ mod tests {
             &FacetRegistry::new(),
             None,
             AbsoluteScale::for_catalog([&episode]),
+            None,
         );
 
         assert_eq!(result.tvdb_id, None);
@@ -795,11 +834,12 @@ mod tests {
     #[test]
     fn admissible_pairs_carry_the_official_and_the_community_numbering() {
         // Official S01E56 is community S04E20 (cour 4 starts at official 37).
-        let pairs = community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge()));
+        let pairs =
+            community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge()), None);
 
         assert_eq!(pairs, vec![(1, 56), (4, 20)]);
 
-        let context = community_numbering_context(&anime_title(), 1, 56, Some(&bridge()));
+        let context = community_numbering_context(&anime_title(), 1, 56, Some(&bridge()), None);
         assert_eq!(context.admissible_episode_numberings, pairs);
         let anime = context
             .anime
@@ -816,7 +856,7 @@ mod tests {
         cour.ranges[0].tvdb_season = 3;
         cour.ranges[0].tvdb_episode_start = 1;
         cour.ranges[0].tvdb_episode_end = Some(10);
-        let context = community_numbering_context(&anime_title(), 3, 8, Some(&bridge));
+        let context = community_numbering_context(&anime_title(), 3, 8, Some(&bridge), None);
         assert!(context.admissible_episode_numberings.is_empty());
         let anime = context
             .anime
@@ -833,20 +873,21 @@ mod tests {
         let bridge = bridge();
 
         // No bridge at all, and an empty one.
-        assert!(community_numbering_admissible_pairs(&title, 1, 56, None).is_empty());
+        assert!(community_numbering_admissible_pairs(&title, 1, 56, None, None).is_empty());
         assert!(
             community_numbering_admissible_pairs(
                 &title,
                 1,
                 56,
                 Some(&AnimeNumberingBridge::default()),
+                None,
             )
             .is_empty()
         );
         // An official season no community season covers.
-        assert!(community_numbering_admissible_pairs(&title, 2, 1, Some(&bridge)).is_empty());
+        assert!(community_numbering_admissible_pairs(&title, 2, 1, Some(&bridge), None).is_empty());
         // Cour 1 shares TVDB's numbering, so its official pair is the only one.
-        assert!(community_numbering_admissible_pairs(&title, 1, 3, Some(&bridge)).is_empty());
+        assert!(community_numbering_admissible_pairs(&title, 1, 3, Some(&bridge), None).is_empty());
     }
 
     /// WP2 made the stored bridge, not the title's facet, the gate: an ordinary
@@ -859,10 +900,10 @@ mod tests {
         series.facet = scryer_domain::MediaFacet::Series;
 
         assert_eq!(
-            community_numbering_admissible_pairs(&series, 1, 56, Some(&bridge)),
-            community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge)),
+            community_numbering_admissible_pairs(&series, 1, 56, Some(&bridge), None),
+            community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge), None),
         );
-        assert!(community_numbering_admissible_pairs(&series, 1, 56, None).is_empty());
+        assert!(community_numbering_admissible_pairs(&series, 1, 56, None, None).is_empty());
     }
 
     /// A bridge Scryer derived from a TVDB alternate/DVD order widens the
@@ -883,13 +924,15 @@ mod tests {
                 1,
                 56,
                 Some(&tvdb_bridge),
-                AbsoluteScale::Raw
+                AbsoluteScale::Raw,
+                None
             )
             .is_empty(),
             "an unpinned series must not ask for alternate-numbered forms"
         );
         assert!(
-            community_numbering_admissible_pairs(&unpinned, 1, 56, Some(&tvdb_bridge)).is_empty(),
+            community_numbering_admissible_pairs(&unpinned, 1, 56, Some(&tvdb_bridge), None)
+                .is_empty(),
             "an unpinned series must not widen the search guard either"
         );
 
@@ -905,7 +948,8 @@ mod tests {
                 1,
                 56,
                 Some(&tvdb_bridge),
-                AbsoluteScale::Raw
+                AbsoluteScale::Raw,
+                None
             ),
             community_numbering_queries(
                 &anime_title(),
@@ -913,13 +957,14 @@ mod tests {
                 1,
                 56,
                 Some(&bridge()),
-                AbsoluteScale::Raw
+                AbsoluteScale::Raw,
+                None
             ),
             "a pinned title asks for exactly the forms an anime bridge would"
         );
         assert_eq!(
-            community_numbering_admissible_pairs(&pinned, 1, 56, Some(&tvdb_bridge)),
-            community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge())),
+            community_numbering_admissible_pairs(&pinned, 1, 56, Some(&tvdb_bridge), None),
+            community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge()), None),
         );
     }
 
@@ -933,9 +978,333 @@ mod tests {
                 1,
                 56,
                 Some(&bridge()),
-                AbsoluteScale::Raw
+                AbsoluteScale::Raw,
+                None
             )
             .is_empty()
         );
+    }
+
+    // ── community season numbers that are not bridge positions ────────────
+    //
+    // Synthetic split-season layout: three TVDB seasons of 23 / 24 / 14
+    // episodes, the first two each split into two community entries, so the
+    // bridge carries five entries for three seasons.
+
+    const SPLIT_SERIES_NAME: &str = "Ashen Ledger";
+
+    fn titled(name: &str) -> Title {
+        let mut title = anime_title();
+        title.name = name.to_string();
+        title
+    }
+
+    fn episode_in(season: u32, number: u32) -> Episode {
+        let mut episode = official_episode(number, None);
+        episode.id = format!("ep-{season}-{number}");
+        episode.season_number = Some(season.to_string());
+        episode
+    }
+
+    fn catalog_of(seasons: &[(u32, u32)]) -> Vec<Episode> {
+        seasons
+            .iter()
+            .flat_map(|&(season, count)| (1..=count).map(move |number| episode_in(season, number)))
+            .collect()
+    }
+
+    fn entry(
+        index: i32,
+        titles: &[&str],
+        tvdb_season: i32,
+        tvdb_start: i32,
+        tvdb_end: i32,
+    ) -> scryer_domain::AnimeCommunitySeason {
+        scryer_domain::AnimeCommunitySeason {
+            index,
+            anidb_id: None,
+            anilist_id: None,
+            mal_id: None,
+            titles: titles.iter().map(|title| (*title).to_string()).collect(),
+            ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                community_episode_start: 1,
+                community_episode_end: Some(tvdb_end - tvdb_start + 1),
+                tvdb_season,
+                tvdb_episode_start: tvdb_start,
+                tvdb_episode_end: Some(tvdb_end),
+            }],
+            absolute_start: None,
+            contiguous_absolute_start: None,
+            episode_count: Some(tvdb_end - tvdb_start + 1),
+        }
+    }
+
+    fn bridge_of(seasons: Vec<scryer_domain::AnimeCommunitySeason>) -> AnimeNumberingBridge {
+        AnimeNumberingBridge {
+            source: Default::default(),
+            generated_on: "2026-10-01".to_string(),
+            corroborating_order: None,
+            seasons,
+        }
+    }
+
+    fn split_season_bridge() -> AnimeNumberingBridge {
+        bridge_of(vec![
+            entry(1, &["Ashen Ledger"], 1, 1, 11),
+            entry(2, &["Ashen Ledger Part 2"], 1, 12, 23),
+            entry(3, &["Ashen Ledger II"], 2, 1, 12),
+            entry(4, &["Ashen Ledger Season 2 Part 2"], 2, 13, 24),
+            entry(5, &["Ashen Ledger III"], 3, 1, 14),
+        ])
+    }
+
+    fn split_season_catalog() -> Vec<Episode> {
+        catalog_of(&[(1, 23), (2, 24), (3, 14)])
+    }
+
+    fn search_for(
+        title: &Title,
+        episode: &Episode,
+        bridge: &AnimeNumberingBridge,
+        catalog: Option<&[Episode]>,
+    ) -> SearchQueryResult {
+        let mut item = wanted_episode_item(episode);
+        item.title_name = Some(title.name.clone());
+        build_search_queries(
+            title,
+            &item,
+            Some(episode),
+            &FacetRegistry::new(),
+            Some(bridge),
+            AbsoluteScale::Raw,
+            catalog,
+        )
+    }
+
+    fn season_episode_queries(result: &SearchQueryResult) -> Vec<String> {
+        let pattern = regex::Regex::new(r" S\d{2}E\d{2}$").expect("valid pattern");
+        result
+            .queries
+            .iter()
+            .filter(|query| pattern.is_match(query))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_later_season_is_searched_under_the_season_its_entry_name_states() {
+        let title = titled(SPLIT_SERIES_NAME);
+        let catalog = split_season_catalog();
+        let wanted = episode_in(3, 1);
+
+        for catalog in [Some(catalog.as_slice()), None] {
+            let result = search_for(&title, &wanted, &split_season_bridge(), catalog);
+            // The fifth entry is the third season: only the official pair,
+            // never the entry's position.
+            assert_eq!(
+                season_episode_queries(&result),
+                vec!["Ashen Ledger S03E01".to_string()]
+            );
+            assert!(
+                result
+                    .queries
+                    .contains(&"Ashen Ledger III - 01".to_string())
+            );
+            assert!(
+                result
+                    .numbering_context
+                    .admissible_episode_numberings
+                    .is_empty()
+            );
+        }
+
+        // The interactive lane, with no catalog row and no catalog list,
+        // reaches the same answer.
+        let queries = community_numbering_queries(
+            &title,
+            None,
+            3,
+            1,
+            Some(&split_season_bridge()),
+            AbsoluteScale::Raw,
+            None,
+        );
+        assert!(!queries.iter().any(|query| query.contains("S05E01")));
+    }
+
+    #[test]
+    fn a_later_season_entry_without_an_ordinal_is_numbered_by_the_tvdb_season_it_starts() {
+        let title = titled(SPLIT_SERIES_NAME);
+        let mut bridge = split_season_bridge();
+        bridge.seasons[4].titles = vec!["Ashen Ledger: Cinder Accord".to_string()];
+
+        let result = search_for(&title, &episode_in(3, 1), &bridge, None);
+        assert_eq!(
+            season_episode_queries(&result),
+            vec!["Ashen Ledger S03E01".to_string()]
+        );
+        assert!(
+            result
+                .queries
+                .contains(&"Ashen Ledger: Cinder Accord - 01".to_string())
+        );
+    }
+
+    #[test]
+    fn a_second_part_whose_community_pair_is_another_real_episode_adds_no_season_form() {
+        let title = titled(SPLIT_SERIES_NAME);
+        let catalog = split_season_catalog();
+
+        // Official S02E13 opens the entry named `Season 2 Part 2`: community
+        // S02E01, which is the real official S02E01.
+        for catalog in [Some(catalog.as_slice()), None] {
+            let result = search_for(&title, &episode_in(2, 13), &split_season_bridge(), catalog);
+            assert_eq!(
+                season_episode_queries(&result),
+                vec!["Ashen Ledger S02E13".to_string()]
+            );
+            assert!(
+                result
+                    .queries
+                    .contains(&"Ashen Ledger Season 2 Part 2 - 01".to_string())
+            );
+            assert!(
+                result
+                    .numbering_context
+                    .admissible_episode_numberings
+                    .is_empty()
+            );
+            assert!(
+                result.numbering_context.anime.is_some(),
+                "the cour-title evidence still reaches the guard"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wanted_episode_never_admits_another_real_episode_of_the_title() {
+        let title = titled(SPLIT_SERIES_NAME);
+        let catalog = split_season_catalog();
+        let bridge = split_season_bridge();
+
+        // Wanted S02E01 sits in the third entry; its position must not turn
+        // the real S03E01 into an admissible numbering.
+        for catalog in [Some(catalog.as_slice()), None] {
+            let pairs = community_numbering_admissible_pairs(&title, 2, 1, Some(&bridge), catalog);
+            assert!(!pairs.contains(&(3, 1)), "{pairs:?}");
+            assert!(pairs.is_empty(), "{pairs:?}");
+        }
+
+        // Official S01E12 opens the second entry, the second part of TVDB
+        // season 1. Its place in that season says community S02E01, which is
+        // the real official S02E01: neither asked for nor admitted.
+        for catalog in [Some(catalog.as_slice()), None] {
+            let result = search_for(&title, &episode_in(1, 12), &bridge, catalog);
+            assert_eq!(
+                season_episode_queries(&result),
+                vec!["Ashen Ledger S01E12".to_string()]
+            );
+            assert!(
+                result
+                    .numbering_context
+                    .admissible_episode_numberings
+                    .is_empty()
+            );
+        }
+    }
+
+    /// The catalog is the oracle when the caller has it: a real episode the
+    /// bridge's ranges do not span still blocks the community pair.
+    #[test]
+    fn a_catalog_episode_outside_the_bridge_blocks_the_community_pair() {
+        let catalog = {
+            let mut catalog = catalog_of(&[(1, 60)]);
+            catalog.push(episode_in(4, 20));
+            catalog
+        };
+
+        let with_catalog = community_numbering_admissible_pairs(
+            &anime_title(),
+            1,
+            56,
+            Some(&bridge()),
+            Some(&catalog),
+        );
+        assert!(with_catalog.is_empty(), "{with_catalog:?}");
+        let queries = community_numbering_queries(
+            &anime_title(),
+            None,
+            1,
+            56,
+            Some(&bridge()),
+            AbsoluteScale::Raw,
+            Some(&catalog),
+        );
+        assert!(!queries.contains(&"Lantern Verge S04E20".to_string()));
+        assert!(queries.contains(&"Lantern Verge: Final Chorus - 20".to_string()));
+
+        // Without the catalog, the bridge alone knows no S04E20.
+        assert_eq!(
+            community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge()), None),
+            vec![(1, 56), (4, 20)]
+        );
+    }
+
+    #[test]
+    fn a_nameless_stub_entry_is_searched_under_the_tvdb_season_it_starts() {
+        let title = titled("Bramble Hollow (2031)");
+        let mut recap = entry(3, &["Bramble Hollow (2031) Recap"], 0, 0, 0);
+        recap.ranges.clear();
+        let bridge = bridge_of(vec![
+            entry(1, &["Bramble Hollow (2031)"], 1, 1, 12),
+            entry(2, &["Bramble Hollow (2031) 2nd Season"], 2, 1, 12),
+            recap,
+            // A placeholder entry with no names, fourth in the bridge, holding
+            // TVDB season 3.
+            entry(4, &[], 3, 1, 12),
+        ]);
+        let catalog = catalog_of(&[(1, 12), (2, 12), (3, 12)]);
+
+        for catalog in [Some(catalog.as_slice()), None] {
+            let result = search_for(&title, &episode_in(3, 2), &bridge, catalog);
+            assert_eq!(
+                season_episode_queries(&result),
+                vec!["Bramble Hollow (2031) S03E02".to_string()]
+            );
+            assert!(!result.queries.iter().any(|query| query.contains("S04E02")));
+            assert!(
+                result
+                    .numbering_context
+                    .admissible_episode_numberings
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn an_entry_whose_season_nothing_settles_keeps_only_the_cour_title_and_absolute_forms() {
+        let mut lone = entry(1, &["Lantern Verge: Ember Circuit"], 2, 13, 24);
+        lone.absolute_start = Some(27);
+        let bridge = bridge_of(vec![lone]);
+
+        let queries = community_numbering_queries(
+            &anime_title(),
+            None,
+            2,
+            15,
+            Some(&bridge),
+            AbsoluteScale::Raw,
+            None,
+        );
+        assert_eq!(
+            queries,
+            vec![
+                "Lantern Verge: Ember Circuit - 03".to_string(),
+                "Lantern Verge - 29".to_string(),
+            ]
+        );
+        let context = community_numbering_context(&anime_title(), 2, 15, Some(&bridge), None);
+        assert!(context.admissible_episode_numberings.is_empty());
+        assert!(context.anime.is_some());
     }
 }

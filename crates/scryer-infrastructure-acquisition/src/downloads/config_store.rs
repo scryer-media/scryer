@@ -142,7 +142,7 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
             "UPDATE download_clients SET {} WHERE id = {{}}",
             assignments.join(", ")
         );
-        SqlRuntime::run_in_transaction(
+        let saved = SqlRuntime::run_in_transaction(
             &self.datastore,
             "update_download_client_config",
             move |tx| {
@@ -168,7 +168,11 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
                 })
             },
         )
-        .await
+        .await?;
+        // A running HTTP downloader follows its saved configuration at once:
+        // disabled, it starts nothing new; no longer `http`, it stops.
+        crate::downloads::clients::apply_saved_http_config(&saved);
+        Ok(saved)
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
@@ -178,8 +182,9 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
     }
 
     async fn delete_with_cleared_indexer_mapping_count(&self, id: &str) -> AppResult<u64> {
+        let config_id = id.to_string();
         let id = id.to_string();
-        SqlRuntime::run_in_transaction(
+        let cleared = SqlRuntime::run_in_transaction(
             &self.datastore,
             "delete_download_client_config",
             move |tx| {
@@ -257,7 +262,11 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
                 })
             },
         )
-        .await
+        .await?;
+        // The deleted client's HTTP downloader, if it ran one, stops; its
+        // queue and files stay on disk.
+        crate::downloads::clients::forget_http_engine(&config_id);
+        Ok(cleared)
     }
 
     async fn reorder(&self, ordered_ids: Vec<String>) -> AppResult<()> {

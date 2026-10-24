@@ -937,6 +937,20 @@ pub fn from_calendar_episode(
     }
 }
 
+pub fn from_reassign_episode_file_result(
+    result: scryer_application::ReassignEpisodeFileResult,
+) -> crate::types::ReassignEpisodeFilePayload {
+    let ids = |ids: Vec<String>| ids.into_iter().map(Into::into).collect::<Vec<ID>>();
+    crate::types::ReassignEpisodeFilePayload {
+        file: from_title_media_file(result.file),
+        previous_path: result.previous_path,
+        previous_episode_ids: ids(result.previous_episode_ids),
+        episode_ids: ids(result.episode_ids),
+        demoted_file_ids: ids(result.demoted_file_ids),
+        promoted_file_ids: ids(result.promoted_file_ids),
+    }
+}
+
 pub fn from_title_media_file(file: scryer_application::TitleMediaFile) -> TitleMediaFilePayload {
     TitleMediaFilePayload {
         analysis: file.analysis_details.into(),

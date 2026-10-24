@@ -6,9 +6,10 @@ import { UnderlineFilterButton } from "@/components/common/underline-filter-butt
 import type { ListsSection } from "@/components/root/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { GutterPanel, GutterPanelButton } from "@/components/common/gutter-panel";
 import { FilteredPluginList } from "@/components/views/settings/filtered-plugin-list";
 import { useTranslate } from "@/lib/context/translate-context";
+import { type GutterPanelMemory, type GutterPanelSize, useGutterPanel } from "@/lib/hooks/use-gutter-panel";
 import type { ListAccountMemberKey } from "@/lib/hooks/use-list-account-link";
 import type {
   ListAccount,
@@ -34,6 +35,10 @@ import { ListTable } from "./list-table";
 import { ProviderBrowser } from "./provider-browser";
 import { PersonalAccounts } from "./personal-accounts";
 import { ProviderAppsPanel } from "./provider-apps-panel";
+
+// The plugins panel is pinned to the right edge beside the centered lists and
+// closes behind its edge tab before it would cover them.
+const PLUGIN_PANEL_SIZE: GutterPanelSize = { width: 320, gap: 32 };
 
 export type ListRouteOptions = {
   libraries: LibraryRecord[];
@@ -61,6 +66,7 @@ type ListsViewProps = {
   tabCounts: ListTabCounts;
   canManageLists: boolean;
   canManageProviderApps: boolean;
+  pluginsPanelMemory: GutterPanelMemory;
   onRefreshProviders: () => Promise<void>;
   accounts: ListAccount[];
   managedAccounts: ListAccount[];
@@ -162,23 +168,18 @@ export function ListsView(props: ListsViewProps) {
 
   const detailFallback = detail ? (subscriptions.find((entry) => entry.id === detail.id) ?? null) : null;
   const detailSubscription = detail?.subscription ?? detailFallback;
-  const showPlugins = props.canManageProviderApps && (section === "public" || section === "personal");
+  // Every tab keeps the same rail so switching tabs never opens or closes it.
+  const showPlugins = props.canManageProviderApps;
+  const scrollRef = React.useRef<HTMLElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
-  const [pluginsDocked, setPluginsDocked] = React.useState(false);
-  const [pluginsOpen, setPluginsOpen] = React.useState(false);
+  const pluginsPanel = useGutterPanel(
+    scrollRef,
+    contentRef,
+    showPlugins ? PLUGIN_PANEL_SIZE : null,
+    undefined,
+    props.pluginsPanelMemory,
+  );
 
-  React.useEffect(() => {
-    const content = contentRef.current;
-    if (!content || !showPlugins) return;
-    // Match the settings pages' minimum main width, plugin rail width and gap.
-    const update = () => setPluginsDocked(content.clientWidth >= 1080 + 288 + 20);
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [showPlugins]);
-
-  React.useEffect(() => setPluginsOpen(false), [pluginsDocked, section]);
 
   const plugins = showPlugins ? (
     <FilteredPluginList
@@ -189,10 +190,9 @@ export function ListsView(props: ListsViewProps) {
   ) : null;
 
   return (
-    <section id="lists-view" className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-[var(--scry-surfE)]">
+    <section ref={scrollRef} id="lists-view" className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-transparent [scrollbar-gutter:stable]">
       <div className="w-full px-4 py-6 sm:px-6 lg:px-8">
-      <div ref={contentRef} className="flex items-start justify-center gap-5">
-      <div className="flex min-w-0 max-w-[1280px] flex-[1_1_1280px] flex-col gap-4">
+      <div ref={contentRef} className="mx-auto flex max-w-[1280px] flex-col gap-4">
         <div className="flex items-center gap-4">
           <div className="flex h-11 w-11 flex-none items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-accent-text)]">
             <ListPlus className="h-5 w-5" />
@@ -205,11 +205,14 @@ export function ListsView(props: ListsViewProps) {
               </Badge>
             </h1>
           </div>
-          {showPlugins && !pluginsDocked ? (
-            <Button type="button" variant="outline" size="sm" aria-expanded={pluginsOpen} aria-controls="lists-plugins-panel" onClick={() => setPluginsOpen(true)}>
-              <Puzzle className="h-4 w-4" />
-              {t("settings.plugins")}
-            </Button>
+          {showPlugins ? (
+            <GutterPanelButton
+              panelId="lists-plugins-panel"
+              label={t("settings.plugins")}
+              icon={<Puzzle className="h-4 w-4" />}
+              open={pluginsPanel.open}
+              onOpenChange={pluginsPanel.setOpen}
+            />
           ) : null}
         </div>
 
@@ -343,20 +346,17 @@ export function ListsView(props: ListsViewProps) {
           </div>
         )}
       </div>
-      {showPlugins && pluginsDocked ? (
-        <aside aria-label={t("settings.plugins")} className="sticky top-[26px] min-w-[288px] max-w-[720px] flex-[1_1_720px]">
+      </div>
+      {showPlugins ? (
+        <GutterPanel
+          id="lists-plugins-panel"
+          label={t("settings.plugins")}
+          frame={pluginsPanel.frame}
+          open={pluginsPanel.open}
+          onOpenChange={pluginsPanel.setOpen}
+        >
           {plugins}
-        </aside>
-      ) : null}
-      </div>
-      </div>
-      {showPlugins && !pluginsDocked ? (
-        <Sheet open={pluginsOpen} onOpenChange={setPluginsOpen}>
-          <SheetContent id="lists-plugins-panel" side="right" className="w-[min(420px,calc(100vw-2rem))] overflow-y-auto">
-            <SheetHeader><SheetTitle>{t("settings.plugins")}</SheetTitle></SheetHeader>
-            <div className="px-3 pb-3">{plugins}</div>
-          </SheetContent>
-        </Sheet>
+        </GutterPanel>
       ) : null}
 
       <ListDetailPanel

@@ -533,7 +533,9 @@ async fn private_account_poll_ends_on_a_definitive_provider_refusal() {
         let auth = Arc::new(Auth::failing_polls(&[code]));
         let harness = harness(auth.clone()).await;
         let session = start_plex(&harness).await;
-        let Err(AppError::ValidationRefused { message, reason }) = harness
+        let Err(AppError::ValidationRefused {
+            message, reason, ..
+        }) = harness
             .app
             .poll_list_account_link(&harness.user, &session)
             .await

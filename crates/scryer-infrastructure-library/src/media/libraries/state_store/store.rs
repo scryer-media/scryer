@@ -1782,7 +1782,7 @@ const PENDING_RELEASE_COLUMNS: &str =
     added_at, last_observed_at, delay_until, status, grabbed_at, source_password, published_at, info_hash,
     minimum_seed_ratio, minimum_seed_time_minutes, season_pack_seed_ratio,
     season_pack_seed_time_minutes, seeders, release_identity, coverage_identity, role,
-    last_decision_code, release_age_unknown, release_listing_json";
+    last_decision_code, release_age_unknown, release_listing_json, http_release_json";
 
 /// Same columns as [`PENDING_RELEASE_COLUMNS`] but qualified with the `pr` alias
 /// so the paged read can JOIN `titles` for library scoping without ambiguous
@@ -1793,7 +1793,8 @@ const PENDING_RELEASE_COLUMNS_PR: &str =
     pr.added_at, pr.last_observed_at, pr.delay_until, pr.status, pr.grabbed_at, pr.source_password, pr.published_at, pr.info_hash,
     pr.minimum_seed_ratio, pr.minimum_seed_time_minutes, pr.season_pack_seed_ratio,
     pr.season_pack_seed_time_minutes, pr.seeders, pr.release_identity, pr.coverage_identity,
-    pr.role, pr.last_decision_code, pr.release_age_unknown, pr.release_listing_json";
+    pr.role, pr.last_decision_code, pr.release_age_unknown, pr.release_listing_json,
+    pr.http_release_json";
 
 fn pending_release_row_to_item(
     row: &SqlRow,
@@ -1848,7 +1849,37 @@ fn pending_release_row_to_item(
         release_age_unknown: row.bool("release_age_unknown")?,
         // Rows parked before the column existed read back as `None`.
         release_listing_json: row.opt_text("release_listing_json")?,
+        // Rows parked before the column, and every non-HTTP release, read
+        // back as `None`; an unreadable payload is reported, not swallowed.
+        http_release: decode_pending_release_http_release(row.opt_text("http_release_json")?)?,
     })
+}
+
+fn decode_pending_release_http_release(
+    json: Option<String>,
+) -> AppResult<Option<scryer_plugin_sdk::PluginHttpRelease>> {
+    json.map(|json| {
+        serde_json::from_str(&json).map_err(|error| {
+            scryer_application::AppError::Repository(format!(
+                "invalid pending release http_release_json: {error}"
+            ))
+        })
+    })
+    .transpose()
+}
+
+fn encode_pending_release_http_release(
+    release: Option<&scryer_plugin_sdk::PluginHttpRelease>,
+) -> AppResult<Option<String>> {
+    release
+        .map(|release| {
+            serde_json::to_string(release).map_err(|error| {
+                scryer_application::AppError::Repository(format!(
+                    "failed to encode pending release http_release_json: {error}"
+                ))
+            })
+        })
+        .transpose()
 }
 
 async fn fetch_pending_releases(
@@ -1905,6 +1936,9 @@ fn pending_release_insert_args(
         SqlArg::OptText(observation.latest_decision_code.clone()),
         SqlArg::Bool(observation.release_age_unknown),
         SqlArg::OptText(release.release_listing_json.clone()),
+        SqlArg::OptText(encode_pending_release_http_release(
+            release.http_release.as_ref(),
+        )?),
     ])
 }
 
@@ -2070,9 +2104,9 @@ impl PendingReleaseRepository for PendingReleaseStore {
               added_at, last_observed_at, delay_until, status, grabbed_at, source_password, published_at, info_hash,
               minimum_seed_ratio, minimum_seed_time_minutes, season_pack_seed_ratio,
               season_pack_seed_time_minutes, seeders, release_identity, coverage_identity, role,
-              last_decision_code, release_age_unknown, release_listing_json)
+              last_decision_code, release_age_unknown, release_listing_json, http_release_json)
              VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
              ON CONFLICT(release_identity)
              WHERE status IN ('waiting', 'standby', 'processing', 'needs_review')
              DO UPDATE SET
@@ -2082,6 +2116,7 @@ impl PendingReleaseRepository for PendingReleaseStore {
                 release_score = excluded.release_score,
                 scoring_log_json = excluded.scoring_log_json,
                 release_listing_json = COALESCE(excluded.release_listing_json, pending_releases.release_listing_json),
+                http_release_json = COALESCE(excluded.http_release_json, pending_releases.http_release_json),
                 indexer_source = excluded.indexer_source,
                 indexer_id = excluded.indexer_id,
                 release_guid = excluded.release_guid,

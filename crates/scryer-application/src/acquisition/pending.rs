@@ -111,6 +111,28 @@ pub(crate) fn pending_release_claims_scope(release: &PendingRelease) -> bool {
         )
 }
 
+/// The pending lane's numbering translation. The parked release's posted date
+/// is the reference date, exactly as the RSS and search lanes read theirs, so a
+/// community reading that is also a valid literal one can be corroborated by
+/// when the release went up.
+pub(crate) fn translate_pending_release_numbering(
+    bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+    title: &scryer_domain::Title,
+    catalog_episodes: &[scryer_domain::Episode],
+    parsed: &mut crate::ParsedReleaseMetadata,
+    published_at: Option<&str>,
+) -> crate::anime_numbering::NumberingResolution {
+    crate::anime_numbering::translate_release_numbering(
+        bridge,
+        title,
+        catalog_episodes,
+        parsed,
+        published_at
+            .and_then(crate::quality_profile::parse_published_at)
+            .map(|published| published.date_naive()),
+    )
+}
+
 impl AppUseCase {
     /// Load delay profiles from settings.
     pub(crate) async fn load_delay_profiles(&self) -> Vec<DelayProfile> {
@@ -153,6 +175,7 @@ impl AppUseCase {
         let delay_until = now + Duration::minutes(delay_minutes);
 
         let pending = PendingRelease {
+            http_release: None,
             id: Id::new().0,
             wanted_item_id: wanted.id.clone(),
             title_id: title.id.clone(),
@@ -454,6 +477,7 @@ impl AppUseCase {
 
         let canonical_source = candidate.canonical_download_source();
         let pending = PendingRelease {
+            http_release: candidate.http.clone(),
             id: Id::new().0,
             wanted_item_id: wanted.id.clone(),
             title_id: title.id.clone(),
@@ -490,7 +514,13 @@ impl AppUseCase {
             release_identity: String::new(),
             coverage_identity: String::new(),
             role: PendingReleaseRole::Primary,
-            last_decision_code: None,
+            // Every caller parks for exactly one reason, so the row names it and
+            // the Pending view can say why the release is waiting on a human.
+            last_decision_code: Some(
+                crate::acquisition_release_search::ReleaseAutoDecisionCode::AmbiguousIdentity
+                    .as_str()
+                    .to_string(),
+            ),
             release_age_unknown: false,
             release_listing_json: ReleaseListingSnapshot::json_for_candidate(candidate, now),
         };
@@ -1176,12 +1206,12 @@ impl AppUseCase {
             .get_anime_numbering_bridge(&title.id)
             .await
             .unwrap_or_default();
-        let pending_numbering = crate::anime_numbering::translate_release_numbering(
+        let pending_numbering = translate_pending_release_numbering(
             pending_numbering_bridge.as_ref(),
             &title,
             &catalog_episodes,
             &mut pending_parsed,
-            None,
+            pr.published_at.as_deref(),
         );
         if pending_numbering.is_ambiguous() {
             info!(
@@ -1646,7 +1676,9 @@ impl AppUseCase {
         );
         let canonical_result = self
             .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                http_release: pr.http_release.clone(),
                 request: DownloadClientAddRequest {
+                    http: None,
                     title: title.clone(),
                     search_facet: (wanted.media_type == "series_movie")
                         .then_some(scryer_domain::MediaFacet::Movie),

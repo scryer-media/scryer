@@ -541,6 +541,9 @@ impl TrackedDownloadService {
                         .await;
                     return None;
                 }
+                if !observation.confirmed {
+                    app.invalidate_download_queue_read_model().await;
+                }
                 if !observation.confirmed
                     || self.cache.get(&download_id).is_some_and(|tracked| {
                         tracked
@@ -2087,6 +2090,11 @@ pub enum TrackedDownloadCommand {
         download_ids: Vec<DownloadId>,
         reply: oneshot::Sender<AppResult<Vec<DownloadId>>>,
     },
+    /// Best-effort cache retirement; durable binding retirement is already committed.
+    ForgetMany {
+        title_ids: Vec<String>,
+        download_ids: Vec<DownloadId>,
+    },
     /// Re-attribute the rows cached under `download_ids` from a merged source
     /// title to its destination; replies with the re-keyed rows.
     ReassignTitle {
@@ -2279,10 +2287,18 @@ impl TrackedDownloadHandle {
         })?
     }
 
-    /// Stop tracking every cached row of `title_id`, plus the rows cached
-    /// under `download_ids` whatever title they resolved to (a row whose
-    /// client item lost its token may carry no title). Replies with the
-    /// removed rows.
+    /// Notify the tracker without waiting. Durable binding reconciliation
+    /// covers a full or closed command channel.
+    pub fn forget_many(&self, title_ids: Vec<String>, download_ids: Vec<DownloadId>) {
+        if let Err(error) = self.tx.try_send(TrackedDownloadCommand::ForgetMany {
+            title_ids,
+            download_ids,
+        }) {
+            tracing::warn!(%error, "tracker cleanup notification unavailable; refresh will reconcile retired bindings");
+        }
+    }
+
+    /// Stop tracking matching title and canonical download rows, returning removed IDs.
     pub async fn forget_for_title(
         &self,
         title_id: String,
@@ -4482,6 +4498,11 @@ mod tests {
                 .iter()
                 .any(|message| message == PASSWORD_RETRY_RECONCILIATION_MESSAGE)
         );
+        assert!(
+            tracker.update_trackable(&HashSet::new()).is_empty(),
+            "native absence must preserve the password retry hold for operator removal"
+        );
+        assert!(tracker.get_by_download_id(id).is_some());
         *queue_items.lock().await = vec![item.clone()];
         assert!(tracker.track(&app, item.clone()).await.is_some());
         assert!(
@@ -5674,6 +5695,7 @@ mod tests {
         category: Option<&str>,
     ) -> CompletedDownload {
         CompletedDownload {
+            subtitle_paths: Vec::new(),
             client_type: client_type.to_string(),
             client_id: "client-1".to_string(),
             download_client_item_id: item_id.to_string(),

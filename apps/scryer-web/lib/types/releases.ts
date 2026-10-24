@@ -1,6 +1,11 @@
 import type { ScoringEntryKind } from "@/lib/utils/release-decision-explanation";
 
-export type DownloadSourceKind = "NZB_FILE" | "NZB_URL" | "TORRENT_FILE" | "MAGNET_URI";
+export type DownloadSourceKind =
+  | "NZB_FILE"
+  | "NZB_URL"
+  | "TORRENT_FILE"
+  | "MAGNET_URI"
+  | "HTTP_RESOURCE";
 
 export type ReleaseQueueScope =
   | { __typename: "EpisodeScopePayload"; episodeId: string }

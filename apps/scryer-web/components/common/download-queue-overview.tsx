@@ -201,7 +201,7 @@ export function MovieOverviewDownloadList({
       {items.map((item) => {
         const stateKey = item.displayState;
         const { percent: progress, remainingLabel } = queueItemProgress(item);
-        const detail = buildQueueStatusDetail(item);
+        const detail = buildQueueStatusDetail(item, t);
         const rowId = downloadQueueItemIdentityKey(item);
 
         return (

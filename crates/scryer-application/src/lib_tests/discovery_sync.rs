@@ -2528,6 +2528,7 @@ async fn catalog_discovery_scopes_personalized_rows_to_selected_readable_library
             MediaFacet::Movie,
             "Movie Library B".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/MoviesB".to_string(),
                 is_default: true,
             }],

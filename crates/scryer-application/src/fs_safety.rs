@@ -12,10 +12,13 @@ pub(crate) fn most_specific_containing_root(path: &Path, roots: &[PathBuf]) -> O
 
 pub(crate) fn resolve_available_root_for_path(path: &Path, roots: &[PathBuf]) -> AppResult<()> {
     let root = most_specific_containing_root(path, roots).ok_or_else(|| {
-        AppError::Validation(format!(
-            "refusing filesystem operation for {} because it is outside configured media roots",
-            path.display()
-        ))
+        AppError::validation_refused(
+            crate::delete_refusal::PATH_OUTSIDE_ROOTS,
+            format!(
+                "refusing filesystem operation for {} because it is outside configured media roots",
+                path.display()
+            ),
+        )
     })?;
     ensure_root_available(&root)?;
     Ok(())

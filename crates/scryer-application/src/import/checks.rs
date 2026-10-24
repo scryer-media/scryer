@@ -71,9 +71,9 @@ pub struct ImportCheckContext<'a> {
     #[expect(dead_code)]
     pub parsed: &'a ParsedReleaseMetadata,
     pub existing_files: &'a [TitleMediaFile],
-    /// Set only when the manual import executor's own content probe qualified
-    /// the source as video, so it may lack a known video extension. Every
-    /// other check still runs.
+    /// Set only when a content probe qualified the extensionless source as
+    /// video, so it may lack a known video extension. Every other check still
+    /// runs.
     pub content_qualified_video: bool,
 }
 
@@ -121,8 +121,8 @@ fn available_disk_space(path: &Path) -> std::io::Result<u64> {
 
 // ── Individual checks ────────────────────────────────────────────────────────
 
-/// Reject files with extensions outside the known video set, unless the manual
-/// import executor content-qualified the source as video.
+/// Reject files with extensions outside the known video set, unless a content
+/// probe qualified the source as video.
 pub fn check_valid_extension(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
     if ctx.content_qualified_video || scryer_domain::is_video_file(ctx.source_path) {
         ImportVerdict::Accept

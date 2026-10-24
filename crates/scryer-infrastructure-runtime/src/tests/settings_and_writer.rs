@@ -797,6 +797,7 @@ async fn source_password_writes_are_encrypted_at_rest_sqlite() {
         last_decision_code: None,
         release_age_unknown: false,
         release_listing_json: None,
+        http_release: None,
     };
     PendingReleaseRepository::insert_pending_release(&pending_store, &pending_release)
         .await

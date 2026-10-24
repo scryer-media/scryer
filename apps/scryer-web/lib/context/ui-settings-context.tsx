@@ -6,16 +6,19 @@ import { myUiSettingsQuery } from "@/lib/graphql/queries";
 import { AUTH_SESSION_CHANGED_EVENT, getAuthToken } from "@/lib/hooks/use-auth";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { applyHighlightColor, fromUiThemeValue, isDarkTheme, toUiThemeValue } from "@/lib/theme";
+import { effectiveTheme, normalizePalette } from "@/lib/palettes";
 import type { SetMyUiSettingsInput, UiSettings } from "@/lib/types/settings";
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   theme: "DARK",
+  palette: "CLASSIC",
   dateTimeFormat: "LOCALE",
   highlightColor: null,
   secondaryColor: null,
   highContrastMode: false,
   reduceMotion: false,
   hideSponsorButton: false,
+  noGlow: true,
   density: "COMFORTABLE",
   sidebarMode: "EXPANDED",
   defaultLandingView: "MOVIES",
@@ -24,7 +27,12 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   catalogViews: [],
 };
 
+type AppearanceChange = Partial<Pick<UiSettings, "palette" | "theme" | "highlightColor">>;
+
 type UiSettingsContextValue = {
+  appearanceSettings: UiSettings;
+  appearanceSaving: boolean;
+  changeAppearance: (change: AppearanceChange) => Promise<"saved" | "failed" | "cancelled">;
   uiSettings: UiSettings;
   uiSettingsLoading: boolean;
   uiSettingsLoaded: boolean;
@@ -46,6 +54,7 @@ function normalizeUiSettings(settings: Partial<UiSettings> | null | undefined): 
     ...DEFAULT_UI_SETTINGS,
     ...settings,
     theme: toUiThemeValue(fromUiThemeValue(settings?.theme)),
+    palette: normalizePalette(settings?.palette),
     language: settings?.language ?? null,
     tableColumns: settings?.tableColumns ?? [],
     catalogViews: settings?.catalogViews ?? [],
@@ -81,12 +90,14 @@ export function uiSettingsInputFromSettings(
   return {
     ...(language === undefined ? {} : { language }),
     theme: toUiThemeValue(fromUiThemeValue(settings.theme)),
+    palette: settings.palette,
     dateTimeFormat: settings.dateTimeFormat,
     highlightColor: settings.highlightColor,
     secondaryColor: settings.secondaryColor,
     highContrastMode: settings.highContrastMode,
     reduceMotion: settings.reduceMotion,
     hideSponsorButton: settings.hideSponsorButton,
+    noGlow: settings.noGlow,
     density: settings.density,
     sidebarMode: settings.sidebarMode,
     defaultLandingView: settings.defaultLandingView,
@@ -95,8 +106,11 @@ export function uiSettingsInputFromSettings(
 
 export function UiSettingsProvider({ children }: { children: React.ReactNode }) {
   const client = useClient();
-  const { resolvedTheme, theme } = useTheme();
-  const [uiSettings, setUiSettingsState] = React.useState<UiSettings>(DEFAULT_UI_SETTINGS);
+  const { resolvedTheme, theme, setTheme } = useTheme();
+  const [storedSettings, setUiSettingsState] = React.useState<UiSettings>(DEFAULT_UI_SETTINGS);
+  const [appearancePreview, setAppearancePreview] = React.useState<AppearanceChange | null>(null);
+  const appearancePendingRef = React.useRef(false);
+  const uiSettings = React.useMemo(() => ({ ...storedSettings, ...appearancePreview }), [storedSettings, appearancePreview]);
   // The settings as last set, ahead of the render that shows them, so a
   // queued save builds its input from every change made before it ran.
   const latestUiSettingsRef = React.useRef<UiSettings>(DEFAULT_UI_SETTINGS);
@@ -109,13 +123,17 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
   const [uiSettingsLoaded, setUiSettingsLoaded] = React.useState(false);
   const [uiSettingsLoadError, setUiSettingsLoadError] = React.useState<string | null>(null);
   const requestSequenceRef = React.useRef(0);
+  const sessionSequenceRef = React.useRef(0);
 
   const loadUiSettings = React.useCallback(async (options?: { resetToFallback?: boolean }) => {
     const requestId = requestSequenceRef.current + 1;
     requestSequenceRef.current = requestId;
 
     if (options?.resetToFallback) {
+      sessionSequenceRef.current += 1;
       setUiSettings(DEFAULT_UI_SETTINGS);
+      setAppearancePreview(null);
+      appearancePendingRef.current = false;
     }
     // On the login surface with no session, the defaults are authoritative:
     // firing the user-scoped query there turns every auth-session flap into a
@@ -132,7 +150,7 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
     setUiSettingsLoadError(null);
     try {
       const { data, error } = await client
-        .query<{ myUiSettings: UiSettings }>(myUiSettingsQuery, {})
+        .query<{ myUiSettings: UiSettings }>(myUiSettingsQuery, {}, { requestPolicy: "network-only" })
         .toPromise();
       if (error) throw error;
       if (requestSequenceRef.current !== requestId) return;
@@ -160,13 +178,18 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
   // a later save never resends a field an earlier one is still changing.
   const saveUiSettings = React.useCallback(
     (build: (latest: UiSettings) => SetMyUiSettingsInput): Promise<UiSettingsSaveResult> => {
-      const send = () =>
-        client
+      const session = sessionSequenceRef.current;
+      const send = () => {
+        if (session !== sessionSequenceRef.current) {
+          return Promise.reject(new DOMException("Session changed", "AbortError"));
+        }
+        return client
           .mutation<{ setMyUiSettings?: UiSettings }, { input: SetMyUiSettingsInput }>(
             setMyUiSettingsMutation,
             { input: build(latestUiSettingsRef.current) },
           )
           .toPromise();
+      };
       const previous = saveQueueRef.current;
       const run = previous ? previous.then(send) : send();
       const tail = run.then(
@@ -184,6 +207,27 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
     [client],
   );
 
+  const changeAppearance = React.useCallback(async (change: AppearanceChange): Promise<"saved" | "failed" | "cancelled"> => {
+    if (!uiSettingsLoaded || uiSettingsLoading || appearancePendingRef.current) return "cancelled";
+    const session = sessionSequenceRef.current;
+    appearancePendingRef.current = true;
+    setAppearancePreview(change);
+    try {
+      const result = await saveUiSettings((latest) => uiSettingsInputFromSettings({ ...latest, ...change }));
+      if (session !== sessionSequenceRef.current) return "cancelled";
+      if (result.error || !result.data?.setMyUiSettings) return "failed";
+      setUiSettings(result.data.setMyUiSettings);
+      return "saved";
+    } catch {
+      return session === sessionSequenceRef.current ? "failed" : "cancelled";
+    } finally {
+      if (session === sessionSequenceRef.current) {
+        appearancePendingRef.current = false;
+        setAppearancePreview(null);
+      }
+    }
+  }, [saveUiSettings, setUiSettings, uiSettingsLoaded, uiSettingsLoading]);
+
   React.useEffect(() => {
     if (typeof window === "undefined") {
       void loadUiSettings({ resetToFallback: true });
@@ -198,9 +242,16 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
     void loadUiSettings({ resetToFallback: true });
     return () => {
       requestSequenceRef.current += 1;
+      sessionSequenceRef.current += 1;
       window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, handleAuthSessionChanged);
     };
   }, [loadUiSettings]);
+
+  const activeTheme = effectiveTheme(uiSettings);
+  React.useLayoutEffect(() => {
+    document.documentElement.dataset.palette = normalizePalette(uiSettings.palette);
+    if (theme !== activeTheme) setTheme(activeTheme);
+  }, [uiSettings.palette, activeTheme, theme, setTheme]);
 
   // Apply the user's highlight color to the accent CSS variables on bootstrap,
   // whenever it changes (live), and when the active theme flips (so on-accent
@@ -214,19 +265,41 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
     );
   }, [uiSettings.highlightColor, resolvedTheme, theme]);
 
+  // Stylesheets drop the decorative accent glow under data-glow="off".
+  React.useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.dataset.glow = uiSettings.noGlow ? "off" : "on";
+  }, [uiSettings.noGlow]);
+
   const value = React.useMemo<UiSettingsContextValue>(
-    () => ({
-      uiSettings,
+    () => {
+      const session = sessionSequenceRef.current;
+      return {
+      uiSettings: storedSettings,
+      appearanceSettings: uiSettings,
+      appearanceSaving: appearancePreview !== null,
+      changeAppearance,
       uiSettingsLoading,
       uiSettingsLoaded,
       uiSettingsLoadError,
-      setUiSettings,
+      // Other preference editors restore whole snapshots on failure. Only
+      // changeAppearance owns appearance fields, so stale snapshots cannot
+      // roll back a palette or accent saved while another editor was pending.
+      setUiSettings: (settings) => {
+        if (session !== sessionSequenceRef.current) return;
+        const latest = latestUiSettingsRef.current;
+        setUiSettings({ ...settings, palette: latest.palette, theme: latest.theme, highlightColor: latest.highlightColor });
+      },
       refreshUiSettings,
       saveUiSettings,
-    }),
+      };
+    },
     [
       refreshUiSettings,
       saveUiSettings,
+      appearancePreview,
+      storedSettings,
+      changeAppearance,
       setUiSettings,
       uiSettings,
       uiSettingsLoaded,

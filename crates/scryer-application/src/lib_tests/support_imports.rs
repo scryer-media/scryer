@@ -1856,6 +1856,24 @@ impl ImportRepository for TrackingImportRepo {
         records.truncate(limit);
         Ok(records)
     }
+
+    async fn delete_unfinished_imports(&self, import_ids: &[String]) -> AppResult<u64> {
+        let mut records = self.records.lock().await;
+        let before = records.len();
+        records.retain(|record| !(import_ids.contains(&record.id) && !record.status.is_terminal()));
+        Ok((before - records.len()) as u64)
+    }
+
+    async fn delete_manual_import_selections_for_title(&self, title_id: &str) -> AppResult<()> {
+        let mut selection = self.manual_import_selection.lock().await;
+        if selection
+            .as_ref()
+            .is_some_and(|selection| selection.title_id == title_id)
+        {
+            *selection = None;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]

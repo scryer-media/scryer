@@ -57,6 +57,7 @@ import type {
   ProxyRecord,
   ProviderTypeInfo,
   ConfigFieldDef,
+  LoginChallengeStatus,
   IndexerDownloadClientMappingCatalog,
   IndexerDownloadClientMappingCatalogResource,
   IndexerCategoryRoutingSettings,
@@ -69,6 +70,7 @@ import {
   splitAdvancedConfigFields,
 } from "@/lib/utils/provider-config-fields";
 import { applyIndexerConfigOption } from "@/lib/utils/indexer-setup";
+import type { DynamicConfigFieldsStatus } from "@/lib/utils/dynamic-config-fields";
 import { cn } from "@/lib/utils";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import {
@@ -88,6 +90,7 @@ import {
   supportsSeedingProfileAssignment,
 } from "@/lib/utils/seeding-profiles";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { LoginChallengeImage } from "@/components/common/login-challenge-image";
 import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
 import {
   indexerQueryBudgetDraftValue,
@@ -154,6 +157,12 @@ type SettingsIndexersSectionProps = {
   deleteIndexer: (indexer: IndexerRecord) => Promise<void> | void;
   syncIndexer: (indexer: IndexerRecord) => Promise<void> | void;
   providerTypes: ProviderTypeInfo[];
+  /// Where the request for the selected plugin's value-dependent fields
+  /// stands. Their fields are already merged into `providerTypes`.
+  dynamicConfigFieldsStatus?: DynamicConfigFieldsStatus;
+  /// The sign-in image for the draft, when the provider's login asks for one.
+  loginChallenge?: LoginChallengeStatus;
+  refreshLoginChallenge?: () => void;
   testIndexerConnection: () => Promise<void> | void;
   isTestingConnection: boolean;
   isEditorOpen: boolean;
@@ -491,15 +500,20 @@ function DynamicConfigField(props: {
 
 /// One provider's fields: everything that is not a checkbox in a grid, then the
 /// checkboxes in a row under it. Used once for the standard fields and once
-/// inside the advanced disclosure so the two groups lay out identically.
-function ProviderConfigFieldGroup({
+/// inside the advanced disclosure so the two groups lay out identically. The
+/// field that takes a sign-in image's answer shows that image under it.
+export function ProviderConfigFieldGroup({
   fields,
   draft,
   onChange,
+  loginChallenge,
+  onRefreshLoginChallenge,
 }: {
   fields: ConfigFieldDef[];
   draft: IndexerDraft;
   onChange: (key: string, value: string) => void;
+  loginChallenge?: LoginChallengeStatus;
+  onRefreshLoginChallenge?: () => void;
 }) {
   if (fields.length === 0) {
     return null;
@@ -513,15 +527,32 @@ function ProviderConfigFieldGroup({
       <div className="grid gap-3 md:grid-cols-3">
         {fields
           .filter((field) => field.fieldType !== "BOOL")
-          .map((field) => (
-            <DynamicConfigField
-              key={field.key}
-              field={field}
-              value={valueFor(field, "")}
-              hasStoredSecretValue={draft.storedSecretKeys.includes(field.key)}
-              onChange={onChange}
-            />
-          ))}
+          .map((field) => {
+            const input = (
+              <DynamicConfigField
+                key={field.key}
+                field={field}
+                value={valueFor(field, "")}
+                hasStoredSecretValue={draft.storedSecretKeys.includes(
+                  field.key,
+                )}
+                onChange={onChange}
+              />
+            );
+            if (field.role !== "LOGIN_CHALLENGE_ANSWER" || !loginChallenge) {
+              return input;
+            }
+            return (
+              <div key={field.key} className="space-y-2">
+                {input}
+                <LoginChallengeImage
+                  idPrefix="settings-indexer-login-challenge"
+                  status={loginChallenge}
+                  onRefresh={onRefreshLoginChallenge}
+                />
+              </div>
+            );
+          })}
       </div>
       {boolFields.length > 0 ? (
         <div className="flex items-center gap-6">
@@ -1138,6 +1169,9 @@ export function SettingsIndexersSection({
   deleteIndexer,
   syncIndexer,
   providerTypes,
+  dynamicConfigFieldsStatus = { state: "idle" },
+  loginChallenge,
+  refreshLoginChallenge,
   testIndexerConnection,
   isTestingConnection,
   isEditorOpen,
@@ -1324,7 +1358,10 @@ export function SettingsIndexersSection({
       setIndexerDraft((prev: IndexerDraft) => {
         const nextConfigValues: Record<string, string> = {};
         for (const field of nextProvider?.configFields ?? []) {
-          if (field.valueSource === "HOST_BINDING") {
+          if (
+            field.valueSource === "HOST_BINDING" ||
+            field.fieldType === "INFO"
+          ) {
             continue;
           }
           nextConfigValues[field.key] =
@@ -2081,7 +2118,29 @@ export function SettingsIndexersSection({
                             fields={standardProviderFields}
                             draft={indexerDraft}
                             onChange={handleConfigValueChange}
+                            loginChallenge={loginChallenge}
+                            onRefreshLoginChallenge={refreshLoginChallenge}
                           />
+                          {dynamicConfigFieldsStatus.state === "loading" ? (
+                            <p
+                              id="settings-indexer-dynamic-fields-loading"
+                              role="status"
+                              className="flex items-center gap-2 text-xs text-muted-foreground"
+                            >
+                              <LoadingMark className="h-4 w-4" />
+                              {t("settings.indexerDynamicFieldsLoading")}
+                            </p>
+                          ) : dynamicConfigFieldsStatus.state === "error" ? (
+                            <p
+                              id="settings-indexer-dynamic-fields-error"
+                              role="alert"
+                              className="text-xs text-[var(--scry-danger-text-soft)]"
+                            >
+                              {t("settings.indexerDynamicFieldsError", {
+                                error: dynamicConfigFieldsStatus.message,
+                              })}
+                            </p>
+                          ) : null}
                           {advancedProviderFields.length > 0 ? (
                             <Collapsible
                               open={advancedConfigOpen}
@@ -2110,6 +2169,8 @@ export function SettingsIndexersSection({
                                   fields={advancedProviderFields}
                                   draft={indexerDraft}
                                   onChange={handleConfigValueChange}
+                                  loginChallenge={loginChallenge}
+                                  onRefreshLoginChallenge={refreshLoginChallenge}
                                 />
                               </CollapsibleContent>
                             </Collapsible>
@@ -2199,7 +2260,7 @@ export function SettingsIndexersSection({
                   <div
                     role="status"
                     aria-live="polite"
-                    className="absolute inset-0 z-10 flex items-center justify-center bg-[rgba(3,7,18,0.72)] p-4 backdrop-blur-[1px]"
+                    className="absolute inset-0 z-10 flex items-center justify-center bg-background/75 p-4 backdrop-blur-[1px]"
                   >
                     <div className="flex items-center gap-2 rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-surf)] px-4 py-3 text-sm font-medium text-[var(--scry-ink2)] shadow-[0_12px_28px_rgba(2,6,23,0.28)]">
                       <LoadingMark className="h-4 w-4" />

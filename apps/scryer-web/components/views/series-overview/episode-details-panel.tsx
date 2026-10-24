@@ -23,6 +23,7 @@ export function EpisodeDetailsPanel({
   onRefreshSubtitles,
   onDeleteFile,
   onMakePrimaryFile,
+  onAssignFileToEpisode,
   primaryMovieFileUpdatingId = null,
 }: {
   episode: CollectionEpisode;
@@ -34,6 +35,7 @@ export function EpisodeDetailsPanel({
   onRefreshSubtitles?: () => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
+  onAssignFileToEpisode?: (fileId: string) => void;
   primaryMovieFileUpdatingId?: string | null;
 }) {
   const t = useTranslate();
@@ -93,6 +95,7 @@ export function EpisodeDetailsPanel({
           onRefreshSubtitles={onRefreshSubtitles}
           onDeleteFile={onDeleteFile}
           onMakePrimaryFile={onMakePrimaryFile}
+          onAssignFileToEpisode={onAssignFileToEpisode}
           primaryFileUpdatingId={primaryMovieFileUpdatingId}
           showPrimaryRoleBadge
           fileRowIdPrefix="series-overview-episode-media-file"
@@ -101,6 +104,7 @@ export function EpisodeDetailsPanel({
           subtitleSearchIdPrefix="series-overview-episode-search-subtitles"
           deleteFileIdPrefix="series-overview-episode-delete-file"
           makePrimaryFileIdPrefix="series-overview-episode-make-primary-file"
+          assignFileIdPrefix="series-overview-episode-assign-file"
           mediaInfoIdPrefix="series-overview-episode-media-file-info"
         />
       </TitleFilesOnDiskRail>

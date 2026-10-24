@@ -37,7 +37,12 @@ use crate::types::{
 };
 use crate::wasmtime_host::module_cache::{self, ModuleFlavor, RehydrationArtifact};
 
-const INDEXER_PLUGIN_TYPES: &[&str] = &["indexer", "usenet_indexer", "torrent_indexer"];
+const INDEXER_PLUGIN_TYPES: &[&str] = &[
+    "indexer",
+    "usenet_indexer",
+    "torrent_indexer",
+    "http_indexer",
+];
 
 /// Schedule process-local module rehydration for all enabled persisted and
 /// built-in plugins. Registration happens synchronously before the background
@@ -906,6 +911,18 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
             .unwrap_or_default()
     }
 
+    fn dynamic_config_trigger_keys_for_provider(&self, provider_type: &str) -> Vec<String> {
+        self.get_loaded(provider_type)
+            .and_then(|loaded| {
+                loaded
+                    .descriptor
+                    .indexer()
+                    .and_then(|indexer| indexer.capabilities.dynamic_config_fields.clone())
+            })
+            .map(|capability| capability.trigger_keys)
+            .unwrap_or_default()
+    }
+
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
         self.get_loaded(provider_type)
             .map(|loaded| loaded.descriptor.name.clone())
@@ -1315,6 +1332,14 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         guard.config_fields_for_provider(provider_type)
     }
 
+    fn dynamic_config_trigger_keys_for_provider(&self, provider_type: &str) -> Vec<String> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicPluginProvider lock poisoned");
+        guard.dynamic_config_trigger_keys_for_provider(provider_type)
+    }
+
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
         let guard = self
             .inner
@@ -1720,6 +1745,16 @@ impl DownloadClientPluginProvider for WasmDownloadClientPluginProvider {
             .unwrap_or_default()
     }
 
+    fn http_capabilities_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Option<scryer_domain::DownloadClientHttpCapabilities> {
+        self.get_loaded(provider_type)
+            .and_then(|loaded| loaded.descriptor.download_client())
+            .and_then(|download_client| download_client.capabilities.http.as_ref())
+            .map(crate::types::download_client_http_capabilities_to_domain)
+    }
+
     fn reload_plugins(
         &self,
         _external_wasm_bytes: &[ExternalPluginWasm<'_>],
@@ -1890,6 +1925,17 @@ impl DownloadClientPluginProvider for DynamicDownloadClientPluginProvider {
             .read()
             .expect("DynamicDownloadClientPluginProvider lock poisoned");
         guard.accepted_inputs_for_provider(provider_type)
+    }
+
+    fn http_capabilities_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Option<scryer_domain::DownloadClientHttpCapabilities> {
+        let guard = self
+            .inner
+            .read()
+            .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        guard.http_capabilities_for_provider(provider_type)
     }
 
     fn reload_plugins(
@@ -2123,6 +2169,29 @@ fn validate_indexer_config_contract(descriptor: &PluginDescriptor) -> bool {
         }
     };
     if !has_valid_connection_url_count {
+        return false;
+    }
+
+    // The host shows one sign-in challenge beside one answer field.
+    let login_challenge_answers = descriptor
+        .config_fields()
+        .iter()
+        .filter(|field| field.role == Some(ConfigFieldRole::LoginChallengeAnswer))
+        .collect::<Vec<_>>();
+    if login_challenge_answers.len() > 1
+        || login_challenge_answers.iter().any(|field| {
+            !matches!(
+                field.field_type,
+                scryer_plugin_sdk::ConfigFieldType::String
+                    | scryer_plugin_sdk::ConfigFieldType::Password
+            )
+        })
+    {
+        warn!(
+            plugin = descriptor.id.as_str(),
+            provider_type = descriptor.provider_type(),
+            "indexer descriptor rejected: login_challenge_answer must be one string or password field"
+        );
         return false;
     }
 
@@ -5011,6 +5080,35 @@ mod tests {
             &descriptor,
             PluginLoadSource::External { first_party: false }
         ));
+    }
+
+    /// One answer field takes the sign-in challenge; two, or one that is not
+    /// a text field, leaves the host nowhere sensible to show it.
+    #[test]
+    fn indexer_login_challenge_answer_role_is_one_text_field() {
+        let with_fields = |fields: Vec<ConfigFieldDef>| {
+            let mut descriptor = descriptor("torrent_indexer");
+            let ProviderDescriptor::Indexer(indexer) = &mut descriptor.provider else {
+                panic!("expected indexer descriptor");
+            };
+            indexer.config_fields = fields;
+            validate_indexer_descriptor(
+                &descriptor,
+                PluginLoadSource::External { first_party: false },
+            )
+        };
+        assert!(with_fields(vec![
+            indexer_config_field("base_url", Some(ConfigFieldRole::ConnectionUrl)),
+            indexer_config_field("answer", Some(ConfigFieldRole::LoginChallengeAnswer)),
+        ]));
+        assert!(!with_fields(vec![
+            indexer_config_field("answer", Some(ConfigFieldRole::LoginChallengeAnswer)),
+            indexer_config_field("again", Some(ConfigFieldRole::LoginChallengeAnswer)),
+        ]));
+        assert!(!with_fields(vec![ConfigFieldDef {
+            field_type: ConfigFieldType::Bool,
+            ..indexer_config_field("answer", Some(ConfigFieldRole::LoginChallengeAnswer))
+        }]));
     }
 
     #[test]

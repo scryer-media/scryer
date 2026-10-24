@@ -62,6 +62,8 @@ export type PendingImportCardProps = {
   onOpenSearch: (item: PendingImportItem) => void;
   onRequestIgnore: (item: PendingImportItem) => void;
   onBind: () => void;
+  /** Opens the episode picker for an import whose numbering was ambiguous. */
+  onAssignEpisode?: (item: PendingImportItem) => void;
   onResolve: (
     result: MetadataSearchResult,
     options?: { attachToExistingTitle?: boolean },
@@ -98,6 +100,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   onOpenSearch,
   onRequestIgnore,
   onBind,
+  onAssignEpisode,
   onResolve,
   onToggleEpisodeSelection,
   onSetSelectedEpisodeIds,
@@ -115,6 +118,13 @@ export const PendingImportCard = React.memo(function PendingImportCard({
     item.reason === "title_already_owns_another_folder" || isFolderOwnershipChange || isInvalidOwnership;
   const canSearchOrBind =
     !isOwnershipConflict && !(item.titleId && item.facet === "MOVIE");
+  // The scan found the title but could not tell which episode the file's
+  // absolute number means, so the operator picks it.
+  const canAssignEpisode =
+    canSearchOrBind &&
+    Boolean(item.titleId) &&
+    item.reason === "anime_numbering_ambiguous" &&
+    Boolean(onAssignEpisode);
 
   return (
     <Card
@@ -134,6 +144,17 @@ export const PendingImportCard = React.memo(function PendingImportCard({
             <p className="text-xs text-muted-foreground">{t("pendingImports.library")} {libraryLabel}</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
+            {canAssignEpisode ? (
+              <Button
+                type="button"
+                size="sm"
+                id={`pending-import-assign-episode-${item.id}`}
+                onClick={() => onAssignEpisode?.(item)}
+                disabled={isBusy}
+              >
+                {t("episodeAssign.action")}
+              </Button>
+            ) : null}
             {canSearchOrBind ? (
               <Button
                 type="button"

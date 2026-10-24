@@ -673,6 +673,7 @@ export function SettingsNotificationsContainer({
         setGlobalStatus,
         successMessage: t("settings.notificationTestSuccess"),
         failureFallbackMessage: t("settings.notificationTestFailed"),
+        t,
         run: async () => {
           const { data, error } = await client.mutation(testNotificationChannelMutation, {
             id: channel.id,

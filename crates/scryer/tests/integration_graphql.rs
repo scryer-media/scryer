@@ -18,6 +18,8 @@ mod dataloader_enrichment;
 mod downloads_housekeeping_system;
 #[path = "integration_graphql/emby_contract.rs"]
 mod emby_contract;
+#[path = "integration_graphql/episode_file_reassign.rs"]
+mod episode_file_reassign;
 #[path = "integration_graphql/external_import_finalize.rs"]
 mod external_import_finalize;
 #[path = "integration_graphql/external_import_secret_drafts.rs"]
@@ -473,6 +475,20 @@ impl MediaFileRepository for FailingMediaFileRepo {
             .await
     }
 
+    async fn reassign_file_episode_links(
+        &self,
+        request: &scryer_application::EpisodeFileReassignRequest,
+    ) -> AppResult<scryer_application::EpisodeFileReassignOutcome> {
+        self.inner.reassign_file_episode_links(request).await
+    }
+
+    async fn restore_file_episode_links(
+        &self,
+        reassignment: &scryer_application::EpisodeFileReassignment,
+    ) -> AppResult<()> {
+        self.inner.restore_file_episode_links(reassignment).await
+    }
+
     async fn link_file_to_series_movie(
         &self,
         file_id: &str,
@@ -800,6 +816,20 @@ impl MediaFileRepository for CountingMediaFileRepo {
         self.inner
             .replace_file_episode_links(file_id, expected_episode_ids, episode_ids)
             .await
+    }
+
+    async fn reassign_file_episode_links(
+        &self,
+        request: &scryer_application::EpisodeFileReassignRequest,
+    ) -> AppResult<scryer_application::EpisodeFileReassignOutcome> {
+        self.inner.reassign_file_episode_links(request).await
+    }
+
+    async fn restore_file_episode_links(
+        &self,
+        reassignment: &scryer_application::EpisodeFileReassignment,
+    ) -> AppResult<()> {
+        self.inner.restore_file_episode_links(reassignment).await
     }
 
     async fn link_file_to_series_movie(
@@ -2282,6 +2312,7 @@ async fn configure_default_library_root(
             library.name,
             library.slug,
             vec![LibraryRootDraft {
+                id: None,
                 path: media_root_path.clone(),
                 is_default: true,
             }],

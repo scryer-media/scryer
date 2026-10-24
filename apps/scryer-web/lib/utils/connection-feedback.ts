@@ -1,5 +1,7 @@
+import type { Translate } from "@/components/root/types";
 import type { SetGlobalStatus } from "@/lib/context/global-status-context";
 import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
+import { pluginErrorMessage } from "./plugin-error-message.ts";
 
 export class ReportedConnectionFeedbackError extends Error {
   constructor(message: string) {
@@ -14,6 +16,11 @@ type RunConnectionFeedbackOptions = {
   successMessage: string;
   failureFallbackMessage: string;
   announceSuccess?: boolean;
+  /**
+   * Translates a failure the plugin behind the connection named a reason for.
+   * Without it every failure shows the server's sentence.
+   */
+  t?: Translate;
   run: () => Promise<string | void | null | undefined>;
 };
 
@@ -23,6 +30,7 @@ export async function runConnectionFeedback({
   successMessage,
   failureFallbackMessage,
   announceSuccess = true,
+  t,
   run,
 }: RunConnectionFeedbackOptions): Promise<void> {
   if (startMessage) {
@@ -39,7 +47,9 @@ export async function runConnectionFeedback({
     // prefixes validation errors with "validation: ", so the raw message reads
     // as machinery. The shared helper strips both and keeps the reference id on
     // errors the server really did mask.
-    const message = userFacingGraphQlErrorMessage(error, failureFallbackMessage);
+    const message = t
+      ? pluginErrorMessage(error, t, failureFallbackMessage)
+      : userFacingGraphQlErrorMessage(error, failureFallbackMessage);
     setGlobalStatus(message, { level: "ERROR" });
     throw new ReportedConnectionFeedbackError(message);
   }

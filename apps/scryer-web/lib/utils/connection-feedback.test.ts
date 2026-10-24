@@ -37,3 +37,31 @@ test("connection feedback emits one terminal failure message", async () => {
   );
   assert.deepEqual(statuses, [["Unavailable", "ERROR"]]);
 });
+
+test("a plugin failure is reported in translation when a translator is given", async () => {
+  const statuses: Array<[string, string | undefined]> = [];
+  const pluginFailure = {
+    message: "[GraphQL] indexer connection test failed: plugin error AuthFailed: Login refused",
+    graphQLErrors: [
+      {
+        message: "indexer connection test failed: plugin error AuthFailed: Login refused",
+        extensions: { code: "PLUGIN_FAILED", reason: "PLUGIN_AUTH_FAILED" },
+      },
+    ],
+  };
+
+  await assert.rejects(
+    runConnectionFeedback({
+      setGlobalStatus: (status, options) => statuses.push([status, options?.level]),
+      successMessage: "Connected",
+      failureFallbackMessage: "Failed",
+      t: (key) => `translated:${key}`,
+      run: async () => {
+        throw pluginFailure;
+      },
+    }),
+    isReportedConnectionFeedbackError,
+  );
+
+  assert.deepEqual(statuses, [["translated:plugins.failure.authFailed", "ERROR"]]);
+});

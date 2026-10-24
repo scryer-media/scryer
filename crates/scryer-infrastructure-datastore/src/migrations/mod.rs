@@ -42,6 +42,8 @@ pub mod repair_root_title_folders;
 #[cfg(test)]
 mod request_rules_enable_only_upgrade_tests;
 pub mod rule_set_runtime_wrapper;
+#[cfg(test)]
+mod single_connection_runner_tests;
 pub mod synthetic_root_ids;
 #[cfg(test)]
 #[path = "synthetic_root_ids_upgrade_tests.rs"]
@@ -65,7 +67,9 @@ use crate::migration_assets::{
 use crate::migration_hook_ids;
 use crate::{EmbeddedMigrationDescriptor, MigrationMode, MigrationStatus};
 use scryer_application::{AppError, AppResult};
+use sqlx::Connection;
 use sqlx::Row;
+use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -187,8 +191,9 @@ pub async fn replay_catalog_into_fresh_db(
     through_version: Option<i64>,
     enable_baselines: bool,
 ) -> AppResult<()> {
+    let mut conn = acquire_migration_connection(pool).await?;
     replay_catalog_into_fresh_db_with_context(
-        pool,
+        &mut conn,
         catalog,
         payload_bytes,
         through_version,
@@ -199,17 +204,17 @@ pub async fn replay_catalog_into_fresh_db(
 }
 
 async fn replay_catalog_into_fresh_db_with_context(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     catalog: &CompiledMigrationCatalog,
     payload_bytes: &[u8],
     through_version: Option<i64>,
     enable_baselines: bool,
     hook_context: &MigrationHookContext,
 ) -> AppResult<()> {
-    ensure_migration_ledger_shape(pool).await?;
+    ensure_migration_ledger_shape(conn).await?;
 
-    let applied = load_applied_migrations(pool).await?;
-    if !applied.is_empty() || app_object_count(pool).await? > 0 {
+    let applied = load_applied_migrations(conn).await?;
+    if !applied.is_empty() || app_object_count(conn).await? > 0 {
         return Err(AppError::Repository(
             "replay_catalog_into_fresh_db requires an empty database".to_string(),
         ));
@@ -225,17 +230,17 @@ async fn replay_catalog_into_fresh_db_with_context(
         && let Some(baseline) =
             catalog.latest_baseline_at_or_below(target_version, EngineScope::Sqlite)
     {
-        apply_baseline(pool, catalog, payload_bytes, baseline).await?;
+        apply_baseline(conn, catalog, payload_bytes, baseline).await?;
         start_version = baseline.through_version + 1;
     }
 
     // Record the baseline first so snapshots past migration 0252 do not
     // recreate its retired table. Older snapshots and full replay still need
     // the stand-in for the historical spellfix statements.
-    crate::sql::spellfix_retirement::retire_spellfix_virtual_table(pool).await?;
+    crate::sql::spellfix_retirement::retire_spellfix_virtual_table_on(conn).await?;
 
     apply_version_range(
-        pool,
+        conn,
         catalog,
         payload_bytes,
         MigrationInstallKind::FreshInstall,
@@ -258,11 +263,13 @@ pub async fn run_migrations_with_hook_context(
 ) -> AppResult<()> {
     let catalog = embedded_catalog()?;
     let payload_bytes = embedded_payload_bytes()?;
+    let mut conn = acquire_migration_connection(pool).await?;
+    let conn = &mut *conn;
     if !matches!(mode, MigrationMode::ValidateOnly) {
-        ensure_migration_ledger_shape(pool).await?;
+        ensure_migration_ledger_shape(conn).await?;
     }
 
-    let applied = load_applied_migrations(pool).await?;
+    let applied = load_applied_migrations(conn).await?;
     validate_known_migrations(&applied, &catalog, &payload_bytes)?;
     let pending = list_pending_migrations_from_applied(&applied, &catalog);
     if pending.is_empty() {
@@ -276,11 +283,11 @@ pub async fn run_migrations_with_hook_context(
         )));
     }
 
-    let install_kind = detect_install_kind(pool, &applied).await?;
+    let install_kind = detect_install_kind(conn, &applied).await?;
     match install_kind {
         MigrationInstallKind::FreshInstall => {
             replay_catalog_into_fresh_db_with_context(
-                pool,
+                conn,
                 &catalog,
                 &payload_bytes,
                 None,
@@ -295,9 +302,9 @@ pub async fn run_migrations_with_hook_context(
             // migrations between here and 0252 still reference it. Retire
             // the module-backed object and stand a plain table in for it
             // before a single one of them runs.
-            crate::sql::spellfix_retirement::retire_spellfix_virtual_table(pool).await?;
+            crate::sql::spellfix_retirement::retire_spellfix_virtual_table_on(conn).await?;
             apply_version_range(
-                pool,
+                conn,
                 &catalog,
                 &payload_bytes,
                 MigrationInstallKind::Upgrade,
@@ -310,6 +317,24 @@ pub async fn run_migrations_with_hook_context(
     }
 
     Ok(())
+}
+
+/// The one connection a migration run uses from start to finish.
+///
+/// Every pending migration, its ledger row and the checks around them run on
+/// this connection, never on whichever one the pool hands out next. A
+/// connection caches the schema, and `ALTER TABLE ... RENAME COLUMN` and
+/// `DROP COLUMN` resolve their column against that cache while the statement
+/// is parsed. When one migration ran on another connection, the cache here can
+/// predate it, and SQLite then reports the column the previous migration just
+/// added as missing instead of reloading the schema and retrying. On a single
+/// connection each migration sees exactly the schema the one before it left.
+async fn acquire_migration_connection(
+    pool: &SqlitePool,
+) -> AppResult<sqlx::pool::PoolConnection<sqlx::Sqlite>> {
+    pool.acquire()
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))
 }
 
 fn source_db_root() -> PathBuf {
@@ -338,7 +363,7 @@ fn checksum_algo_from_str(value: &str) -> Option<ChecksumAlgorithm> {
     }
 }
 
-async fn ensure_migration_ledger_shape(pool: &SqlitePool) -> AppResult<()> {
+async fn ensure_migration_ledger_shape(conn: &mut SqliteConnection) -> AppResult<()> {
     sqlx::query(
         r#"
 CREATE TABLE IF NOT EXISTS _sqlx_migrations (
@@ -352,17 +377,17 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
 )
         "#,
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .map_err(|error| AppError::Repository(error.to_string()))?;
 
-    let checksum_algo_exists = migration_table_has_column(pool, "checksum_algo").await?;
+    let checksum_algo_exists = migration_table_has_column(conn, "checksum_algo").await?;
 
     if !checksum_algo_exists {
         sqlx::query(
             "ALTER TABLE _sqlx_migrations ADD COLUMN checksum_algo TEXT NOT NULL DEFAULT ''",
         )
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?;
     }
@@ -370,22 +395,25 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
     Ok(())
 }
 
-async fn migration_table_exists(pool: &SqlitePool) -> AppResult<bool> {
+async fn migration_table_exists(conn: &mut SqliteConnection) -> AppResult<bool> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
            FROM sqlite_master
           WHERE type = 'table'
             AND name = '_sqlx_migrations'",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(|error| AppError::Repository(error.to_string()))?;
 
     Ok(count > 0)
 }
 
-async fn migration_table_has_column(pool: &SqlitePool, column_name: &str) -> AppResult<bool> {
-    if !migration_table_exists(pool).await? {
+async fn migration_table_has_column(
+    conn: &mut SqliteConnection,
+    column_name: &str,
+) -> AppResult<bool> {
+    if !migration_table_exists(conn).await? {
         return Ok(false);
     }
 
@@ -395,19 +423,21 @@ async fn migration_table_has_column(pool: &SqlitePool, column_name: &str) -> App
           WHERE name = ?1",
     )
     .bind(column_name)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(|error| AppError::Repository(error.to_string()))?;
 
     Ok(count > 0)
 }
 
-async fn load_applied_migrations(pool: &SqlitePool) -> AppResult<Vec<MigrationLedgerRow>> {
-    if !migration_table_exists(pool).await? {
+async fn load_applied_migrations(
+    conn: &mut SqliteConnection,
+) -> AppResult<Vec<MigrationLedgerRow>> {
+    if !migration_table_exists(conn).await? {
         return Ok(Vec::new());
     }
 
-    let has_checksum_algo = migration_table_has_column(pool, "checksum_algo").await?;
+    let has_checksum_algo = migration_table_has_column(conn, "checksum_algo").await?;
     let rows = if has_checksum_algo {
         sqlx::query(
             "SELECT
@@ -421,7 +451,7 @@ async fn load_applied_migrations(pool: &SqlitePool) -> AppResult<Vec<MigrationLe
              FROM _sqlx_migrations
              ORDER BY version",
         )
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?
     } else {
@@ -437,7 +467,7 @@ async fn load_applied_migrations(pool: &SqlitePool) -> AppResult<Vec<MigrationLe
              FROM _sqlx_migrations
              ORDER BY version",
         )
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?
     };
@@ -627,14 +657,14 @@ fn legacy_sqlite_checksum_matches(
 }
 
 async fn detect_install_kind(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     applied: &[MigrationLedgerRow],
 ) -> AppResult<MigrationInstallKind> {
     if !applied.is_empty() {
         return Ok(MigrationInstallKind::Upgrade);
     }
 
-    let app_objects = app_object_count(pool).await?;
+    let app_objects = app_object_count(conn).await?;
     if app_objects == 0 {
         Ok(MigrationInstallKind::FreshInstall)
     } else {
@@ -645,20 +675,20 @@ async fn detect_install_kind(
     }
 }
 
-async fn app_object_count(pool: &SqlitePool) -> AppResult<i64> {
+async fn app_object_count(conn: &mut SqliteConnection) -> AppResult<i64> {
     sqlx::query_scalar(
         "SELECT COUNT(*)
            FROM sqlite_master
           WHERE name NOT LIKE 'sqlite_%'
             AND name NOT LIKE '_sqlx_%'",
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(|error| AppError::Repository(error.to_string()))
 }
 
 async fn apply_baseline(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     catalog: &CompiledMigrationCatalog,
     payload_bytes: &[u8],
     baseline: &CompiledBaseline,
@@ -668,7 +698,7 @@ async fn apply_baseline(
         .text(payload_bytes)
         .map_err(AppError::Repository)?
         .to_owned();
-    let mut tx = pool
+    let mut tx = conn
         .begin()
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -700,7 +730,7 @@ async fn apply_baseline(
 }
 
 async fn apply_version_range(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     catalog: &CompiledMigrationCatalog,
     payload_bytes: &[u8],
     install_kind: MigrationInstallKind,
@@ -712,7 +742,7 @@ async fn apply_version_range(
         return Ok(());
     }
 
-    let applied_versions: HashSet<i64> = load_applied_migrations(pool)
+    let applied_versions: HashSet<i64> = load_applied_migrations(conn)
         .await?
         .into_iter()
         .filter(|row| row.success)
@@ -731,7 +761,7 @@ async fn apply_version_range(
 
     hook_context.progress.begin(pending.len());
     for migration in pending {
-        apply_single_migration(pool, migration, payload_bytes, install_kind, hook_context).await?;
+        apply_single_migration(conn, migration, payload_bytes, install_kind, hook_context).await?;
         hook_context.progress.complete_one();
     }
 
@@ -739,14 +769,14 @@ async fn apply_version_range(
 }
 
 async fn apply_single_migration(
-    pool: &SqlitePool,
+    conn: &mut SqliteConnection,
     migration: &CompiledMigration,
     payload_bytes: &[u8],
     install_kind: MigrationInstallKind,
     hook_context: &MigrationHookContext,
 ) -> AppResult<()> {
     let start = Instant::now();
-    let mut tx = pool
+    let mut tx = conn
         .begin()
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -1026,7 +1056,10 @@ pub async fn title_external_id_projection_conflict_hint(pool: &SqlitePool) -> Op
 }
 
 pub async fn list_applied_migrations(pool: &SqlitePool) -> AppResult<Vec<MigrationStatus>> {
-    let rows = load_applied_migrations(pool).await?;
+    let rows = {
+        let mut conn = acquire_migration_connection(pool).await?;
+        load_applied_migrations(&mut conn).await?
+    };
     let catalog = embedded_catalog()?;
     let payload_bytes = embedded_payload_bytes()?;
     let mut out = Vec::with_capacity(rows.len());

@@ -2650,6 +2650,7 @@ fn completed_downloads_from_sab_slots(
                 completed_ts.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now));
 
             Some(CompletedDownload {
+                subtitle_paths: Vec::new(),
                 client_type: "sabnzbd".to_string(),
                 client_id: String::new(),
                 download_client_item_id: nzo_id.clone(),
@@ -3076,6 +3077,7 @@ mod tests {
     fn test_add_request(download_id: &str) -> DownloadClientAddRequest {
         let facet = MediaFacet::Movie;
         DownloadClientAddRequest {
+            http: None,
             title: Title {
                 id: "title-1".to_string(),
                 name: "Test Title".to_string(),

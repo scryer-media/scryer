@@ -1194,17 +1194,13 @@ async fn administrators_extend_convert_and_release_a_claim_and_requesters_cannot
     )
     .await;
     assert_no_errors(&converted);
-    let replacement = &converted["data"]["convertTitleClaimToPermanent"];
-    assert_eq!(replacement["producer"], "OPERATOR_KEEP");
-    assert_eq!(replacement["kind"], "KEEP");
-    assert_eq!(replacement["state"], "ACTIVE");
-    assert!(
-        replacement["producerRef"].is_null(),
-        "an operator pin has nothing upstream to release against"
-    );
-    let replacement_id = replacement["id"].as_str().expect("replacement id");
+    // Keeping the title permanently ends its lease and writes nothing in its
+    // place, so the title is left without an expiry.
+    let ended = &converted["data"]["convertTitleClaimToPermanent"];
+    assert_eq!(ended["id"], json!(claim_id));
+    assert_eq!(ended["state"], "CONVERTED");
+    assert_eq!(ended["releasedReason"], "converted_to_permanent");
 
-    // The original stays as history rather than disappearing.
     let after_convert = gql(
         &ctx,
         &format!("query($titleId: ID!) {{ titleClaims(titleId: $titleId) {{{CLAIM_FIELDS}}} }}"),
@@ -1212,68 +1208,26 @@ async fn administrators_extend_convert_and_release_a_claim_and_requesters_cannot
     )
     .await;
     assert_no_errors(&after_convert);
-    let original = after_convert["data"]["titleClaims"]
+    let remaining = after_convert["data"]["titleClaims"]
         .as_array()
-        .expect("claims")
-        .iter()
-        .find(|claim| claim["id"] == json!(claim_id))
-        .expect("the original claim is kept as history");
-    assert_eq!(original["state"], "CONVERTED");
+        .expect("claims");
+    assert_eq!(remaining.len(), 1, "no replacement claim: {after_convert}");
+    assert_eq!(remaining[0]["state"], "CONVERTED");
 
+    // An ended lease is history: it cannot be released afterwards.
     let released = gql(
         &ctx,
         &format!(
             "mutation($input: ReleaseTitleClaimInput!) {{ releaseTitleClaim(input: $input) {{{CLAIM_FIELDS}}} }}"
         ),
-        json!({ "input": { "claimId": replacement_id, "reason": "operator withdrew the pin" } }),
+        json!({ "input": { "claimId": claim_id, "reason": "operator changed their mind" } }),
     )
     .await;
     assert_no_errors(&released);
-    assert_eq!(released["data"]["releaseTitleClaim"]["state"], "RELEASED");
     assert_eq!(
-        released["data"]["releaseTitleClaim"]["releasedReason"],
-        "operator withdrew the pin"
+        released["data"]["releaseTitleClaim"]["state"], "CONVERTED",
+        "releasing a lease that already ended leaves it as it was: {released}"
     );
-}
-
-#[tokio::test]
-async fn keeping_a_title_is_one_operator_keep_however_often_it_is_asked() {
-    let ctx = TestContext::new().await;
-    let requester = requester(&ctx, "keep-requester").await;
-    let request = submit_under(&ctx, &requester, APPROVE_EVERYTHING, Some(30)).await;
-    let title_id = request["createdTitleId"].as_str().expect("title id");
-    let keep = format!(
-        "mutation($titleId: ID!) {{ createOperatorKeepClaim(titleId: $titleId) {{{CLAIM_FIELDS}}} }}"
-    );
-
-    let refused = gql_as(&ctx, &keep, json!({ "titleId": title_id }), &requester).await;
-    assert!(refused.get("errors").is_some(), "{refused}");
-
-    let first = gql(&ctx, &keep, json!({ "titleId": title_id })).await;
-    assert_no_errors(&first);
-    let kept = &first["data"]["createOperatorKeepClaim"];
-    assert_eq!(kept["producer"], "OPERATOR_KEEP");
-    assert_eq!(kept["kind"], "KEEP");
-    assert_eq!(kept["state"], "ACTIVE");
-
-    let second = gql(&ctx, &keep, json!({ "titleId": title_id })).await;
-    assert_no_errors(&second);
-    assert_eq!(second["data"]["createOperatorKeepClaim"]["id"], kept["id"]);
-
-    let claims = gql(
-        &ctx,
-        &format!("query($titleId: ID!) {{ titleClaims(titleId: $titleId) {{{CLAIM_FIELDS}}} }}"),
-        json!({ "titleId": title_id }),
-    )
-    .await;
-    assert_no_errors(&claims);
-    let operator_keeps = claims["data"]["titleClaims"]
-        .as_array()
-        .expect("claims")
-        .iter()
-        .filter(|claim| claim["producer"] == "OPERATOR_KEEP")
-        .count();
-    assert_eq!(operator_keeps, 1, "{claims}");
 }
 
 // ===========================================================================

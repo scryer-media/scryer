@@ -8,7 +8,8 @@ use crate::context::{actor_from_ctx, app_from_ctx, require_config_app_permission
 use crate::mappers::{
     from_cancel_library_scan_result, from_delete_episode_files_job_accepted,
     from_ignore_pending_import_result, from_job_run, from_library, from_library_scan_session,
-    from_library_scan_summary, from_media_rename_apply, from_resolve_pending_import_result,
+    from_library_scan_summary, from_media_rename_apply, from_reassign_episode_file_result,
+    from_resolve_pending_import_result,
 };
 use crate::types::*;
 use crate::utils::map_add_input;
@@ -132,6 +133,7 @@ impl LibraryMutations {
             .roots
             .into_iter()
             .map(|root| scryer_application::LibraryRootDraft {
+                id: None,
                 path: root.path,
                 is_default: root.is_default,
             })
@@ -162,6 +164,7 @@ impl LibraryMutations {
             roots
                 .into_iter()
                 .map(|root| scryer_application::LibraryRootDraft {
+                    id: root.id.map(|id| id.to_string()),
                     path: root.path,
                     is_default: root.is_default,
                 })
@@ -532,6 +535,37 @@ impl LibraryMutations {
             id: ID::from(file_id),
             job_run: from_job_run(accepted.job_run),
         })
+    }
+
+    /// Assign an imported series file to different episodes of its own title.
+    ///
+    /// The links move and the file is renamed on disk to the new episodes'
+    /// name, in one operation. A target with a primary file is refused unless
+    /// `replace` is set, which demotes that file to additional; no file is
+    /// ever deleted.
+    async fn reassign_episode_file(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Media-file identity, target episodes, and conflict handling.")]
+        input: ReassignEpisodeFileInput,
+    ) -> GqlResult<ReassignEpisodeFilePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let episode_ids = input
+            .episode_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>();
+        let result = app
+            .reassign_episode_file(
+                &actor,
+                input.file_id.as_str(),
+                &episode_ids,
+                input.replace.unwrap_or(false),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_reassign_episode_file_result(result))
     }
 
     /// Accept a background job deleting every media file linked to the supplied

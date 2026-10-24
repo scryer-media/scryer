@@ -21,7 +21,10 @@
   "dependencies": {
     "@codemirror/autocomplete": "6.20.3",
     "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-go": "6.0.1",
     "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-python": "6.2.1",
+    "@codemirror/language": "6.12.4",
     "@codemirror/legacy-modes": "^6.5.4",
     "@codemirror/lint": "6.9.7",
     "@codemirror/state": "^6.7.6",

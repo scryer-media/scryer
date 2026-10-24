@@ -18,6 +18,10 @@ use crate::{AppResult, SubmissionScope};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryRootDraft {
+    /// The stored root this draft describes, when the caller is editing one it
+    /// already has. A draft with an id keeps that root's identity even when its
+    /// path changes; a draft without one is matched by path, then allocated.
+    pub id: Option<String>,
     pub path: String,
     pub is_default: bool,
 }
@@ -1363,6 +1367,22 @@ pub struct FixTitleMatchResult {
     pub warnings: Vec<String>,
 }
 
+/// What an episode-file reassignment did. Every list is sorted.
+#[derive(Clone, Debug)]
+pub struct ReassignEpisodeFileResult {
+    /// The file as stored now: its new path and links.
+    pub file: TitleMediaFile,
+    pub previous_path: String,
+    /// Episodes the file served before.
+    pub previous_episode_ids: Vec<String>,
+    /// Episodes the file serves now, as their primary file.
+    pub episode_ids: Vec<String>,
+    /// Files that were primary for a target episode and are now additional.
+    pub demoted_file_ids: Vec<String>,
+    /// Files that became primary for an episode the reassigned file left.
+    pub promoted_file_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PendingImportCounts {
     pub movie: i64,
@@ -1811,6 +1831,10 @@ pub struct PendingRelease {
     /// opaque JSON, so the delayed grab submits the same listing facts the
     /// park-time decision read. `None` for rows parked before the column.
     pub release_listing_json: Option<String>,
+    /// The HTTP-family release description captured when the release was
+    /// parked, so the delayed grab can resolve and submit it. `None` for
+    /// every other protocol family and for rows parked before the column.
+    pub http_release: Option<scryer_plugin_sdk::PluginHttpRelease>,
 }
 
 impl PendingReleaseObservation {
@@ -1996,6 +2020,9 @@ pub enum DownloadSourceKind {
     NzbUrl,
     TorrentFile,
     MagnetUri,
+    /// An HTTP-family release: a provider page, direct file, or HLS/DASH
+    /// manifest that an HTTP download client fetches.
+    HttpResource,
 }
 
 impl DownloadSourceKind {
@@ -2005,6 +2032,7 @@ impl DownloadSourceKind {
             Self::NzbUrl => "nzb_url",
             Self::TorrentFile => "torrent_file",
             Self::MagnetUri => "magnet_uri",
+            Self::HttpResource => "http_resource",
         }
     }
 
@@ -2014,7 +2042,17 @@ impl DownloadSourceKind {
             "nzb_url" => Some(Self::NzbUrl),
             "torrent" | "torrent_file" | "torrent_url" | "torrent_bytes" => Some(Self::TorrentFile),
             "magnet" | "magnet_uri" => Some(Self::MagnetUri),
+            "http" | "http_resource" => Some(Self::HttpResource),
             _ => None,
+        }
+    }
+
+    /// The protocol family this kind belongs to, as the routing code names it.
+    pub fn protocol_family(self) -> &'static str {
+        match self {
+            Self::NzbFile | Self::NzbUrl => "usenet",
+            Self::TorrentFile | Self::MagnetUri => "torrent",
+            Self::HttpResource => "http",
         }
     }
 
@@ -2091,6 +2129,7 @@ impl DownloadSourceKind {
         match plugin_type.map(|value| value.trim().to_ascii_lowercase()) {
             Some(plugin_type) if plugin_type == "torrent_indexer" => Some(Self::TorrentFile),
             Some(plugin_type) if plugin_type == "usenet_indexer" => Some(Self::NzbUrl),
+            Some(plugin_type) if plugin_type == "http_indexer" => Some(Self::HttpResource),
             _ => None,
         }
     }
@@ -2257,6 +2296,10 @@ pub struct IndexerSearchResult {
     /// snapshot that was scored; a replayed pending row arrives with its own.
     /// `None` on a result no scoring pass has seen.
     pub release_listing_json: Option<String>,
+    /// The HTTP-family release description an `http` indexer attached. The
+    /// grab carries it to submission, where the host resolves it and builds
+    /// the client selection. `None` for every other protocol family.
+    pub http: Option<scryer_plugin_sdk::PluginHttpRelease>,
 }
 
 impl IndexerSearchResult {
@@ -2357,6 +2400,17 @@ impl IndexerSearchResult {
     }
 
     pub fn canonical_download_source(&self) -> Option<(String, DownloadSourceKind)> {
+        // An HTTP release is identified by its canonical provider page, never
+        // by a download or CDN URL the indexer may also have set, and a
+        // release that offers only a provider page sets neither.
+        if let Some(page_url) = self
+            .http
+            .as_ref()
+            .map(|http| http.page_url.trim())
+            .filter(|page_url| !page_url.is_empty())
+        {
+            return Some((page_url.to_string(), DownloadSourceKind::HttpResource));
+        }
         let explicit_nzb = matches!(
             self.source_kind,
             Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
@@ -2406,6 +2460,7 @@ mod canonical_download_source_tests {
             );
         }
         IndexerSearchResult {
+            http: None,
             indexer_id: None,
             source: "test".to_string(),
             title: "release".to_string(),
@@ -2476,6 +2531,27 @@ mod canonical_download_source_tests {
     }
 
     #[test]
+    fn http_release_is_identified_by_its_provider_page() {
+        let page_url = "https://video.invalid/watch?v=synthetic-1";
+        let mut result = result(None);
+        result.source_kind = Some(DownloadSourceKind::HttpResource);
+        result.http = Some(scryer_plugin_sdk::PluginHttpRelease {
+            provider: "synthetic".to_string(),
+            item_id: "synthetic-1".to_string(),
+            page_url: format!(" {page_url} "),
+            ..Default::default()
+        });
+        let expected = Some((page_url.to_string(), DownloadSourceKind::HttpResource));
+        // A download URL the indexer also set is not the release identity.
+        assert_eq!(result.canonical_download_source(), expected);
+
+        // A provider-page-only release carries neither link nor download URL.
+        result.link = None;
+        result.download_url = None;
+        assert_eq!(result.canonical_download_source(), expected);
+    }
+
+    #[test]
     fn explicit_nzb_ignores_stray_magnet_metadata() {
         let mut result = result(Some(
             "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
@@ -2488,6 +2564,30 @@ mod canonical_download_source_tests {
                 "https://example.test/download".to_string(),
                 DownloadSourceKind::NzbUrl,
             )
+        );
+    }
+
+    #[test]
+    fn http_resource_source_kind_round_trips_and_names_its_family() {
+        assert_eq!(
+            DownloadSourceKind::parse(DownloadSourceKind::HttpResource.as_str()),
+            Some(DownloadSourceKind::HttpResource)
+        );
+        assert_eq!(
+            DownloadSourceKind::parse("http"),
+            Some(DownloadSourceKind::HttpResource)
+        );
+        assert_eq!(DownloadSourceKind::HttpResource.protocol_family(), "http");
+        assert_eq!(DownloadSourceKind::NzbUrl.protocol_family(), "usenet");
+        assert_eq!(DownloadSourceKind::MagnetUri.protocol_family(), "torrent");
+        assert_eq!(
+            DownloadSourceKind::infer_from_indexer_result(
+                Some("http_indexer"),
+                Some("https://video.example/watch?v=abc123"),
+                None,
+                &HashMap::new(),
+            ),
+            Some(DownloadSourceKind::HttpResource)
         );
     }
 
@@ -4416,16 +4516,65 @@ pub struct UiCatalogViewUpdate {
     pub columns: Option<Vec<UiTableColumnSetting>>,
 }
 
+/// Curated appearance saved on the user profile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UiPalette {
+    #[default]
+    Classic,
+    ScryerDefault,
+    Slate,
+    Ocean,
+    Forest,
+    Plum,
+    Ember,
+    Graphite,
+    Papyrus,
+}
+
+impl UiPalette {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Classic => "CLASSIC",
+            Self::ScryerDefault => "SCRYER_DEFAULT",
+            Self::Slate => "SLATE",
+            Self::Ocean => "OCEAN",
+            Self::Forest => "FOREST",
+            Self::Plum => "PLUM",
+            Self::Ember => "EMBER",
+            Self::Graphite => "GRAPHITE",
+            Self::Papyrus => "PAPYRUS",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "CLASSIC" => Some(Self::Classic),
+            "SCRYER_DEFAULT" => Some(Self::ScryerDefault),
+            "SLATE" => Some(Self::Slate),
+            "OCEAN" => Some(Self::Ocean),
+            "FOREST" => Some(Self::Forest),
+            "PLUM" => Some(Self::Plum),
+            "EMBER" => Some(Self::Ember),
+            "GRAPHITE" => Some(Self::Graphite),
+            "PAPYRUS" => Some(Self::Papyrus),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiSettings {
     pub user_id: String,
     pub theme: UiTheme,
+    pub palette: UiPalette,
     pub date_time_format: UiDateTimeFormat,
     pub highlight_color: Option<String>,
     pub secondary_color: Option<String>,
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
+    /// Turns off the decorative accent glow in the interface.
+    pub no_glow: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4440,12 +4589,15 @@ pub struct UiSettings {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiSettingsUpdate {
     pub theme: UiTheme,
+    pub palette: UiPalette,
     pub date_time_format: UiDateTimeFormat,
     pub highlight_color: Option<String>,
     pub secondary_color: Option<String>,
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
+    /// Turns off the decorative accent glow in the interface.
+    pub no_glow: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4460,12 +4612,16 @@ impl UiSettings {
         Self {
             user_id: user_id.into(),
             theme: UiTheme::default(),
+            palette: UiPalette::default(),
             date_time_format: UiDateTimeFormat::default(),
             highlight_color: None,
             secondary_color: None,
             high_contrast_mode: false,
             reduce_motion: false,
             hide_sponsor_button: false,
+            // New users start without the glow; migration 0306 kept it for
+            // users of instances that were already in use.
+            no_glow: true,
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),

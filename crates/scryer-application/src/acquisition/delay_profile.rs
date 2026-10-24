@@ -388,6 +388,9 @@ impl DelayProfile {
     pub fn get_protocol_delay(&self, source_kind: Option<DownloadSourceKind>) -> i64 {
         if is_usenet_source(source_kind) {
             self.usenet_delay_minutes
+        } else if matches!(source_kind, Some(DownloadSourceKind::HttpResource)) {
+            // HTTP releases have no better-copy-arrives-later dynamic; no delay.
+            0
         } else {
             self.torrent_delay_minutes
         }
@@ -399,7 +402,8 @@ impl DelayProfile {
             Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
                 self.enable_torrent
             }
-            None => true,
+            // Delay profiles have no HTTP toggle; the family is always on.
+            Some(DownloadSourceKind::HttpResource) | None => true,
         }
     }
 
@@ -412,7 +416,7 @@ impl DelayProfile {
             Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
                 self.preferred_protocol == PreferredProtocol::Torrent
             }
-            None => false,
+            Some(DownloadSourceKind::HttpResource) | None => false,
         }
     }
 

@@ -174,16 +174,16 @@ export function TitleHistoryModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         id="title-history-dialog"
-        className="w-[calc(100%-1rem)] max-w-[95vw] sm:max-w-5xl lg:max-w-6xl max-h-[85vh] overflow-hidden flex flex-col"
+        className="w-[calc(100%-1rem)] min-w-0 max-w-[95vw] sm:max-w-5xl lg:max-w-6xl max-h-[90dvh] overflow-hidden flex flex-col p-4 sm:p-6"
       >
-        <DialogHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between sm:pr-8">
-          <DialogTitle className="min-w-0">{titleName} — {t("history.title")}</DialogTitle>
+        <DialogHeader className="min-w-0 gap-3 text-left lg:flex-row lg:items-center lg:justify-between lg:pr-8">
+          <DialogTitle className="min-w-0 break-words pr-8 lg:pr-0">{titleName} — {t("history.title")}</DialogTitle>
           <HistoryEventTypeMultiSelect
             id="title-history-event-types"
             eventTypes={TITLE_HISTORY_FILTERS}
             selectedEventTypes={activeFilters}
             onSelectedEventTypesChange={setActiveFilters}
-            triggerClassName="h-9 sm:w-[320px] sm:shrink-0"
+            triggerClassName="h-9 w-full min-w-0 lg:w-[320px] lg:shrink-0"
           />
         </DialogHeader>
 
@@ -196,17 +196,17 @@ export function TitleHistoryModal({
               variant="secondary"
               onClick={clearScopedEpisode}
               aria-label={`${t("label.remove")} ${(activeScopedEpisode?.episodeLabel ?? activeCollection?.collectionLabel)}`}
-              className="h-7 gap-1.5 px-2 text-xs"
+              className="h-auto min-h-7 min-w-0 max-w-full gap-1.5 px-2 py-1 text-xs"
             >
-              <span className="max-w-[32rem] truncate">
+              <span className="min-w-0 max-w-[32rem] whitespace-normal break-words text-left">
                 {(activeScopedEpisode?.episodeLabel ?? activeCollection?.collectionLabel)}
               </span>
-              <X className="h-3 w-3" />
+              <X className="h-3 w-3 shrink-0" />
             </Button>
           </div>
         ) : null}
 
-        <div className="flex-1 overflow-y-auto min-h-0">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {error ? (
             <div
               role="alert"

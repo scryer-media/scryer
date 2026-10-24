@@ -299,7 +299,16 @@ export function useTitleTableVirtualizerRebuild<TElement extends HTMLElement>({
       const currentOffset =
         typeof virtualOffset === "number" ? virtualOffset : element.scrollTop;
       if (currentOffset > maxScrollTop || element.scrollTop > maxScrollTop) {
+        const scrollTopBefore = element.scrollTop;
         titleVirtualizer.scrollToOffset(maxScrollTop);
+        // The virtualizer only reads its offset back on a scroll event. When
+        // the element already sits at the clamped position, as a restored
+        // offset past the end of a table that no longer scrolls does, none
+        // follows, and the virtualizer keeps rendering the rows for its stale
+        // offset below an empty spacer.
+        if (element.scrollTop === scrollTopBefore) {
+          element.dispatchEvent(new Event("scroll"));
+        }
       }
     };
     rebuildVirtualTable();

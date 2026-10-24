@@ -2142,7 +2142,9 @@ async fn commit_season_pack_proposal(
             let release_listing_json = ReleaseListingSnapshot::json_for_candidate(best_pack, *now);
             let canonical_result = app
                 .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                    http_release: best_pack.http.clone(),
                     request: DownloadClientAddRequest {
+                        http: None,
                         title: title.clone(),
                         search_facet: None,
                         purpose: crate::DownloadSubmissionPurpose::Standard,
@@ -4479,6 +4481,7 @@ async fn process_single_target(
                             .unwrap_or(*now)
                     };
                 let pending = PendingRelease {
+                    http_release: candidate.http.clone(),
                     id: Id::new().0,
                     wanted_item_id: item.id.clone(),
                     title_id: title.id.clone(),
@@ -5038,7 +5041,9 @@ async fn commit_scope_grab(
         let release_listing_json = ReleaseListingSnapshot::json_for_candidate(candidate, *now);
         let canonical_result = app
             .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                http_release: candidate.http.clone(),
                 request: DownloadClientAddRequest {
+                    http: None,
                     title: title.clone(),
                     search_facet: (context.media_type == "series_movie")
                         .then_some(MediaFacet::Movie),
@@ -7645,6 +7650,7 @@ mod task_runner_tests {
         decision: Option<crate::QualityProfileDecision>,
     ) -> IndexerSearchResult {
         IndexerSearchResult {
+            http: None,
             indexer_id: None,
             source: "synthetic-indexer".to_string(),
             title: release_title.to_string(),

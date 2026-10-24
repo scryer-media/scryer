@@ -78,6 +78,7 @@ const SQLITE_PLUGIN_WASM_ZSTD_LEVEL: i32 = 3;
 const LEGACY_INDEXER_PLUGIN_TYPE: &str = "indexer";
 const USENET_INDEXER_PLUGIN_TYPE: &str = "usenet_indexer";
 const TORRENT_INDEXER_PLUGIN_TYPE: &str = "torrent_indexer";
+const HTTP_INDEXER_PLUGIN_TYPE: &str = "http_indexer";
 const CURRENT_SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
 fn current_scryer_version() -> &'static semver::Version {
     static VERSION: LazyLock<semver::Version> = LazyLock::new(|| {
@@ -89,7 +90,10 @@ fn current_scryer_version() -> &'static semver::Version {
 fn is_indexer_plugin_type(plugin_type: &str) -> bool {
     matches!(
         plugin_type,
-        LEGACY_INDEXER_PLUGIN_TYPE | USENET_INDEXER_PLUGIN_TYPE | TORRENT_INDEXER_PLUGIN_TYPE
+        LEGACY_INDEXER_PLUGIN_TYPE
+            | USENET_INDEXER_PLUGIN_TYPE
+            | TORRENT_INDEXER_PLUGIN_TYPE
+            | HTTP_INDEXER_PLUGIN_TYPE
     )
 }
 fn normalize_provider_key(provider_type: &str) -> String {
@@ -108,7 +112,7 @@ fn lifecycle_status_label(status: PluginLifecycleStatus) -> String {
 fn plugin_type_belongs_to_indexer_family(plugin_type: &str) -> bool {
     matches!(
         plugin_type,
-        "indexer" | "usenet_indexer" | "torrent_indexer"
+        "indexer" | "usenet_indexer" | "torrent_indexer" | "http_indexer"
     )
 }
 fn plugin_request_policy(

@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Any
 
 
-CATALOG_REDIRECT_URL = "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.json"
-CATALOG_REDIRECT_BUNDLE_URL = "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.bundle.json"
+CATALOG_REDIRECT_URL = "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.modern.redirect.json"
+CATALOG_REDIRECT_BUNDLE_URL = "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.modern.redirect.bundle.json"
 OFFICIAL_PLUGIN_REPOSITORY = "scryer-media/scryer-plugins"
 OFFICIAL_PLUGIN_WORKFLOW = ".github/workflows/release-plugin-v3.yml"
 OFFICIAL_PLUGIN_WORKFLOW_NAME = "release-plugin-v3"

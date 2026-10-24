@@ -80,10 +80,12 @@ impl RootChangeFixture {
                 "movies".to_string(),
                 vec![
                     LibraryRootDraft {
+                        id: None,
                         path: source.to_string_lossy().to_string(),
                         is_default: true,
                     },
                     LibraryRootDraft {
+                        id: None,
                         path: other.to_string_lossy().to_string(),
                         is_default: false,
                     },

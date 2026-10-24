@@ -3,6 +3,12 @@ import { ChevronDown, TriangleAlertIcon } from "lucide-react";
 import { useClient } from "urql";
 
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import {
+  AssignEpisodeFileDialog,
+  type AssignEpisodeFileOutcome,
+} from "@/components/dialogs/assign-episode-file-dialog";
+import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import type { EpisodeTargetEpisode } from "@/lib/utils/episode-target";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { PendingImportCard } from "@/components/containers/pending-import-card";
 import { Card, CardContent } from "@/components/ui/card";
@@ -358,6 +364,11 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
   const [resolvingItemId, setResolvingItemId] = React.useState<string | null>(null);
   const [ignoringItemId, setIgnoringItemId] = React.useState<string | null>(null);
   const [ignoreTargetItem, setIgnoreTargetItem] = React.useState<PendingImportItem | null>(null);
+  const [assignItem, setAssignItem] = React.useState<PendingImportItem | null>(null);
+  const [assignEpisodes, setAssignEpisodes] = React.useState<EpisodeTargetEpisode[] | null>(null);
+  const [assignSuggestedEpisodeIds, setAssignSuggestedEpisodeIds] = React.useState<string[]>([]);
+  const [assignLoadError, setAssignLoadError] = React.useState<string | null>(null);
+  const assignRequestRef = React.useRef(0);
   const inFlightPendingImportActionsRef = React.useRef<Set<string>>(new Set());
   const libraryNameById = React.useMemo(
     () => new Map(libraries.map((library) => [library.id, library.name])),
@@ -875,6 +886,82 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
     }
   }, [activeItem, clearActiveItem, client, refreshAll, selectedEpisodeIds, setGlobalStatus, t]);
 
+  // An import held because its anime numbering was ambiguous gets the same
+  // episode picker as a library file, and completes through the ordinary bind.
+  const handleOpenAssignEpisode = React.useCallback((item: PendingImportItem) => {
+    const request = ++assignRequestRef.current;
+    setAssignItem(item);
+    setAssignEpisodes(null);
+    setAssignSuggestedEpisodeIds([]);
+    setAssignLoadError(null);
+    void client
+      .query(pendingImportBindingPreviewQuery, { pendingImportId: item.id }, { requestPolicy: "network-only" })
+      .toPromise()
+      .then(({ data, error }) => {
+        if (error) throw error;
+        if (assignRequestRef.current !== request) return;
+        const preview = data?.pendingImportBindingPreview as PendingImportBindingPreview | undefined;
+        setAssignSuggestedEpisodeIds(preview?.file.suggestedEpisodeIds ?? []);
+        setAssignEpisodes(
+          (preview?.availableEpisodes ?? []).map((episode) => ({
+            id: episode.id,
+            seasonNumber: episode.seasonNumber ?? null,
+            episodeNumber: episode.episodeNumber ?? null,
+            absoluteNumber: episode.absoluteNumber ?? null,
+            title: episode.title ?? null,
+          })),
+        );
+      })
+      .catch((err: unknown) => {
+        if (assignRequestRef.current !== request) return;
+        setAssignLoadError(userFacingGraphQlErrorMessage(err, t("pendingImports.bindPreviewLoadFailed")));
+      });
+  }, [client, t]);
+
+  const handleAssignEpisodeOpenChange = React.useCallback((open: boolean) => {
+    if (open) return;
+    assignRequestRef.current += 1;
+    setAssignItem(null);
+  }, []);
+
+  const handleConfirmAssignEpisode = React.useCallback(
+    async (episodeIds: string[]): Promise<AssignEpisodeFileOutcome> => {
+      const item = assignItem;
+      if (!item) return { kind: "error", message: t("pendingImports.bindFailed") };
+      if (inFlightPendingImportActionsRef.current.has(item.id)) {
+        return { kind: "error", message: t("pendingImports.bindFailed") };
+      }
+      inFlightPendingImportActionsRef.current.add(item.id);
+      setResolvingItemId(item.id);
+      try {
+        const { data, error: mutationError } = await client
+          .mutation(bindPendingImportMutation, {
+            input: { pendingImportId: item.id, episodeIds },
+          })
+          .toPromise();
+        if (mutationError) {
+          return {
+            kind: "error",
+            message: userFacingGraphQlErrorMessage(mutationError, t("pendingImports.bindFailed")),
+          };
+        }
+        const result = data?.bindPendingImport as ResolvePendingImportResult | undefined;
+        dispatchNavigationBadgesRefresh();
+        await refreshAll();
+        setGlobalStatus(
+          t("pendingImports.resolveSuccess", {
+            name: result?.title?.name?.trim() || item.displayName,
+          }),
+        );
+        return { kind: "assigned" };
+      } finally {
+        inFlightPendingImportActionsRef.current.delete(item.id);
+        setResolvingItemId((current) => (current === item.id ? null : current));
+      }
+    },
+    [assignItem, client, refreshAll, setGlobalStatus, t],
+  );
+
   const handleIgnore = React.useCallback(async () => {
     if (!ignoreTargetItem || ignoreTargetItem.status !== "PENDING") {
       return;
@@ -1019,6 +1106,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
             onOpenSearch={handleOpenSearch}
             onRequestIgnore={handleRequestIgnore}
             onBind={handleBind}
+            onAssignEpisode={handleOpenAssignEpisode}
             onResolve={handleResolve}
             onToggleEpisodeSelection={toggleEpisodeSelection}
             onSetSelectedEpisodeIds={setSelectedEpisodeIds}
@@ -1039,6 +1127,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
     clearActiveItem,
     expandedBindingSeasonKeys,
     handleBind,
+    handleOpenAssignEpisode,
     handleOpenSearch,
     handleRequestIgnore,
     handleResolve,
@@ -1176,6 +1265,21 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
       isBusy={Boolean(ignoreTargetItem && ignoringItemId === ignoreTargetItem.id)}
       onConfirm={() => void handleIgnore()}
       onCancel={() => setIgnoreTargetItem(null)}
+    />
+    <AssignEpisodeFileDialog
+      open={assignItem !== null}
+      onOpenChange={handleAssignEpisodeOpenChange}
+      idPrefix="pending-import-assign-episode"
+      fileName={assignItem?.path ?? null}
+      description={t("episodeAssign.pendingDescription", {
+        name: assignItem?.displayName ?? t("episodeAssign.unnamed"),
+      })}
+      episodes={assignEpisodes}
+      loadError={assignLoadError}
+      initialEpisodeIds={assignSuggestedEpisodeIds}
+      requireChange={false}
+      replaceSupported={false}
+      onConfirm={handleConfirmAssignEpisode}
     />
     </>
   );

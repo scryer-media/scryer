@@ -12,7 +12,7 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { pluginErrorMessage } from "@/lib/utils/plugin-error-message";
 import { isAbortError } from "@/lib/graphql/urql-client";
 import {
   runIterativeReleaseSearch,
@@ -195,6 +195,7 @@ type Props = {
   deleteLoading?: boolean;
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
+  onAssignFileToEpisode?: (fileId: string) => void;
   primaryMovieFileUpdatingId?: string | null;
   /**
    * Open the confirm flow for deleting the media files of the selected
@@ -270,6 +271,7 @@ function SeriesOverviewViewImpl({
   deleteLoading = false,
   onDeleteFile,
   onMakePrimaryFile,
+  onAssignFileToEpisode,
   primaryMovieFileUpdatingId = null,
   onRequestDeleteEpisodeFiles,
   episodeSelectionResetToken,
@@ -773,7 +775,7 @@ function SeriesOverviewViewImpl({
           await onTitleChanged?.();
         })
         .catch((error: unknown) => {
-          setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+          setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
         });
     },
     [
@@ -814,7 +816,7 @@ function SeriesOverviewViewImpl({
         setGlobalStatus(t("status.queuedLatest", { name: title.name }), { level: "SUCCESS" });
         await onTitleChanged?.();
       } catch (error: unknown) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
       }
     },
     [onTitleChanged, client, setGlobalStatus, t, title],
@@ -839,7 +841,7 @@ function SeriesOverviewViewImpl({
       dispatchEpisodePanel({ type: "SET_AUTO_SEARCH_LOADING", episodeId, loading: true });
       Promise.resolve(onAutoSearchEpisode(episode))
         .catch((error: unknown) => {
-          setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+          setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
         })
         .finally(() => {
           dispatchEpisodePanel({ type: "SET_AUTO_SEARCH_LOADING", episodeId, loading: false });
@@ -966,7 +968,7 @@ function SeriesOverviewViewImpl({
           await onTitleChanged?.();
         })
         .catch((error: unknown) => {
-          setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+          setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
         });
     },
     [
@@ -1009,7 +1011,7 @@ function SeriesOverviewViewImpl({
         setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
         await onTitleChanged?.();
       } catch (error: unknown) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
       }
     },
     [client, onTitleChanged, setGlobalStatus, t, title],
@@ -1034,7 +1036,7 @@ function SeriesOverviewViewImpl({
       }));
       Promise.resolve(onAutoSearchSeriesMovie(link))
         .catch((error: unknown) => {
-          setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+          setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
         })
         .finally(() => {
           setAutoSearchSeriesMovieLoadingByLink((prev) => ({
@@ -1074,11 +1076,14 @@ function SeriesOverviewViewImpl({
   }
 
   const overviewBackdropUrl = title.backgroundUrl;
+  const overviewBackdropGround = fullBleedHero ? "var(--scry-bg)" : "var(--card)";
 
   return (
     <>
-      <div className="space-y-4">
+      <div data-ui="title-overview" className="space-y-4">
       <Card
+        data-ui="title-overview-hero"
+        data-full-bleed={fullBleedHero || undefined}
         className={
           fullBleedHero
             ? "relative -mx-4 -mt-4 overflow-hidden rounded-none border-0 p-0 sm:-mx-5 sm:-mt-5"
@@ -1103,7 +1108,7 @@ function SeriesOverviewViewImpl({
               className="absolute inset-0"
               style={{
                 background:
-                  "linear-gradient(to top, var(--color-card) 0%, var(--color-card) 5%, color-mix(in srgb, var(--color-card) 82%, transparent), color-mix(in srgb, var(--color-card) 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)",
+                  `linear-gradient(to top, ${overviewBackdropGround} 0%, ${overviewBackdropGround} 5%, color-mix(in srgb, ${overviewBackdropGround} 82%, transparent), color-mix(in srgb, ${overviewBackdropGround} 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)`,
               }}
             />
             {fullBleedHero ? (
@@ -1257,7 +1262,6 @@ function SeriesOverviewViewImpl({
         <div>
           <TitleOverviewActions
             key={title.id}
-            titleId={title.id}
             monitored={title.monitored}
             monitoredUpdating={monitoredUpdating}
             onToggleMonitoring={
@@ -1419,6 +1423,7 @@ function SeriesOverviewViewImpl({
                     libraryId={title?.libraryId ?? null}
                     onRefreshSubtitles={onRefreshSubtitles}
                     onMakePrimaryFile={canManageTitle ? onMakePrimaryFile : undefined}
+                    onAssignFileToEpisode={canManageTitle ? onAssignFileToEpisode : undefined}
                     primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
                     releaseBlocklistEntries={releaseBlocklistEntries}
                     clearingReleaseBlocklistEntryId={clearingReleaseBlocklistEntryId}

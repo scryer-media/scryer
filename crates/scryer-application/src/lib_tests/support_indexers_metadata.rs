@@ -36,6 +36,7 @@ impl IndexerClient for MockIndexerClient {
 
             indexer_outcomes: Vec::new(),
             results: vec![IndexerSearchResult {
+                http: None,
                 indexer_id: None,
                 source: "nzbgeek".into(),
                 title: format!("match for {query}"),
@@ -378,6 +379,7 @@ impl IndexerClient for TrackingIndexerClient {
                 .map(|release_title| {
                     let release_slug = release_title.replace([' ', '/'], ".");
                     IndexerSearchResult {
+                        http: None,
                         indexer_id: stamped_indexer_id.clone(),
                         source: "nzbgeek".into(),
                         title: release_title.clone(),
@@ -538,6 +540,7 @@ impl FixedReleaseIndexerClient {
             (None, None)
         };
         IndexerSearchResult {
+            http: None,
             // A real search names the indexer that served the result; the
             // blocklist attributes a failure to it.
             indexer_id: Some("indexer-a".to_string()),
@@ -722,6 +725,7 @@ impl IndexerClient for SharedUrlMovieIndexerClient {
 
             indexer_outcomes: Vec::new(),
             results: vec![IndexerSearchResult {
+                http: None,
                 indexer_id: None,
                 source: "nzbgeek".into(),
                 title: release_title.clone(),
@@ -833,6 +837,7 @@ impl IndexerClient for RecordingCategoriesIndexerClient {
 
             indexer_outcomes: Vec::new(),
             results: vec![IndexerSearchResult {
+                http: None,
                 indexer_id: None,
                 source: "nzbgeek".into(),
                 title: self.release_title.clone(),
@@ -963,6 +968,7 @@ impl IndexerClient for MultiReleaseIndexerClient {
                 .iter()
                 .enumerate()
                 .map(|(index, release_title)| IndexerSearchResult {
+                    http: None,
                     indexer_id: None,
                     source: "nzbgeek".into(),
                     title: release_title.clone(),

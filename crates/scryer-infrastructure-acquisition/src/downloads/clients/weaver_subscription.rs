@@ -1274,6 +1274,7 @@ mod tests {
         let on_page = bridge.map_queue_item(&queue_item(42, WeaverQueueState::Completed));
         let off_page = bridge.map_queue_item(&queue_item(99, WeaverQueueState::Completed));
         let mut prefetched = CompletedDownload {
+            subtitle_paths: Vec::new(),
             client_type: String::new(),
             client_id: String::new(),
             download_client_item_id: "42".to_string(),

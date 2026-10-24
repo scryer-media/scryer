@@ -146,6 +146,7 @@ mod tests {
 
     fn completed_download_with_parameters(parameters: Vec<(&str, &str)>) -> CompletedDownload {
         CompletedDownload {
+            subtitle_paths: Vec::new(),
             client_type: "sabnzbd".to_string(),
             client_id: "client-1".to_string(),
             download_client_item_id: "item-1".to_string(),

@@ -518,6 +518,13 @@ impl AppUseCase {
             .download_client_configs
             .delete_with_cleared_indexer_mapping_count(client_id)
             .await?;
+        // The config store retires this client's bindings in its transaction.
+        self.runtime
+            .acquisition
+            .invalidate_download_registry_observations();
+        // Recovery-only Activity rows are not present in the native snapshot.
+        // Retiring their client must invalidate the derived read model too.
+        self.invalidate_download_queue_read_model().await;
         // The failure record is about a client that no longer exists. Leaving
         // it would block a client re-added under the same id.
         if let Err(error) = self

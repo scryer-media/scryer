@@ -221,9 +221,7 @@ impl ConfigMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        let config_fields = app
-            .indexer_config_fields_for_provider_type(&config.provider_type)
-            .unwrap_or_default();
+        let config_fields = app.indexer_config_fields_for_config(&config).await;
 
         Ok(from_indexer_config_with_fields(config, &config_fields))
     }
@@ -272,9 +270,7 @@ impl ConfigMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        let config_fields = app
-            .indexer_config_fields_for_provider_type(&config.provider_type)
-            .unwrap_or_default();
+        let config_fields = app.indexer_config_fields_for_config(&config).await;
         Ok(from_indexer_config_with_fields(config, &config_fields))
     }
 
@@ -298,9 +294,7 @@ impl ConfigMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        let config_fields = app
-            .indexer_config_fields_for_provider_type(&config.provider_type)
-            .unwrap_or_default();
+        let config_fields = app.indexer_config_fields_for_config(&config).await;
         Ok(from_indexer_config_with_fields(config, &config_fields))
     }
 
@@ -324,9 +318,7 @@ impl ConfigMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        let config_fields = app
-            .indexer_config_fields_for_provider_type(&config.provider_type)
-            .unwrap_or_default();
+        let config_fields = app.indexer_config_fields_for_config(&config).await;
         Ok(from_indexer_config_with_fields(config, &config_fields))
     }
 

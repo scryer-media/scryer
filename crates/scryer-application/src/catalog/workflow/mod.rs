@@ -21,6 +21,7 @@ use crate::domain_events::{
 };
 use crate::quality::release_listing::ReleaseListingSnapshot;
 use crate::settings::settings::root_folder_entries_from_library_roots;
+use crate::title_delete as deletion_reason;
 use scryer_domain::{
     DomainEventPayload, JobRunCompletedEventData, JobRunFailedEventData, JobRunStartedEventData,
     MONITOR_TYPE_ADVANCED, MediaFileDeletedEventData, MediaFileDeletedReason,
@@ -46,3 +47,5 @@ include!("title_tags.rs");
 include!("collections.rs");
 include!("permissions.rs");
 include!("tests.rs");
+
+mod episode_file_reassign;

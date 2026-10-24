@@ -261,6 +261,7 @@ async fn set_default_library_root(ctx: &TestContext, facet: MediaFacet, root: &P
             &library_id,
             None,
             Some(vec![LibraryRootDraft {
+                id: None,
                 path: root.to_string_lossy().to_string(),
                 is_default: true,
             }]),

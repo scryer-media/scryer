@@ -426,7 +426,7 @@ impl AppUseCase {
         Ok(purged)
     }
 
-    async fn record_recycle_entry_purged_event(
+    pub(crate) async fn record_recycle_entry_purged_event(
         &self,
         actor: DomainEventActor,
         manifest: &crate::recycle_bin::RecycleManifest,

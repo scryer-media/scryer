@@ -221,6 +221,17 @@ pub struct DownloadSubmission {
     pub scope: SubmissionScope,
 }
 
+/// A grab intent no client job has bound yet, with the moment it was
+/// recorded. The cleanup that releases such intents needs `submitted_at` to
+/// judge whether a client's bounded history window reaches back far enough
+/// to prove the job absent. `None` when the stored timestamp does not parse,
+/// which proves nothing.
+#[derive(Clone, Debug)]
+pub struct UnconfirmedDownloadSubmission {
+    pub submission: DownloadSubmission,
+    pub submitted_at: Option<DateTime<Utc>>,
+}
+
 impl DownloadSubmission {
     /// Is this the tracker's observation stub rather than a Scryer submission?
     ///
@@ -1195,6 +1206,90 @@ pub struct ClaimedMediaFile {
     pub disposition: MediaFileCatalogDisposition,
 }
 
+/// One stored link of a media file to an episode, exactly as the row held it,
+/// so a reassignment that has to be undone can put it back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileEpisodeLinkRecord {
+    pub file_id: String,
+    pub episode_id: String,
+    pub role: MediaFileRole,
+    pub is_filler: bool,
+}
+
+/// An operator's request to make `episode_ids` the episodes one file serves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EpisodeFileReassignRequest {
+    pub file_id: String,
+    pub title_id: String,
+    /// Sorted and deduplicated, never empty.
+    pub episode_ids: Vec<String>,
+    /// Keep another file that is primary for a target episode as an additional
+    /// file of it instead of refusing.
+    pub replace: bool,
+}
+
+/// What a reassignment changed, in enough detail to undo it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EpisodeFileReassignment {
+    pub file_id: String,
+    /// The file's own links before the reassignment.
+    pub previous_links: Vec<FileEpisodeLinkRecord>,
+    /// The file's links now: primary for every target episode.
+    pub episode_ids: Vec<String>,
+    /// Other files' links that were primary for a target episode and are now
+    /// additional, as they were before.
+    pub demoted_links: Vec<FileEpisodeLinkRecord>,
+    /// Other files' links on an episode the file left that were the sole
+    /// additional file there and are now primary, as they were before.
+    pub promoted_links: Vec<FileEpisodeLinkRecord>,
+}
+
+impl EpisodeFileReassignment {
+    /// Episodes the file served before, sorted.
+    pub fn previous_episode_ids(&self) -> Vec<String> {
+        let mut ids = self
+            .previous_links
+            .iter()
+            .map(|link| link.episode_id.clone())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Files that lost the primary role on a target episode, sorted.
+    pub fn demoted_file_ids(&self) -> Vec<String> {
+        let mut ids = self
+            .demoted_links
+            .iter()
+            .map(|link| link.file_id.clone())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+}
+
+/// What a request to reassign one file's episodes did. Every variant but
+/// `Reassigned` wrote nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EpisodeFileReassignOutcome {
+    Reassigned(EpisodeFileReassignment),
+    /// The file does not exist, or belongs to another title.
+    FileNotFound,
+    /// The file serves a series movie, which is not an episode link.
+    SeriesMovieFile,
+    /// A target episode is not one of the title's episodes.
+    EpisodeOutsideTitle {
+        episode_id: String,
+    },
+    /// Another file is primary for a target episode and `replace` was false.
+    PrimaryConflict {
+        episode_id: String,
+        file_id: String,
+    },
+}
+
 /// What a request to replace one file's episode links did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EpisodeLinkReplacement {
@@ -1363,6 +1458,11 @@ pub struct DownloadClientAddRequest {
     /// title to route by, so the operator names the client instead and it wins
     /// over both. `None` everywhere else, which leaves routing untouched.
     pub pinned_download_client_id: Option<String>,
+    /// The complete HTTP-family source block for an `HttpResource` grab:
+    /// the resolved release, the host selection derived from the quality
+    /// profile and language settings, and the output policy. Built at
+    /// submission; `None` for every other protocol family.
+    pub http: Option<scryer_plugin_sdk::PluginHttpDownloadSource>,
 }
 
 impl std::fmt::Debug for DownloadClientAddRequest {
@@ -1451,6 +1551,7 @@ impl DownloadClientAddRequest {
             is_recent: None,
             season_pack: None,
             pinned_download_client_id: None,
+            http: None,
         }
     }
 }

@@ -55,9 +55,13 @@ pub(crate) fn fetch_response_json(item_key: &str) -> String {
 }
 
 pub(crate) fn fetch_failure_json() -> String {
+    fetch_failure_json_with(PluginErrorCode::Permanent)
+}
+
+fn fetch_failure_json_with(code: PluginErrorCode) -> String {
     serde_json::to_string(&PluginCommandResponse::new(PluginCommandResult::List(
         PluginListCommandResult::Fetch(PluginResult::Err(PluginError {
-            code: PluginErrorCode::Permanent,
+            code,
             public_message: "list host binding mismatch".to_string(),
             debug_message: None,
             retry_after_seconds: None,
@@ -177,6 +181,28 @@ async fn a_disabled_host_answers_in_band_rather_than_failing_the_call() {
         .await
         .expect("a disabled host must not fail the invocation itself");
     assert!(matches!(fetch_result(response), PluginResult::Err(_)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_open_error_code_reaches_the_host_intact() {
+    let wasm = wat::parse_str(fixtures::fixture_component_wat(
+        &list_descriptor_json("fixture-lists"),
+        &fetch_response_json("unused"),
+        &fetch_failure_json_with(PluginErrorCode::from("item_not_found")),
+        &fixtures::host_request_bytes(),
+        &fixtures::expected_host_response_bytes(),
+    ))
+    .expect("fixture list component WAT must assemble");
+    // A disabled host makes the fixture answer with its failure document.
+    let spec = fixtures::test_spec(wasm, CommandHost::disabled());
+    let response = process_list_component(&spec, &fetch_request(), invocation())
+        .await
+        .expect("a disabled host must not fail the invocation itself");
+    let PluginResult::Err(error) = fetch_result(response) else {
+        panic!("the fixture must answer with its failure document");
+    };
+    assert_eq!(error.code.as_str(), "item_not_found");
+    assert!(!error.code.is_known());
 }
 
 #[tokio::test(flavor = "multi_thread")]

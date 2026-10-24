@@ -1,6 +1,7 @@
 import * as React from "react";
 import { IconButton } from "@/components/ui/icon-button";
 import { useTranslate } from "@/lib/context/translate-context";
+import { cn } from "@/lib/utils";
 import type { Release } from "@/lib/types";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import type {
@@ -33,7 +34,13 @@ export function EpisodeTableActionButton({
       label={label}
       tone={tone}
       showTitleAttribute={showTitleAttribute}
-      className={className}
+      className={cn(
+        "relative z-[1] bg-background hover:bg-background",
+        tone === "auto"
+          ? "bg-[linear-gradient(var(--scry-success-bg),var(--scry-success-bg))] hover:bg-[linear-gradient(var(--scry-success-bg-strong),var(--scry-success-bg-strong))]"
+          : "bg-[linear-gradient(var(--scry-info-bg),var(--scry-info-bg))] hover:bg-[linear-gradient(var(--scry-info-bg-strong),var(--scry-info-bg-strong))]",
+        className,
+      )}
       {...props}
     >
       {children}

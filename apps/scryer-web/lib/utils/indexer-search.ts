@@ -62,7 +62,9 @@ export function indexerSearchRowKey(release: Release): string {
   return indexerSearchResultRowId(release);
 }
 
-export function releaseProtocol(release: Release): "usenet" | "torrent" | null {
+export type ReleaseProtocol = "usenet" | "torrent" | "http";
+
+export function releaseProtocol(release: Release): ReleaseProtocol | null {
   switch (release.sourceKind) {
     case "NZB_FILE":
     case "NZB_URL":
@@ -70,6 +72,8 @@ export function releaseProtocol(release: Release): "usenet" | "torrent" | null {
     case "TORRENT_FILE":
     case "MAGNET_URI":
       return "torrent";
+    case "HTTP_RESOURCE":
+      return "http";
     default:
       return null;
   }

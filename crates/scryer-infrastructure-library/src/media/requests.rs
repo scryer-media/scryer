@@ -921,8 +921,9 @@ async fn resolve_pending_overlapping_tx(
     })
 }
 
-/// The approval and its hold commit together. If claim persistence fails, the
-/// request stays pending, with no approval event, so an operator can retry.
+/// The approval and its lease commit together. If claim persistence fails, the
+/// request stays pending, with no approval event, so an operator can retry. A
+/// request approved without a lease (none, or zero days) writes no claim.
 async fn create_approved_request_claim_tx(
     tx: &mut SqlTx<'_>,
     request: &MediaRequest,
@@ -930,10 +931,12 @@ async fn create_approved_request_claim_tx(
     if request.is_list_series_movie() {
         return Ok(());
     }
+    let Some(lease_days) = request.approved_lease_days.filter(|days| *days > 0) else {
+        return Ok(());
+    };
     let title_id = request.created_title_id.as_ref().ok_or_else(|| {
         AppError::Repository("approved request has no title for its retention claim".into())
     })?;
-    let finite = request.approved_lease_days.is_some();
     let now = request.resolved_at.unwrap_or(request.updated_at);
     tx.execute(
         "INSERT INTO lifecycle_claims
@@ -944,19 +947,12 @@ async fn create_approved_request_claim_tx(
             SqlArg::Text(scryer_domain::Id::new().0),
             SqlArg::Text(title_id.clone()),
             SqlArg::Text(request.library_id.clone()),
-            SqlArg::Text(
-                if finite {
-                    "request_lease"
-                } else {
-                    "request_permanent"
-                }
-                .into(),
-            ),
+            SqlArg::Text("request_lease".into()),
             SqlArg::Text(request.id.clone()),
-            SqlArg::Text(if finite { "retain_until" } else { "keep" }.into()),
-            SqlArg::Text(if finite { "dormant" } else { "active" }.into()),
-            SqlArg::OptI64(request.approved_lease_days),
-            SqlArg::OptTimestamp((!finite).then_some(now)),
+            SqlArg::Text("retain_until".into()),
+            SqlArg::Text("dormant".into()),
+            SqlArg::OptI64(Some(lease_days)),
+            SqlArg::OptTimestamp(None),
             SqlArg::OptTimestamp(None),
             SqlArg::Text(request.created_by_user_id.clone()),
             SqlArg::Timestamp(now),

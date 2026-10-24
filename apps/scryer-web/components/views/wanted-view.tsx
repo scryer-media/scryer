@@ -1,5 +1,4 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
 import type { OverviewTitleTarget, ViewId, WantedSection } from "@/components/root/types";
@@ -10,7 +9,6 @@ import { buildViewPath } from "@/lib/utils/routing";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId, wantedItemRowId, wantedItemSearchNowId } from "@/lib/utils/dom-ids";
 import { parseDecisionExplanation } from "@/lib/utils/release-decision-explanation";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -451,46 +449,6 @@ export function WantedView({
 
   return (
     <div className="md:flex md:h-full md:min-h-0 md:flex-row">
-      <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[218px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]">
-        <nav
-          className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0"
-          aria-label={t("nav.wanted")}
-        >
-          {wantedNav.map((item) => {
-            const Icon = item.icon;
-            const active = item.active;
-            return (
-              <Link
-                key={item.section}
-                to={item.to}
-                className={cn(
-                  "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
-                  active &&
-                    "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
-                )}
-              >
-                <Icon
-                  className={cn(
-                    "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                    active && "text-[var(--scry-accent-text)]",
-                  )}
-                />
-                <span className="whitespace-nowrap">{item.label}</span>
-                {item.count === null ? null : (
-                  <span
-                    className={cn(
-                      "ml-auto rounded-md bg-[var(--scry-chip)] px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-[var(--scry-muted3)]",
-                      active && "bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-accent-text)]",
-                    )}
-                  >
-                    {item.count}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-        </nav>
-      </aside>
       <main className="min-w-0 flex-1 overflow-y-auto bg-transparent">
         <div className="mx-auto flex min-h-full w-full max-w-none flex-col px-4 py-5 sm:px-6 md:px-[30px] md:py-[26px] md:pb-[60px]">
           <div className="mb-4 flex items-center gap-1.5 text-[12.5px] text-[var(--scry-faint)]">

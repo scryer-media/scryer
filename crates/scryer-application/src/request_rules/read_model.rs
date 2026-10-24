@@ -270,11 +270,8 @@ impl AppUseCase {
                     claims
                         .iter()
                         .find(|claim| {
-                            matches!(
-                                claim.producer,
-                                LifecycleClaimProducer::RequestLease
-                                    | LifecycleClaimProducer::RequestPermanent
-                            ) && claim.producer_ref.as_deref() == Some(request.id.as_str())
+                            claim.producer == LifecycleClaimProducer::RequestLease
+                                && claim.producer_ref.as_deref() == Some(request.id.as_str())
                         })
                         .cloned()
                 });

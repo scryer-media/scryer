@@ -3164,6 +3164,9 @@ impl AppUseCase {
             .get_anime_numbering_bridge(&title.id)
             .await
             .unwrap_or_default();
+        let catalog_episodes = self
+            .community_numbering_catalog_episodes(title, anime_numbering_bridge.as_ref(), None)
+            .await;
         queries.extend(community_numbering_queries(
             title,
             episode_record.as_ref(),
@@ -3171,12 +3174,14 @@ impl AppUseCase {
             episode_num as i32,
             anime_numbering_bridge.as_ref(),
             absolute_scale,
+            catalog_episodes.as_deref().map(Vec::as_slice),
         ));
         let numbering_context = community_numbering_context(
             title,
             season_num as i32,
             episode_num as i32,
             anime_numbering_bridge.as_ref(),
+            catalog_episodes.as_deref().map(Vec::as_slice),
         );
         let mut seen = HashSet::new();
         queries.retain(|query| !query.trim().is_empty() && seen.insert(query.to_ascii_lowercase()));
@@ -3479,6 +3484,13 @@ impl AppUseCase {
         let absolute_scale = self
             .release_search_absolute_scale(search_title, episode, reads)
             .await?;
+        let catalog_episodes = self
+            .community_numbering_catalog_episodes(
+                search_title,
+                anime_numbering_bridge.as_ref(),
+                reads,
+            )
+            .await;
         let query_result = build_search_queries(
             search_title,
             item,
@@ -3486,6 +3498,7 @@ impl AppUseCase {
             &self.facet_registry,
             anime_numbering_bridge.as_ref(),
             absolute_scale,
+            catalog_episodes.as_deref().map(Vec::as_slice),
         );
         let owner_facet = if item.media_type == "series_movie" {
             owner_title.facet.clone()
@@ -3555,6 +3568,44 @@ impl AppUseCase {
     /// [`absolute_scale_known_without_lookup`].
     /// A title walk already holds the title's episodes, so it reads the scale
     /// off them rather than asking the catalog again.
+    /// The title's catalog episodes for the community-numbering collision
+    /// check, read only when the title has a bridge to translate through.
+    ///
+    /// `None` without a bridge, and when the read fails: the bridge's own
+    /// ranges still stand in as the oracle of real episodes, so a failed read
+    /// narrows the check rather than failing the search.
+    async fn community_numbering_catalog_episodes(
+        &self,
+        title: &Title,
+        bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+        reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
+    ) -> Option<std::sync::Arc<Vec<Episode>>> {
+        if bridge.is_none_or(scryer_domain::AnimeNumberingBridge::is_empty) {
+            return None;
+        }
+        let episodes = match reads.filter(|reads| reads.covers(&title.id)) {
+            Some(reads) => reads.episodes(self).await,
+            None => self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_title(&title.id)
+                .await
+                .map(std::sync::Arc::new),
+        };
+        match episodes {
+            Ok(episodes) => Some(episodes),
+            Err(error) => {
+                tracing::debug!(
+                    title_id = %title.id,
+                    error = %error,
+                    "community numbering: catalog episodes unavailable; checking against the bridge only"
+                );
+                None
+            }
+        }
+    }
+
     async fn release_search_absolute_scale(
         &self,
         title: &Title,
@@ -4384,6 +4435,7 @@ mod tests {
         provenance: Option<ReleaseCandidateProvenance>,
     ) -> IndexerSearchResult {
         IndexerSearchResult {
+            http: None,
             indexer_id: None,
             source: "nzbgeek".to_string(),
             title: release_title.to_string(),
@@ -5447,6 +5499,7 @@ mod tests {
             &crate::FacetRegistry::new(),
             None,
             scryer_domain::AbsoluteScale::Raw,
+            None,
         );
 
         assert_eq!(result.season, Some(0));
@@ -5477,6 +5530,7 @@ mod tests {
             &crate::FacetRegistry::new(),
             None,
             scryer_domain::AbsoluteScale::Raw,
+            None,
         );
 
         assert_eq!(result.season, Some(2));

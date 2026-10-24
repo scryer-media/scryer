@@ -6746,20 +6746,20 @@ async fn migration_0295_preserves_inherited_movie_availability() {
     );
 }
 
-/// Runs 0304 against a fully migrated schema holding one enabled destructive
+/// Runs 0305 against a fully migrated schema holding one enabled destructive
 /// maintenance rule, one shadow maintenance rule and one enforcing request
 /// rule, with the experimental-features setting stored as `value_json`, or
 /// absent when `experimental` is `None`. Returns the rule rows afterwards as
 /// `(id, enabled, evaluation_mode, effect_arming, destructive_rearm_required)`
 /// and `(id, enabled, evaluation_mode)`.
-async fn rules_after_0304(
+async fn rules_after_0305(
     experimental: Option<&str>,
 ) -> (
     Vec<(String, i64, String, String, i64)>,
     Vec<(String, i64, String)>,
 ) {
     let directory = tempfile::tempdir().expect("synthetic schema fixture");
-    let services = SqliteServices::new(directory.path().join("rules-0304.db").to_string_lossy())
+    let services = SqliteServices::new(directory.path().join("rules-0305.db").to_string_lossy())
         .await
         .expect("migrations should apply");
     let pool = services.pool().clone();
@@ -6808,7 +6808,7 @@ async fn rules_after_0304(
     }
 
     for statement in include_str!(
-        "../../../scryer/src/db/migrations/0304_rules_disabled_unless_experimental.sql"
+        "../../../scryer/src/db/migrations/0305_rules_disabled_unless_experimental.sql"
     )
     .split(';')
     .map(str::trim)
@@ -6817,7 +6817,7 @@ async fn rules_after_0304(
         sqlx::query(statement)
             .execute(&mut *conn)
             .await
-            .expect("0304 should apply");
+            .expect("0305 should apply");
     }
 
     let maintenance = sqlx::query_as(
@@ -6836,9 +6836,9 @@ async fn rules_after_0304(
 }
 
 #[tokio::test]
-async fn migration_0304_disables_every_rule_unless_experimental_features_are_on() {
+async fn migration_0305_disables_every_rule_unless_experimental_features_are_on() {
     for experimental in [None, Some("false"), Some("\"off\"")] {
-        let (maintenance, requests) = rules_after_0304(experimental).await;
+        let (maintenance, requests) = rules_after_0305(experimental).await;
         assert_eq!(
             maintenance,
             vec![
@@ -6868,9 +6868,9 @@ async fn migration_0304_disables_every_rule_unless_experimental_features_are_on(
 }
 
 #[tokio::test]
-async fn migration_0304_keeps_rule_states_when_experimental_features_are_on() {
+async fn migration_0305_keeps_rule_states_when_experimental_features_are_on() {
     for experimental in [Some("true"), Some("\"true\"")] {
-        let (maintenance, requests) = rules_after_0304(experimental).await;
+        let (maintenance, requests) = rules_after_0305(experimental).await;
         assert_eq!(
             maintenance,
             vec![
@@ -6897,4 +6897,250 @@ async fn migration_0304_keeps_rule_states_when_experimental_features_are_on() {
             "experimental = {experimental:?}"
         );
     }
+}
+
+/// Runs the user backfill from 0306 against a fully migrated schema holding a
+/// user with a saved glow choice and a user without saved settings. The
+/// instance's state is set by `setup_complete` (the stored `value_json`, or no
+/// value) and `with_title`. Returns the preference rows afterwards as
+/// `(user_id, no_glow)`.
+async fn ui_settings_after_0306(
+    setup_complete: Option<&str>,
+    with_title: bool,
+) -> Vec<(String, i64)> {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(directory.path().join("glow-0306.db").to_string_lossy())
+        .await
+        .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("glow backfill connection");
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded rows");
+
+    sqlx::query("DELETE FROM user_ui_settings")
+        .execute(&mut *conn)
+        .await
+        .expect("start without saved preferences");
+    sqlx::query("DELETE FROM users")
+        .execute(&mut *conn)
+        .await
+        .expect("start without users");
+    sqlx::query(
+        "INSERT INTO users (id, username, status, created_at, updated_at)
+         VALUES ('user-saved', 'synthetic-saved', 'active',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                ('user-unsaved', 'synthetic-unsaved', 'active',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed users");
+    sqlx::query("INSERT INTO user_ui_settings (user_id, no_glow) VALUES ('user-saved', 1)")
+        .execute(&mut *conn)
+        .await
+        .expect("seed saved preference");
+    if with_title {
+        sqlx::query(
+            "INSERT INTO titles
+             (id, name, name_normalized, library_id, root_folder_id, facet, created_at)
+             VALUES ('title-synthetic', 'Synthetic Title', 'synthetic title', 'library-synthetic',
+                     'root-synthetic', 'movie', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&mut *conn)
+        .await
+        .expect("seed title");
+    }
+    if let Some(value_json) = setup_complete {
+        sqlx::query(
+            "INSERT INTO settings_definitions
+             (id, category, scope, key_name, data_type, created_at, updated_at)
+             VALUES ('def-setup-complete', 'system', 'system', 'setup.complete',
+                     'boolean', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&mut *conn)
+        .await
+        .expect("seed setting definition");
+        sqlx::query(
+            "INSERT INTO settings_values
+             (id, setting_definition_id, scope, scope_id, value_json, source, created_at, updated_at)
+             VALUES ('value-setup-complete', 'def-setup-complete', 'system', NULL, ?, 'user',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(value_json)
+        .execute(&mut *conn)
+        .await
+        .expect("seed setting value");
+    }
+
+    // The column already exists in the migrated schema; replay only the backfill.
+    for statement in include_str!("../../../scryer/src/db/migrations/0306_user_ui_no_glow.sql")
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| statement.contains("INSERT INTO user_ui_settings"))
+    {
+        sqlx::query(statement)
+            .execute(&mut *conn)
+            .await
+            .expect("0306 backfill should apply");
+    }
+
+    sqlx::query_as("SELECT user_id, no_glow FROM user_ui_settings ORDER BY user_id")
+        .fetch_all(&mut *conn)
+        .await
+        .expect("read preferences")
+}
+
+#[tokio::test]
+async fn migration_0306_keeps_the_glow_for_users_of_instances_in_use() {
+    for (setup_complete, with_title) in [
+        (Some("true"), false),
+        (Some("\"true\""), false),
+        (None, true),
+        (Some("false"), true),
+    ] {
+        assert_eq!(
+            ui_settings_after_0306(setup_complete, with_title).await,
+            vec![
+                ("user-saved".to_string(), 1),
+                ("user-unsaved".to_string(), 0),
+            ],
+            "setup_complete = {setup_complete:?}, with_title = {with_title}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn migration_0306_leaves_fresh_installs_on_the_no_glow_default() {
+    for setup_complete in [None, Some("false")] {
+        assert_eq!(
+            ui_settings_after_0306(setup_complete, false).await,
+            vec![("user-saved".to_string(), 1)],
+            "setup_complete = {setup_complete:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn migration_0307_removes_operator_keeps_and_nothing_else() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(directory.path().join("keeps-0307.db").to_string_lossy())
+        .await
+        .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("keep removal connection");
+
+    // A live keep, a released keep, the lease a keep replaced, and request
+    // claims on titles nobody kept by hand.
+    sqlx::query(
+        "INSERT INTO lifecycle_claims
+         (id, title_id, library_id, producer, producer_ref, kind, state, duration_days)
+         VALUES ('keep-live', 'title-kept', 'library-synthetic', 'operator_keep', NULL,
+                 'keep', 'active', NULL),
+                ('keep-released', 'title-released', 'library-synthetic', 'operator_keep', NULL,
+                 'keep', 'released', NULL),
+                ('lease-converted', 'title-converted', 'library-synthetic', 'request_lease',
+                 'request-converted', 'retain_until', 'converted', 30),
+                ('keep-converted', 'title-converted', 'library-synthetic', 'operator_keep', NULL,
+                 'keep', 'active', NULL),
+                ('lease-live', 'title-leased', 'library-synthetic', 'request_lease',
+                 'request-leased', 'retain_until', 'dormant', 30),
+                ('request-forever', 'title-forever', 'library-synthetic', 'request_permanent',
+                 'request-forever', 'keep', 'active', NULL)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed claims");
+
+    for statement in include_str!(
+        "../../../scryer/src/db/migrations/0307_lifecycle_claims_remove_operator_keeps.sql"
+    )
+    .split(';')
+    .map(str::trim)
+    .filter(|statement| statement.contains("DELETE FROM"))
+    {
+        sqlx::query(statement)
+            .execute(&mut *conn)
+            .await
+            .expect("0307 should apply");
+    }
+
+    let remaining: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, state FROM lifecycle_claims ORDER BY id")
+            .fetch_all(&mut *conn)
+            .await
+            .expect("read claims");
+    assert_eq!(
+        remaining,
+        vec![
+            ("lease-converted".to_string(), "converted".to_string()),
+            ("lease-live".to_string(), "dormant".to_string()),
+            ("request-forever".to_string(), "active".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn migration_0308_keeps_only_claims_with_a_time_to_delete() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(directory.path().join("ttl-0308.db").to_string_lossy())
+        .await
+        .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("ttl cleanup connection");
+
+    // Forever requests, zero-day leases, an extended zero-day lease, and
+    // ordinary leases in every state.
+    sqlx::query(
+        "INSERT INTO lifecycle_claims
+         (id, title_id, library_id, producer, producer_ref, kind, state, duration_days,
+          expires_at)
+         VALUES ('forever-live', 'title-forever', 'library-synthetic', 'request_permanent',
+                 'request-forever', 'keep', 'active', NULL, NULL),
+                ('forever-released', 'title-forever-released', 'library-synthetic',
+                 'request_permanent', 'request-forever-released', 'keep', 'released', NULL,
+                 NULL),
+                ('zero-day', 'title-zero', 'library-synthetic', 'request_lease',
+                 'request-zero', 'retain_until', 'dormant', 0, NULL),
+                ('zero-day-extended', 'title-zero-extended', 'library-synthetic',
+                 'request_lease', 'request-zero-extended', 'retain_until', 'active', 0,
+                 '2030-01-01T00:00:00Z'),
+                ('lease-dormant', 'title-dormant', 'library-synthetic', 'request_lease',
+                 'request-dormant', 'retain_until', 'dormant', 30, NULL),
+                ('lease-expired', 'title-expired', 'library-synthetic', 'request_lease',
+                 'request-expired', 'retain_until', 'expired', 30, '2024-01-01T00:00:00Z'),
+                ('lease-converted', 'title-converted', 'library-synthetic', 'request_lease',
+                 'request-converted', 'retain_until', 'converted', 30, NULL)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed claims");
+
+    for statement in
+        include_str!("../../../scryer/src/db/migrations/0308_lifecycle_claims_ttl_only.sql")
+            .split(';')
+            .map(str::trim)
+            .filter(|statement| statement.contains("DELETE FROM"))
+    {
+        sqlx::query(statement)
+            .execute(&mut *conn)
+            .await
+            .expect("0308 should apply");
+    }
+
+    let remaining: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, state FROM lifecycle_claims ORDER BY id")
+            .fetch_all(&mut *conn)
+            .await
+            .expect("read claims");
+    assert_eq!(
+        remaining,
+        vec![
+            ("lease-converted".to_string(), "converted".to_string()),
+            ("lease-dormant".to_string(), "dormant".to_string()),
+            ("lease-expired".to_string(), "expired".to_string()),
+            ("zero-day-extended".to_string(), "active".to_string()),
+        ]
+    );
 }

@@ -35,6 +35,7 @@ import type { Release } from "@/lib/types";
 import type { CatalogDiscoveryItem } from "@/lib/types/discovery";
 import type { TitleRatings } from "@/components/views/title-ratings-strip";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { pluginErrorMessage } from "@/lib/utils/plugin-error-message";
 import {
   runIterativeReleaseSearch,
   titleReleaseSearchInput,
@@ -65,6 +66,10 @@ import {
 } from "@/lib/title-overview-loader";
 import { SeriesOverviewView } from "@/components/views/series-overview";
 import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
+import {
+  useEpisodeFileAssignment,
+  type EpisodeFileReassignment,
+} from "@/components/common/episode-file-assignment";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
 import { DeletePreviewSummary } from "@/components/common/delete-preview-summary";
@@ -80,6 +85,7 @@ import type {
   TitleCreditRecord,
 } from "@/lib/types/titles";
 import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
+import { deleteErrorMessage } from "@/lib/utils/delete-error-message";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
 import {
   deletedMediaFileIds,
@@ -1698,7 +1704,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       setEpisodeFilesToDelete(null);
       setEpisodeFilesDeleteTypedConfirmation("");
     } catch (error: unknown) {
-      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")), { level: "ERROR" });
+      setGlobalStatus(deleteErrorMessage(error, t, t("status.apiError")), { level: "ERROR" });
     } finally {
       setEpisodeFilesDeleteLoading(false);
     }
@@ -1737,6 +1743,44 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       }
     },
     [client, refreshTitleDetail, setGlobalStatus, t, title],
+  );
+
+  // A reassigned file leaves its old episodes and joins new ones, and a
+  // replaced primary is demoted on its episode, so every loaded episode on
+  // either side reloads its files along with the title.
+  const handleEpisodeFileAssigned = React.useCallback(
+    async (change: EpisodeFileReassignment) => {
+      const affectedEpisodeIds = new Set([...change.previousEpisodeIds, ...change.episodeIds]);
+      await refreshTitleDetail();
+      await Promise.all(
+        Array.from(affectedEpisodeIds)
+          .filter((episodeId) => episodeDetailsLoadedRef.current.has(episodeId))
+          .map((episodeId) => fetchEpisodeDetail(episodeId)),
+      );
+    },
+    [fetchEpisodeDetail, refreshTitleDetail],
+  );
+  const episodeFileAssignment = useEpisodeFileAssignment({
+    titleId: title?.id ?? null,
+    onAssigned: handleEpisodeFileAssigned,
+  });
+  const openEpisodeFileAssignment = episodeFileAssignment.openAssignment;
+  const handleAssignFileToEpisode = React.useCallback(
+    (fileId: string) => {
+      let filePath: string | null = null;
+      let originalReleaseName: string | null = null;
+      const episodeIds: string[] = [];
+      for (const [episodeId, files] of Object.entries(mediaFilesByEpisode)) {
+        const file = files.find((candidate) => candidate.id === fileId);
+        if (!file) continue;
+        filePath = file.filePath;
+        originalReleaseName ??= file.grabbedReleaseTitle?.trim() || file.sceneName?.trim() || null;
+        if (episodeId !== "__unlinked__") episodeIds.push(episodeId);
+      }
+      if (filePath === null) return;
+      openEpisodeFileAssignment({ fileId, filePath, originalReleaseName, episodeIds });
+    },
+    [mediaFilesByEpisode, openEpisodeFileAssignment],
   );
 
   const deleteTitleConfirmDisabled =
@@ -1982,7 +2026,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         setGlobalStatus(t("status.queuedLatest", { name: title.name }), { level: "SUCCESS" });
         await refreshTitleDetail();
       } catch (error: unknown) {
-        setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(pluginErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
       }
     },
     [
@@ -2072,11 +2116,13 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         episodeSelectionResetToken={episodeSelectionResetToken}
         pendingEpisodeIds={pendingEpisodeFileDeletionEpisodeIds}
         onMakePrimaryFile={canManageTitle ? handleMakePrimaryMovieFile : undefined}
+        onAssignFileToEpisode={canManageTitle ? handleAssignFileToEpisode : undefined}
         primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
         onOpenFixMatch={handleOpenFixMatch}
         moreLikeThisActions={moreLikeThisStripProps}
       />
       {moreLikeThisActions.dialogs}
+      {episodeFileAssignment.assignmentDialog}
       <FixTitleMatchDialog
         open={fixMatchOpen}
         onOpenChange={setFixMatchOpen}

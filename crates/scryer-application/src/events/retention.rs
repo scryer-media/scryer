@@ -38,6 +38,7 @@ pub(crate) const fn retention_class_for_domain_event_type(
         | DomainEventType::MediaFileImported
         | DomainEventType::MediaFileAnalyzed
         | DomainEventType::MediaFileRenamed
+        | DomainEventType::MediaFileReassigned
         | DomainEventType::MediaFileDeleted
         | DomainEventType::MediaFileRestored
         | DomainEventType::MediaFileUpgraded

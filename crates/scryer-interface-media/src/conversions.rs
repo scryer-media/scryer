@@ -81,6 +81,7 @@ impl IntoApplication<AppDownloadSourceKind> for DownloadSourceKindValue {
             Self::NzbUrl => AppDownloadSourceKind::NzbUrl,
             Self::TorrentFile => AppDownloadSourceKind::TorrentFile,
             Self::MagnetUri => AppDownloadSourceKind::MagnetUri,
+            Self::HttpResource => AppDownloadSourceKind::HttpResource,
         }
     }
 }
@@ -92,6 +93,7 @@ impl FromApplication<AppDownloadSourceKind> for DownloadSourceKindValue {
             AppDownloadSourceKind::NzbUrl => Self::NzbUrl,
             AppDownloadSourceKind::TorrentFile => Self::TorrentFile,
             AppDownloadSourceKind::MagnetUri => Self::MagnetUri,
+            AppDownloadSourceKind::HttpResource => Self::HttpResource,
         }
     }
 }

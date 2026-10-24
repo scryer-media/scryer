@@ -561,12 +561,17 @@ pub fn to_gql_error(err: AppError) -> Error {
         // Still a validation error to every client that reads `code`. The
         // reason rides beside it for clients that translate the failure
         // instead of showing the sentence.
-        AppError::ValidationRefused { message, reason } => {
-            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
-                extensions.set("code", "VALIDATION_ERROR");
-                extensions.set("reason", reason);
-            })
-        }
+        AppError::ValidationRefused {
+            message,
+            reason,
+            facts,
+        } => Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+            extensions.set("code", "VALIDATION_ERROR");
+            extensions.set("reason", reason);
+            for fact in &facts {
+                extensions.set(fact.key, fact.value.as_str());
+            }
+        }),
         AppError::LocationOperationBusy(message) => {
             coded_gql_error(message, "LOCATION_OPERATION_BUSY")
         }
@@ -721,6 +726,19 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::ManualReconciliationRequired(message) => {
             coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED")
         }
+        // A plugin's failure is the plugin's, not Scryer's, so it is not
+        // masked: the sentence is the host's own, the reason names the
+        // condition for clients that translate it, and the plugin's own public
+        // sentence, when it gave one, rides beside it as the detail.
+        AppError::PluginFailed { message, failure } => {
+            Error::new(message).extend_with(|_, extensions| {
+                extensions.set("code", "PLUGIN_FAILED");
+                extensions.set("reason", failure.reason.as_str());
+                if let Some(detail) = failure.detail {
+                    extensions.set("detail", detail);
+                }
+            })
+        }
         AppError::ImportEvidenceUnavailable(message) => repository_gql_error(message),
         error @ AppError::ImportSourceInspection { .. }
         | error @ AppError::UnsupportedImportSource { .. }
@@ -729,6 +747,10 @@ pub fn to_gql_error(err: AppError) -> Error {
             repository_gql_error(error.to_string())
         }
         AppError::Repository(message) => repository_gql_error(message),
+        AppError::RepositoryFailed { message, reason } => repository_gql_error(message)
+            .extend_with(|_, extensions| {
+                extensions.set("reason", reason);
+            }),
     }
 }
 
@@ -762,7 +784,10 @@ pub enum LoginErrorClassification {
 pub fn classify_login_error(err: &AppError) -> LoginErrorClassification {
     if login_progression_error(err) {
         LoginErrorClassification::Progression
-    } else if matches!(err, AppError::Repository(_)) {
+    } else if matches!(
+        err,
+        AppError::Repository(_) | AppError::RepositoryFailed { .. }
+    ) {
         LoginErrorClassification::InfrastructureFailure
     } else {
         LoginErrorClassification::MaskedPrimaryFailure
@@ -821,7 +846,8 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::UnsupportedImportSource { .. } => "UnsupportedImportSource",
         AppError::ImportSourceChanged { .. } => "ImportSourceChanged",
         AppError::DiscoveryPresentationSuperseded { .. } => "DiscoveryPresentationSuperseded",
-        AppError::Repository(_) => "Repository",
+        AppError::PluginFailed { .. } => "PluginFailed",
+        AppError::Repository(_) | AppError::RepositoryFailed { .. } => "Repository",
     }
 }
 
@@ -830,8 +856,11 @@ pub fn to_login_gql_error(method: &'static str, err: AppError) -> Error {
     match classify_login_error(&err) {
         LoginErrorClassification::Progression => to_gql_error(err),
         LoginErrorClassification::InfrastructureFailure => {
-            let AppError::Repository(message) = err else {
-                return to_gql_error(err);
+            let message = match err {
+                AppError::Repository(message) | AppError::RepositoryFailed { message, .. } => {
+                    message
+                }
+                other => return to_gql_error(other),
             };
             repository_gql_error(message)
         }
@@ -1158,6 +1187,69 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_failure_is_unmasked_and_carries_its_reason_and_detail() {
+        use scryer_application::{PluginFailure, PluginFailureReason};
+
+        let failed = AppError::PluginFailed {
+            message: "indexer connection test failed: tracker login refused".into(),
+            failure: PluginFailure {
+                reason: PluginFailureReason::AuthFailed,
+                detail: Some("Tracker login failed: wrong password".into()),
+            },
+        };
+        assert_eq!(app_error_kind(&failed), "PluginFailed");
+
+        let error = to_gql_error(failed);
+        assert_eq!(
+            error.message,
+            "indexer connection test failed: tracker login refused"
+        );
+        assert_eq!(graphql_error_code(&error), Some("PLUGIN_FAILED"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("PLUGIN_AUTH_FAILED")
+        );
+        assert_eq!(
+            graphql_error_extension_string(&error, "detail"),
+            Some("Tracker login failed: wrong password")
+        );
+
+        let bare = to_gql_error(AppError::plugin_host_failed(
+            PluginFailureReason::TimedOut,
+            "indexer component timed out",
+        ));
+        assert_eq!(graphql_error_code(&bare), Some("PLUGIN_FAILED"));
+        assert_eq!(
+            graphql_error_extension_string(&bare, "reason"),
+            Some("PLUGIN_TIMED_OUT")
+        );
+        assert_eq!(graphql_error_extension_string(&bare, "detail"), None);
+    }
+
+    #[test]
+    fn a_plugin_reason_the_host_does_not_know_is_carried_verbatim() {
+        use scryer_application::{PluginFailure, PluginFailureReason};
+
+        let error = to_gql_error(AppError::PluginFailed {
+            message: "indexer connection test failed: plugin error invalid_username_password"
+                .into(),
+            failure: PluginFailure {
+                reason: PluginFailureReason::PluginCode("PLUGIN_INVALID_USERNAME_PASSWORD".into()),
+                detail: Some("Login refused".into()),
+            },
+        });
+        assert_eq!(graphql_error_code(&error), Some("PLUGIN_FAILED"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("PLUGIN_INVALID_USERNAME_PASSWORD")
+        );
+        assert_eq!(
+            graphql_error_extension_string(&error, "detail"),
+            Some("Login refused")
+        );
+    }
+
+    #[test]
     fn a_named_validation_failure_stays_a_validation_error_and_carries_its_reason() {
         let named = AppError::validation_refused("SAMPLE_ALREADY_PRESENT", "that is already here");
         assert_eq!(named.to_string(), "validation: that is already here");
@@ -1446,6 +1538,22 @@ mod tests {
         );
         assert!(!error.message.contains("metadata gateway"));
         assert!(!error.message.contains("<html>"));
+    }
+
+    #[test]
+    fn repository_reason_preserves_internal_error_masking() {
+        let reason = scryer_application::title_delete::CATALOG_CLEANUP_FAILED;
+        let error = to_gql_error(AppError::RepositoryFailed {
+            message: "database connection failed at private path".into(),
+            reason,
+        });
+        assert_eq!(error.message, INTERNAL_SERVER_ERROR_MESSAGE);
+        assert_eq!(graphql_error_code(&error), Some(INTERNAL_ERROR_CODE));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some(reason)
+        );
+        assert!(graphql_error_extension_string(&error, "errorId").is_some());
     }
 
     #[test]

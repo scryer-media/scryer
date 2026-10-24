@@ -176,9 +176,6 @@ pub struct MaintenanceCandidateView {
     /// Bytes owned by this subject on the root selected by the candidate's
     /// pinned rule revision. The same unknown conditions apply to both totals.
     pub storage_root_total_size_bytes: Option<i64>,
-    /// The live operator keep on the candidate's title, so the row can show
-    /// it as kept and offer its release.
-    pub operator_keep_claim_id: Option<String>,
     pub candidate: LifecycleCandidate,
     pub rule_name: String,
     pub title_name: String,
@@ -556,21 +553,6 @@ impl AppUseCase {
             .collect();
         let (definitions, sequence_steps) =
             self.maintenance_sequence_projection(&coordinates).await?;
-        let title_ids: Vec<String> = visible
-            .iter()
-            .map(|candidate| candidate.title_id.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        // Display only: an unreadable claim store shows every row unkept
-        // rather than failing the listing, and keeping again is idempotent.
-        let live_claims = self
-            .services
-            .catalog
-            .lifecycle_claims
-            .list_live_for_titles(&title_ids)
-            .await
-            .unwrap_or_default();
         Ok(visible
             .into_iter()
             .map(|candidate| MaintenanceCandidateView {
@@ -590,14 +572,6 @@ impl AppUseCase {
                 storage_root_total_size_bytes: storage_root_summaries
                     .get(&candidate.id)
                     .and_then(|summary| summary.total_size_bytes),
-                operator_keep_claim_id: live_claims
-                    .get(&candidate.title_id)
-                    .and_then(|claims| {
-                        claims.iter().find(|claim| {
-                            claim.producer == scryer_domain::LifecycleClaimProducer::OperatorKeep
-                        })
-                    })
-                    .map(|claim| claim.id.clone()),
                 rule_name: rules_by_id
                     .get(&candidate.rule_set_id)
                     .map(|rule_set| rule_set.name.clone())

@@ -45,6 +45,7 @@ export type PendingImportBindingEpisode = {
   episodeType: 'STANDARD' | 'SPECIAL' | 'OFFICIAL' | 'OVA' | 'ONA' | 'ALTERNATE';
   episodeNumber?: string | null;
   seasonNumber?: string | null;
+  absoluteNumber?: string | null;
   episodeLabel?: string | null;
   title?: string | null;
   monitored: boolean;

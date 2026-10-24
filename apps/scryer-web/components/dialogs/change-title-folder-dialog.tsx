@@ -337,7 +337,12 @@ export function ChangeTitleFolderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent id="change-title-folder-dialog" className="sm:max-w-3xl">
+      {/* The column stays inside the dialog, so long folder names truncate
+          rather than widening the content past its edge. */}
+      <DialogContent
+        id="change-title-folder-dialog"
+        className="grid-cols-[minmax(0,1fr)] sm:max-w-3xl"
+      >
         <DialogHeader>
           <DialogTitle>{t("title.changeFolderDialogTitle")}</DialogTitle>
           <DialogDescription>

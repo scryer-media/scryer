@@ -60,6 +60,24 @@ export function DownloadClientConfigField({
     </span>
   ) : null;
 
+  if (field.fieldType === "INFO") {
+    // A note from the plugin, not a setting: it never takes or keeps a value.
+    return (
+      <div
+        id={fieldId}
+        role="note"
+        className="space-y-1 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm md:col-span-3"
+      >
+        <p className="font-medium">{field.label}</p>
+        {field.helpText ? (
+          <p className="whitespace-pre-line text-muted-foreground">
+            {field.helpText}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
   if (field.fieldType === "BOOL") {
     return (
       <CheckboxField

@@ -161,10 +161,10 @@ impl SubtitleSyncClient for WasmSubtitleSyncClient {
         let process = match result {
             PluginResult::Ok(process) => process,
             PluginResult::Err(error) => {
-                return Err(AppError::Repository(format!(
-                    "subtitle sync plugin {} refused the align: plugin error {:?}: {}",
-                    self.plugin_id, error.code, error.public_message
-                )));
+                return Err(AppError::plugin_failed(
+                    &error,
+                    &format!("subtitle sync plugin {} refused the align", self.plugin_id),
+                ));
             }
         };
         let align = match process.response {

@@ -324,7 +324,8 @@ async fn insert_library_tx(
     .await?;
 
     // A brand new library has no roots to inherit identity from.
-    insert_library_roots_tx(tx, &library.id, roots, &HashMap::new()).await
+    let resolved_root_ids = resolve_root_ids(&HashMap::new(), &roots);
+    insert_library_roots_tx(tx, &library.id, roots, &resolved_root_ids).await
 }
 
 async fn update_library_tx(
@@ -354,13 +355,15 @@ async fn update_library_tx(
     // already had rather than deriving a new one from its path (FR-078).
     let existing_root_ids = existing_root_ids_by_normalized_path_tx(tx, library_id).await?;
 
-    reject_referenced_root_removals_tx(tx, library_id, &existing_root_ids, &roots).await?;
+    let resolved_root_ids = resolve_root_ids(&existing_root_ids, &roots);
+    reject_referenced_root_removals_tx(tx, library_id, &existing_root_ids, &resolved_root_ids)
+        .await?;
     tx.execute(
         "DELETE FROM library_roots WHERE library_id = {}",
         &[SqlArg::Text(library_id.to_string())],
     )
     .await?;
-    insert_library_roots_tx(tx, library_id, roots, &existing_root_ids).await
+    insert_library_roots_tx(tx, library_id, roots, &resolved_root_ids).await
 }
 
 /// Point one existing root row at a new path, in place (FR-021, FR-078).
@@ -435,20 +438,50 @@ async fn existing_root_ids_by_normalized_path_tx(
         .collect()
 }
 
+/// The id each draft lands on, in draft order.
+///
+/// A draft that names one of the library's stored roots by id keeps that id
+/// whatever its path says: that is how an operator points a root at a new
+/// folder without the titles under it losing their `root_folder_id`. A draft
+/// without an id (or with one this library does not have) takes the id of the
+/// stored root at the same normalized path, unless another draft already
+/// claimed it by id, and is otherwise a new root.
+fn resolve_root_ids(
+    existing_root_ids: &HashMap<String, String>,
+    roots: &[LibraryRootDraft],
+) -> Vec<String> {
+    let known_ids = existing_root_ids.values().collect::<HashSet<_>>();
+    let mut claimed = HashSet::new();
+    let mut resolved = roots
+        .iter()
+        .map(|root| {
+            root.id
+                .as_ref()
+                .filter(|id| known_ids.contains(id) && claimed.insert((*id).clone()))
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+    for (slot, root) in resolved.iter_mut().zip(roots) {
+        if slot.is_none() {
+            *slot = existing_root_ids
+                .get(&normalize_library_root_path(&root.path))
+                .filter(|id| claimed.insert((*id).clone()))
+                .cloned();
+        }
+    }
+    resolved
+        .into_iter()
+        .map(|id| id.unwrap_or_else(allocate_root_folder_id))
+        .collect()
+}
+
 async fn reject_referenced_root_removals_tx(
     tx: &mut SqlTx<'_>,
     library_id: &str,
     existing_root_ids: &HashMap<String, String>,
-    roots: &[LibraryRootDraft],
+    resolved_root_ids: &[String],
 ) -> AppResult<()> {
-    let desired_ids = roots
-        .iter()
-        .filter_map(|root| {
-            existing_root_ids
-                .get(&normalize_library_root_path(&root.path))
-                .cloned()
-        })
-        .collect::<HashSet<_>>();
+    let desired_ids = resolved_root_ids.iter().cloned().collect::<HashSet<_>>();
     let mut removed_root_ids = existing_root_ids
         .values()
         .filter(|id| !desired_ids.contains(*id))
@@ -490,21 +523,18 @@ async fn insert_library_roots_tx(
     tx: &mut SqlTx<'_>,
     library_id: &str,
     roots: Vec<LibraryRootDraft>,
-    existing_root_ids: &HashMap<String, String>,
+    resolved_root_ids: &[String],
 ) -> AppResult<()> {
     let now = Utc::now();
-    for root in roots {
+    for (root, root_id) in roots.into_iter().zip(resolved_root_ids) {
         let path = root.path.trim();
         if path.is_empty() {
             continue;
         }
         let normalized_path = normalize_library_root_path(path);
-        // An existing root keeps the identity it already has; only a genuinely
-        // new root is allocated one.
-        let root_id = existing_root_ids
-            .get(&normalized_path)
-            .cloned()
-            .unwrap_or_else(allocate_root_folder_id);
+        // An existing root keeps the identity it already has (see
+        // `resolve_root_ids`); only a genuinely new root was allocated one.
+        let root_id = root_id.clone();
         tx.execute(
             "INSERT INTO library_roots
              (id, library_id, path, normalized_path, is_default, created_at, updated_at)
@@ -758,6 +788,7 @@ mod tests {
 
     fn draft(path: &str, is_default: bool) -> LibraryRootDraft {
         LibraryRootDraft {
+            id: None,
             path: path.to_string(),
             is_default,
         }
@@ -858,6 +889,87 @@ mod tests {
                 .starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
             "a newly added root should be allocated an id, got {}",
             added.id
+        );
+    }
+
+    /// An operator pointing a root at a new folder from the library editor sends
+    /// the root back with its id and the new path. That keeps the root's row and
+    /// the titles under it, even though the old path is no longer in the list;
+    /// only a root that is genuinely gone from the list is a removal.
+    #[tokio::test]
+    async fn editing_a_referenced_roots_path_by_id_keeps_the_root_and_its_titles() {
+        let store = test_store().await;
+        let pool = store_pool(&store);
+        let now = Utc::now();
+        let created = store
+            .create(
+                Library {
+                    id: "repointed-library".to_string(),
+                    facet: MediaFacet::Series,
+                    name: "Repointed".to_string(),
+                    slug: "repointed".to_string(),
+                    is_default: false,
+                    roots: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                },
+                vec![draft("/mnt/old-shows", true)],
+            )
+            .await
+            .expect("library should create");
+        let root_id = created.roots[0].id.clone();
+        sqlx::query(
+            "INSERT INTO titles (id, library_id, root_folder_id, name, facet, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'series', ?5)",
+        )
+        .bind("repointed-title")
+        .bind("repointed-library")
+        .bind(&root_id)
+        .bind("Synthetic Show")
+        .bind(now.to_rfc3339())
+        .execute(&pool)
+        .await
+        .expect("title should insert");
+
+        // Without the id, the old path simply vanishes from the list: that is a
+        // removal, and the title under it keeps it refused.
+        let refused = store
+            .update(
+                "repointed-library",
+                "Repointed".to_string(),
+                "repointed".to_string(),
+                vec![draft("/mnt/new-shows", true)],
+            )
+            .await
+            .expect_err("dropping a referenced root must be refused");
+        assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
+
+        let updated = store
+            .update(
+                "repointed-library",
+                "Repointed".to_string(),
+                "repointed".to_string(),
+                vec![LibraryRootDraft {
+                    id: Some(root_id.clone()),
+                    path: "/mnt/new-shows".to_string(),
+                    is_default: true,
+                }],
+            )
+            .await
+            .expect("repointing a referenced root by id should succeed");
+        assert_eq!(updated.roots.len(), 1);
+        assert_eq!(updated.roots[0].id, root_id);
+        assert_eq!(updated.roots[0].path, "/mnt/new-shows");
+        assert!(updated.roots[0].is_default);
+
+        let title_root: String =
+            sqlx::query_scalar("SELECT root_folder_id FROM titles WHERE id = 'repointed-title'")
+                .fetch_one(&pool)
+                .await
+                .expect("title should still exist");
+        assert_eq!(
+            title_root, root_id,
+            "the title keeps its root through the path change"
         );
     }
 

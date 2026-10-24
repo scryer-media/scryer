@@ -325,6 +325,7 @@ async fn setup_app_with_movie_routing(
             name.to_string(),
             slug.to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: root_path.to_string(),
                 is_default: true,
             }],

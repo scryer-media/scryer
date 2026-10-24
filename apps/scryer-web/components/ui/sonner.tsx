@@ -16,10 +16,10 @@ const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
   const themeStyle = (
     isDark
       ? {
-          "--normal-bg": "var(--popover)",
+          "--normal-bg": "var(--background)",
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border-color)",
-          "--normal-bg-hover": "var(--card)",
+          "--normal-bg-hover": "var(--background)",
           "--normal-border-hover": "var(--border-color)",
           "--success-bg": "var(--scry-success-bg)",
           "--success-border": "var(--scry-success-border)",
@@ -36,10 +36,10 @@ const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
           "--border-radius": "var(--radius)",
         }
       : {
-          "--normal-bg": "var(--popover)",
+          "--normal-bg": "var(--background)",
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border-color)",
-          "--normal-bg-hover": "var(--card)",
+          "--normal-bg-hover": "var(--background)",
           "--normal-border-hover": "var(--border-color)",
           "--success-bg": "var(--scry-success-bg)",
           "--success-border": "var(--scry-success-border)",
@@ -66,20 +66,20 @@ const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
         className: "shadow-[0_18px_48px_rgba(0,0,0,0.34)]",
         classNames: {
           toast:
-            "rounded-[12px] border border-[var(--scry-border2)] bg-[var(--scry-surf)]",
+            "rounded-[12px] border border-[var(--scry-border2)] !bg-[var(--background)]",
           success:
-            "border-[var(--scry-success-border)] !bg-[var(--card)] text-[var(--scry-success-text)]",
+            "border-[var(--scry-success-border)] !bg-[var(--background)] text-[var(--scry-success-text)]",
           error:
-            "border-[var(--scry-danger-border)] !bg-[var(--card)] text-[var(--scry-danger-text)]",
+            "border-[var(--scry-danger-border)] !bg-[var(--background)] text-[var(--scry-danger-text)]",
           // Every variant paints the same opaque surface. The earlier
           // `bg-[linear-gradient(...),var(--scry-bg)]` compiled to
           // `background-image`, where a bare colour is not a valid layer, so the
           // whole declaration was dropped and Sonner's translucent rich colour
           // showed through. `!` is what beats rich colours.
           warning:
-            "border-[var(--scry-warning-border)] !bg-[var(--card)] text-[var(--scry-warning-text)]",
+            "border-[var(--scry-warning-border)] !bg-[var(--background)] text-[var(--scry-warning-text)]",
           info:
-            "border-[var(--scry-info-border)] !bg-[var(--card)] text-[var(--scry-info-text)]",
+            "border-[var(--scry-info-border)] !bg-[var(--background)] text-[var(--scry-info-text)]",
         },
         ...toastOptions,
       }}

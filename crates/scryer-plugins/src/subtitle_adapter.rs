@@ -172,10 +172,7 @@ impl WasmSubtitleClient {
 fn decode_component_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
     match result {
         PluginResult::Ok(value) => Ok(value),
-        PluginResult::Err(error) => Err(AppError::Repository(format!(
-            "{context}: plugin error {:?}: {}",
-            error.code, error.public_message
-        ))),
+        PluginResult::Err(error) => Err(AppError::plugin_failed(&error, context)),
     }
 }
 
@@ -945,6 +942,27 @@ fn guest_input_path(input_path: &Path) -> AppResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_subtitle_call_names_the_plugin_reason() {
+        let error = decode_component_result::<()>(
+            PluginResult::Err(scryer_plugin_sdk::PluginError {
+                code: scryer_plugin_sdk::PluginErrorCode::from("quota_exceeded"),
+                public_message: "the daily download allowance is used up".to_string(),
+                debug_message: None,
+                retry_after_seconds: None,
+                details: None,
+            }),
+            EXPORT_SUBTITLE_DOWNLOAD,
+        )
+        .expect_err("a plugin error fails the call");
+        let failure = error.plugin_failure().expect("a typed plugin failure");
+        assert_eq!(failure.reason.as_str(), "PLUGIN_QUOTA_EXCEEDED");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("the daily download allowance is used up")
+        );
+    }
 
     fn movie_query() -> SubtitleQuery {
         SubtitleQuery {

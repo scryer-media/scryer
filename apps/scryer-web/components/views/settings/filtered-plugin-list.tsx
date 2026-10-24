@@ -7,8 +7,10 @@ import {
   PowerOff,
   RefreshCw,
   Trash2,
+  X,
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { GutterPanelContext } from "@/lib/context/gutter-panel-context";
 import { PluginLogo } from "@/components/common/plugin-visual";
 import type { ProviderCatalogFamily } from "@/lib/hooks/use-provider-catalog-subscription";
 import { usePluginManagement } from "@/lib/hooks/use-plugin-management";
@@ -27,10 +29,18 @@ const FILTERED_PLUGIN_PANEL_CLASS =
   "flex min-h-0 flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
 const FILTERED_PLUGIN_HEADER_CLASS =
   "flex flex-row items-center justify-between gap-2 border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0))] px-4 py-3";
+// Inside a gutter panel the panel is the frame: a slim header stays in view
+// while a single column of plugins scrolls beneath it.
+const FILTERED_PLUGIN_PANEL_FLUSH_CLASS = "flex min-h-0 flex-col";
+const FILTERED_PLUGIN_HEADER_FLUSH_CLASS =
+  "sticky top-0 z-10 bg-none [background-color:var(--scry-bg)] py-1.5 pl-3 pr-1.5";
+const FILTERED_PLUGIN_TITLE_FLUSH_CLASS = "min-w-0 truncate text-[13px]";
+const FILTERED_PLUGIN_HEADER_BUTTON_FLUSH_CLASS = "size-7";
 const FILTERED_PLUGIN_TITLE_CLASS =
   "text-[15px] font-semibold text-[var(--scry-ink2)]";
 const FILTERED_PLUGIN_BODY_CLASS =
   "grid grid-cols-[repeat(auto-fit,minmax(min(100%,256px),1fr))] gap-2 p-4";
+const FILTERED_PLUGIN_BODY_FLUSH_CLASS = "grid grid-cols-1 gap-2 p-3";
 const FILTERED_PLUGIN_MUTED_CLASS = "text-[var(--scry-muted3)]";
 
 /** Plugin `pluginType` values that belong to each provider-catalog family. */
@@ -39,7 +49,7 @@ const EMPTY_PLUGIN_TYPES: readonly string[] = [];
 type FilteredPluginFamily = ProviderCatalogFamily | "LIST";
 
 const FAMILY_PLUGIN_TYPES: Record<FilteredPluginFamily, readonly string[]> = {
-  INDEXER: ["indexer", "usenet_indexer", "torrent_indexer"],
+  INDEXER: ["indexer", "usenet_indexer", "torrent_indexer", "http_indexer"],
   DOWNLOAD_CLIENT: ["download_client"],
   ARCHIVE_EXTRACTOR: ["archive_extractor"],
   NOTIFICATION: ["notification"],
@@ -78,6 +88,7 @@ export function FilteredPluginList({
 }: FilteredPluginListProps) {
   const client = useClient();
   const t = useTranslate();
+  const gutterPanel = React.useContext(GutterPanelContext);
   const [upgradingVisiblePlugins, setUpgradingVisiblePlugins] =
     React.useState(false);
   const [pendingUninstall, setPendingUninstall] =
@@ -152,17 +163,33 @@ export function FilteredPluginList({
 
   return (
     <>
-      <section className={cn(FILTERED_PLUGIN_PANEL_CLASS, className)}>
-        <div className={FILTERED_PLUGIN_HEADER_CLASS}>
-          <h2 className={FILTERED_PLUGIN_TITLE_CLASS}>
+      <section
+        className={cn(
+          gutterPanel ? FILTERED_PLUGIN_PANEL_FLUSH_CLASS : FILTERED_PLUGIN_PANEL_CLASS,
+          className,
+        )}
+      >
+        <div
+          className={cn(
+            FILTERED_PLUGIN_HEADER_CLASS,
+            gutterPanel && FILTERED_PLUGIN_HEADER_FLUSH_CLASS,
+          )}
+        >
+          <h2
+            className={cn(
+              FILTERED_PLUGIN_TITLE_CLASS,
+              gutterPanel && FILTERED_PLUGIN_TITLE_FLUSH_CLASS,
+            )}
+          >
             {title ?? t("settings.plugins")}
           </h2>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1">
             {visibleUpgradeCount > 0 ? (
               <IconButton
                 label={updateAllLabel}
                 tooltip={updateAllTooltip}
                 tone="upgrade"
+                className={cn(gutterPanel && FILTERED_PLUGIN_HEADER_BUTTON_FLUSH_CLASS)}
                 onClick={() => void updateVisiblePlugins()}
                 disabled={upgradingVisiblePlugins}
               >
@@ -176,6 +203,8 @@ export function FilteredPluginList({
             <IconButton
               label={t("settings.pluginsRefresh")}
               tone="neutral"
+              appearance={gutterPanel ? "ghost" : "boxed"}
+              className={cn(gutterPanel && FILTERED_PLUGIN_HEADER_BUTTON_FLUSH_CLASS)}
               onClick={() => void refreshPluginsRegistry()}
               disabled={pluginsRefreshing}
             >
@@ -185,9 +214,23 @@ export function FilteredPluginList({
                 <RefreshCw className="h-4 w-4" />
               )}
             </IconButton>
+            {gutterPanel ? (
+              <IconButton
+                label={t("label.close")}
+                appearance="ghost"
+                className={FILTERED_PLUGIN_HEADER_BUTTON_FLUSH_CLASS}
+                onClick={gutterPanel.close}
+              >
+                <X className="h-4 w-4" />
+              </IconButton>
+            ) : null}
           </div>
         </div>
-        <div className={FILTERED_PLUGIN_BODY_CLASS}>
+        <div
+          className={
+            gutterPanel ? FILTERED_PLUGIN_BODY_FLUSH_CLASS : FILTERED_PLUGIN_BODY_CLASS
+          }
+        >
           {pluginsError ? (
             <p className="col-span-full text-xs text-[var(--scry-danger-text-soft)]">
               {pluginsError}

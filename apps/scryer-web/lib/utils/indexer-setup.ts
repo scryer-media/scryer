@@ -7,7 +7,10 @@ import {
 import { normalizeIndexerConfigValues } from "./url-input.ts";
 
 export function setupIndexerConfigFields(fields: ConfigFieldDef[]) {
-  return fields.filter((field) => field.valueSource !== "HOST_BINDING");
+  return fields.filter(
+    (field) =>
+      field.valueSource !== "HOST_BINDING" && field.fieldType !== "INFO",
+  );
 }
 
 export function buildSetupIndexerConfigValues(

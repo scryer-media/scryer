@@ -20,6 +20,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
+import { EditorValidationStatus } from "@/components/common/editor-validation-status";
 import { SingleSelectField } from "@/components/ui/select";
 import {
   Table,
@@ -1271,6 +1272,15 @@ export function SettingsRequestRulesSection({
                           }))
                         }
                         diagnostics={regoDiagnostics(ruleSetDraft.regoSource, validationResult)}
+                        feedback={
+                          <EditorValidationStatus
+                            id="settings-request-rule-validation"
+                            checking={validating}
+                            result={validationResult}
+                            data-request-rule-valid={validationResult ? String(validationResult.valid) : undefined}
+                            data-request-rule-person-targeting-refusal={validationResult?.errors.some(isPersonTargetingRefusal) ? "true" : undefined}
+                          />
+                        }
                         minLines={12}
                         maxLines={35}
                       />
@@ -1323,47 +1333,6 @@ export function SettingsRequestRulesSection({
                         ))}
                       </div>
                     </div>
-
-                    {validationResult ? (
-                      <div
-                        id="settings-request-rule-validation"
-                        data-request-rule-valid={
-                          validationResult.valid ? "true" : "false"
-                        }
-                        /* The API refuses a matcher that reads the requester
-                           unless the author can manage permissions. Marking
-                           that refusal lets the page point at the account
-                           picker without rewording the server's message. */
-                        data-request-rule-person-targeting-refusal={
-                          validationResult.errors.some(isPersonTargetingRefusal)
-                            ? "true"
-                            : undefined
-                        }
-                        className={`rounded border px-3 py-2 text-sm ${
-                          validationResult.valid
-                            ? "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]"
-                            : "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]"
-                        }`}
-                      >
-                        {validationResult.valid ? (
-                          t("settings.ruleValid")
-                        ) : (
-                          <div className="space-y-2">
-                            {/* The API's refusals are shown verbatim: the
-                                person-targeting message names the permission an
-                                author needs, and rewording it would lose that. */}
-                            {validationResult.errors.map((error, index) => (
-                              <pre
-                                key={index}
-                                className="overflow-x-auto whitespace-pre-wrap rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 font-mono text-[12px] leading-5 text-[var(--scry-danger-text)]"
-                              >
-                                {error}
-                              </pre>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ) : null}
 
                     <p className="text-xs text-muted-foreground">
                       {t("settings.requestRuleSaveDisabledNote")}

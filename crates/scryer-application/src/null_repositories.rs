@@ -3645,12 +3645,7 @@ impl crate::ports::LifecycleClaimRepository for NullLifecycleClaimRepository {
             LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
         ))
     }
-    async fn convert_to_permanent(
-        &self,
-        _id: &str,
-        _replacement: &scryer_domain::LifecycleClaim,
-        _now: DateTime<Utc>,
-    ) -> AppResult<String> {
+    async fn convert_to_permanent(&self, _id: &str, _now: DateTime<Utc>) -> AppResult<()> {
         Err(AppError::Repository(
             LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
         ))
@@ -4104,6 +4099,7 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         current.high_contrast_mode = settings.high_contrast_mode;
         current.reduce_motion = settings.reduce_motion;
         current.hide_sponsor_button = settings.hide_sponsor_button;
+        current.no_glow = settings.no_glow;
         current.density = settings.density;
         current.sidebar_mode = settings.sidebar_mode;
         current.default_landing_view = settings.default_landing_view;

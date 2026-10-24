@@ -874,10 +874,13 @@ pub fn accepted_download_submission_identity(
     DownloadSubmissionIdentity { download_id }
 }
 
+/// Clients that store the grab's download id with the job and report it back
+/// on every queue and completed row. Their identity is that id, so the import
+/// finds the grab by what the client reports rather than by its item id.
 fn client_round_trips_download_id(client_type: Option<&str>) -> bool {
     matches!(
         normalize_lower(client_type).as_deref(),
-        Some("nzbget" | "weaver")
+        Some("nzbget" | "weaver" | "http")
     )
 }
 

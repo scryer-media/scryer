@@ -162,12 +162,13 @@ export function SettingsProfileContainer({ userId, username }: Props) {
     effectiveFormLoginEnabled,
     passkeyEnabled,
   } = useAuth();
-  const { uiSettings, setUiSettings, saveUiSettings, uiSettingsLoaded, uiSettingsLoading } =
+  const { uiSettings, setUiSettings, saveUiSettings, changeAppearance, uiSettingsLoaded, uiSettingsLoading } =
     useUiSettings();
   const [savingHighlightColor, setSavingHighlightColor] = useState<string | null>(
     null,
   );
   const [savingSponsorPreference, setSavingSponsorPreference] = useState(false);
+  const [savingGlowPreference, setSavingGlowPreference] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -400,59 +401,19 @@ export function SettingsProfileContainer({ userId, username }: Props) {
     }
   }, [accountKind, authUser?.username, client, userId, username, hasPassword, currentPassword, newPassword, confirmPassword, login, setGlobalStatus, t]);
 
-  const handleSelectHighlightColor = useCallback(
-    async (highlightColor: string) => {
-      if (
-        !uiSettingsLoaded ||
-        uiSettingsLoading ||
-        savingHighlightColor ||
-        uiSettings.highlightColor === highlightColor
-      ) {
-        return;
-      }
-
-      const previous = uiSettings;
-      const next: UiSettings = { ...uiSettings, highlightColor };
-      setSavingHighlightColor(highlightColor);
-      // Apply the accent live while the mutation persists through the interface.
-      setUiSettings(next);
-      try {
-        const result = await saveUiSettings((latest) =>
-          uiSettingsInputFromSettings({ ...latest, highlightColor }),
-        );
-        if (result.error || !result.data?.setMyUiSettings) {
-          setUiSettings(previous);
-          setGlobalStatus(
-            result.error?.message ?? t("profile.highlightColorSaveFailed"),
-            { level: "ERROR" },
-          );
-          return;
-        }
-        setUiSettings(result.data.setMyUiSettings);
+  const handleSelectHighlightColor = useCallback(async (highlightColor: string | null) => {
+    setSavingHighlightColor(highlightColor ?? "default");
+    try {
+      const result = await changeAppearance({ highlightColor });
+      if (result === "failed") {
+        setGlobalStatus(t("profile.highlightColorSaveFailed"), { level: "ERROR" });
+      } else if (result === "saved") {
         setGlobalStatus(t("profile.highlightColorSaved"), { level: "SUCCESS" });
-      } catch (error) {
-        setUiSettings(previous);
-        setGlobalStatus(
-          error instanceof Error
-            ? error.message
-            : t("profile.highlightColorSaveFailed"),
-          { level: "ERROR" },
-        );
-      } finally {
-        setSavingHighlightColor(null);
       }
-    },
-    [
-      saveUiSettings,
-      savingHighlightColor,
-      setGlobalStatus,
-      setUiSettings,
-      t,
-      uiSettings,
-      uiSettingsLoaded,
-      uiSettingsLoading,
-    ],
-  );
+    } finally {
+      setSavingHighlightColor(null);
+    }
+  }, [changeAppearance, setGlobalStatus, t]);
 
   const handleHideSponsorButtonChange = useCallback(
     async (hideSponsorButton: boolean) => {
@@ -497,6 +458,53 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       savingSponsorPreference,
       setGlobalStatus,
       setUiSettings,
+      uiSettings,
+      uiSettingsLoaded,
+      uiSettingsLoading,
+    ],
+  );
+
+  const handleNoGlowChange = useCallback(
+    async (noGlow: boolean) => {
+      if (
+        !uiSettingsLoaded ||
+        uiSettingsLoading ||
+        savingGlowPreference ||
+        uiSettings.noGlow === noGlow
+      ) {
+        return;
+      }
+
+      const previous = uiSettings;
+      setSavingGlowPreference(true);
+      setUiSettings({ ...uiSettings, noGlow });
+      try {
+        const result = await saveUiSettings((latest) =>
+          uiSettingsInputFromSettings({ ...latest, noGlow }),
+        );
+        if (result.error || !result.data?.setMyUiSettings) {
+          setUiSettings(previous);
+          setGlobalStatus(result.error?.message ?? t("profile.glowSaveFailed"), { level: "ERROR" });
+          return;
+        }
+        setUiSettings(result.data.setMyUiSettings);
+        setGlobalStatus(t("profile.glowSaved"), { level: "SUCCESS" });
+      } catch (error) {
+        setUiSettings(previous);
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("profile.glowSaveFailed"),
+          { level: "ERROR" },
+        );
+      } finally {
+        setSavingGlowPreference(false);
+      }
+    },
+    [
+      saveUiSettings,
+      savingGlowPreference,
+      setGlobalStatus,
+      setUiSettings,
+      t,
       uiSettings,
       uiSettingsLoaded,
       uiSettingsLoading,
@@ -1228,6 +1236,9 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       hideSponsorButton={uiSettings.hideSponsorButton}
       savingSponsorPreference={savingSponsorPreference}
       onHideSponsorButtonChange={handleHideSponsorButtonChange}
+      noGlow={uiSettings.noGlow}
+      savingGlowPreference={savingGlowPreference}
+      onNoGlowChange={handleNoGlowChange}
       currentPassword={currentPassword}
       newPassword={newPassword}
       confirmPassword={confirmPassword}

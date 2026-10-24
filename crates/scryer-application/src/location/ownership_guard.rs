@@ -603,21 +603,12 @@ pub const RENAME_APPLY_ENTRY: GuardedEntry = GuardedEntry {
     constant: "RENAME_APPLY_ENTRY",
 };
 
-/// Single-title deletion.
+/// Shared per-title execution for explicit single and bulk deletion.
 pub const TITLE_DELETE_ENTRY: GuardedEntry = GuardedEntry {
     action: GuardedAction::TitleDelete,
     module: "catalog/workflow/delete.rs",
-    function: "delete_title",
-    constant: "TITLE_DELETE_ENTRY",
-};
-
-/// The bulk deletion job's per-title work, which does not route through
-/// [`TITLE_DELETE_ENTRY`].
-pub const TITLE_DELETE_JOB_ENTRY: GuardedEntry = GuardedEntry {
-    action: GuardedAction::TitleDelete,
-    module: "catalog/workflow/delete.rs",
     function: "delete_title_job_item",
-    constant: "TITLE_DELETE_JOB_ENTRY",
+    constant: "TITLE_DELETE_ENTRY",
 };
 
 /// Media-file deletion, including the per-item work of the bulk deletion job.
@@ -626,6 +617,15 @@ pub const MEDIA_FILE_DELETE_ENTRY: GuardedEntry = GuardedEntry {
     module: "catalog/workflow/delete.rs",
     function: "delete_media_file",
     constant: "MEDIA_FILE_DELETE_ENTRY",
+};
+
+/// An operator moving one media file to other episodes of its title, which
+/// rewrites its episode links and renames it on disk.
+pub const EPISODE_FILE_REASSIGN_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::MediaFileMutation,
+    module: "catalog/workflow/episode_file_reassign.rs",
+    function: "reassign_episode_file",
+    constant: "EPISODE_FILE_REASSIGN_ENTRY",
 };
 
 /// Primary media-file changes, which rewrite which file a title serves.
@@ -827,9 +827,9 @@ pub const GUARDED_ENTRIES: &[&GuardedEntry] = &[
     &MANUAL_IMPORT_ENTRY,
     &RENAME_APPLY_ENTRY,
     &TITLE_DELETE_ENTRY,
-    &TITLE_DELETE_JOB_ENTRY,
     &MEDIA_FILE_DELETE_ENTRY,
     &MEDIA_FILE_PRIMARY_ENTRY,
+    &EPISODE_FILE_REASSIGN_ENTRY,
     &LIBRARY_ROOTS_UPDATE_ENTRY,
     &LIBRARY_DELETE_ENTRY,
     &RECYCLE_RESTORE_ENTRY,
@@ -999,6 +999,12 @@ impl crate::AppUseCase {
         entry: &'static GuardedEntry,
         title_id: &str,
     ) -> AppResult<tokio::sync::OwnedRwLockReadGuard<()>> {
+        if matches!(entry.action, GuardedAction::Import) && self.title_is_being_deleted(title_id) {
+            return Err(AppError::validation_refused(
+                crate::title_delete::IN_PROGRESS,
+                "title deletion is in progress; import was preserved",
+            ));
+        }
         let guard = self
             .runtime
             .library
@@ -1424,6 +1430,10 @@ mod tests {
         (
             "catalog/workflow/delete.rs",
             include_str!("../catalog/workflow/delete.rs"),
+        ),
+        (
+            "catalog/workflow/episode_file_reassign.rs",
+            include_str!("../catalog/workflow/episode_file_reassign.rs"),
         ),
         (
             "maintenance_rules/action_execution.rs",

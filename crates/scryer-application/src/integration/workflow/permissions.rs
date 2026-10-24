@@ -99,9 +99,16 @@ impl AppUseCase {
         let item = self
             .find_download_queue_item_raw(client_id, client_type, download_client_item_id)
             .await?;
-        if let Some(item) = item
-            && let Some(title_id) = item.title_id.as_deref()
-        {
+        let mut title_id = item.and_then(|item| item.title_id);
+        if title_id.is_none() {
+            // Recovery rows (for example a fenced password retry whose job has
+            // left the client) are absent from the native snapshot; the active
+            // binding still names the owning submission and its title.
+            title_id = self
+                .find_bound_download_title_id(client_id, client_type, download_client_item_id)
+                .await?;
+        }
+        if let Some(title_id) = title_id.as_deref() {
             match self
                 .require_title_library_permission(actor, title_id, permission)
                 .await
@@ -118,6 +125,53 @@ impl AppUseCase {
             }
         }
         self.require_any_library_permission(actor, permission).await
+    }
+
+    async fn find_bound_download_title_id(
+        &self,
+        client_id: Option<&str>,
+        client_type: Option<&str>,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<String>> {
+        let Some(client_type) = client_type
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| self.normalize_download_client_type(value).ok())
+        else {
+            return Ok(None);
+        };
+        let locator =
+            crate::ClientJobLocator::new(client_id, &client_type, download_client_item_id.trim());
+        let binding = match self
+            .services
+            .workflow
+            .download_registry
+            .find_active_binding_by_locator(&locator)
+            .await
+        {
+            Ok(Some(binding)) => binding,
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                // Same degradation as the queue delete itself: a registry
+                // fault leaves the legacy (any-library) authorization path.
+                tracing::warn!(
+                    target: "download_identity_resolver",
+                    client_config_id = ?locator.client_id,
+                    client_type = %locator.client_type,
+                    native_item_id = %locator.item_id,
+                    error = %error,
+                    "failed to resolve download binding for item permission"
+                );
+                return Ok(None);
+            }
+        };
+        Ok(self
+            .services
+            .workflow
+            .download_submissions
+            .find_by_canonical_download_id(&binding.download_id)
+            .await?
+            .map(|submission| submission.title_id))
     }
 }
 impl AppUseCase {

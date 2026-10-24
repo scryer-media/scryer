@@ -182,8 +182,8 @@ pub struct MaintenanceFactsDoc {
     pub watched_by_any_requester: Observation<bool>,
     pub watched_by_all_requesters: Observation<bool>,
     /// Lifecycle claims (spec 0003 FR-041..FR-044). A claim is what a request
-    /// approval leaves behind on the title, and these four say whether one
-    /// still holds it. Every one of them is unknown when the claim store could
+    /// approval leaves behind on the title, and these three describe its
+    /// lease. Every one of them is unknown when the claim store could
     /// not be read for the pass: a rule that deletes on "the lease expired"
     /// must be held rather than told there is no lease.
     ///
@@ -191,7 +191,6 @@ pub struct MaintenanceFactsDoc {
     /// aggregated over the title's retention claims; expiry is derived against
     /// the evaluation clock, so a lease whose window elapsed reads as expired
     /// before the sweep that flips the row has run.
-    pub keep_claim_active: Observation<bool>,
     pub request_lease_state: Observation<String>,
     pub request_lease_expires_at: Observation<String>,
     pub active_retention_claims: Observation<i64>,
@@ -633,7 +632,6 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             last_watched_at: Observation::known("2024-03-01T00:00:00Z".to_string()),
             watched_by_any_requester: Observation::known(true),
             watched_by_all_requesters: Observation::known(true),
-            keep_claim_active: Observation::known(false),
             request_lease_state: Observation::known("none".to_string()),
             // The one deliberately absent fact in the synthetic document: a
             // title with no live lease has no expiry, and inventing one would

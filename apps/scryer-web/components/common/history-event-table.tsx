@@ -56,7 +56,7 @@ import { LoadingMark } from "@/components/common/loading-mark";
  * whether the table is the scroller or a block inside one.
  */
 export const HISTORY_TABLE_SHELL_CLASS =
-  "rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]";
+  "rounded-[14px] border border-[var(--scry-border2)] bg-background";
 
 /** Stand-in rendered when an event carries no name or path to show. */
 const HISTORY_EMPTY_VALUE = "\u2014";
@@ -343,8 +343,8 @@ function HistoryEpisodes({
     .sort((left, right) => compareHistoryEpisodes(left.episode, right.episode));
 
   return (
-    <div className="grid grid-cols-[auto_1fr] gap-x-3 text-xs">
-      <span className="whitespace-nowrap text-muted-foreground">{label}</span>
+    <div className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[32rem]/history:grid-cols-[auto_minmax(0,1fr)]">
+      <span className="text-muted-foreground">{label}</span>
       <div className="flex min-w-0 flex-col gap-y-1">
         {orderedEpisodes.map(({ episodeId, episode }) => {
           const href = historyEpisodeHref(event, episodeId);
@@ -360,8 +360,8 @@ function HistoryEpisodes({
               episodeLabel={label}
               className={
                 href
-                  ? "max-w-full truncate text-[var(--scry-accent-text)] transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  : "truncate text-foreground"
+                  ? "max-w-full [overflow-wrap:anywhere] text-[var(--scry-accent-text)] transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  : "[overflow-wrap:anywhere] text-foreground"
               }
             />
           );
@@ -474,9 +474,9 @@ export function HistoryEventTable({
   }
 
   return (
-    <div className="overflow-hidden">
-      <Table overflow="clip" layout="fixed" density="dense">
-        <TableHeader>
+    <div className="@container/history min-w-0 overflow-hidden">
+      <Table overflow="clip" layout="fixed" density="dense" className="@max-[64rem]/history:block">
+        <TableHeader className="@max-[64rem]/history:hidden">
           <TableRow>
             <TableHead className="w-10 text-center" />
             <TableHead className="w-36">{t("history.event")}</TableHead>
@@ -499,7 +499,7 @@ export function HistoryEventTable({
             ) : null}
           </TableRow>
         </TableHeader>
-        <TableBody>
+        <TableBody className="@max-[64rem]/history:block">
           {events.map((event) => {
             const meta = getTitleHistoryEventMeta(event.eventType);
             const titleHref = titleHistoryHref(event);
@@ -523,13 +523,16 @@ export function HistoryEventTable({
                     event.id,
                   )}
                   data-ui="settings-table-row"
+                  className="@max-[64rem]/history:relative @max-[64rem]/history:grid @max-[64rem]/history:grid-cols-2 @max-[64rem]/history:gap-3 @max-[64rem]/history:p-3 @max-[64rem]/history:[&>td]:min-w-0 @max-[64rem]/history:[&>td]:p-0 @max-[64rem]/history:[&>td]:text-left @max-[64rem]/history:[&>td]:[overflow-wrap:anywhere]"
                 >
-                  <TableCell className="align-middle text-center">
+                  <TableCell className="align-middle text-center @max-[64rem]/history:absolute @max-[64rem]/history:right-3 @max-[64rem]/history:top-3">
                     {hasExpandableContent ? (
                       <button
                         type="button"
                         className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-card/80 text-muted-foreground transition hover:text-foreground"
                         onClick={() => toggleExpanded(event.id)}
+                        aria-expanded={isExpanded}
+                        aria-controls={isExpanded ? `history-event-details-${event.id}` : undefined}
                         aria-label={
                           isExpanded
                             ? t("history.collapseDetails")
@@ -544,7 +547,7 @@ export function HistoryEventTable({
                       </button>
                     ) : null}
                   </TableCell>
-                  <TableCell className="align-middle">
+                  <TableCell className="align-middle @max-[64rem]/history:col-span-2 @max-[64rem]/history:pr-10!">
                     <span
                       className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium ${meta.badgeClassName}`}
                     >
@@ -553,7 +556,7 @@ export function HistoryEventTable({
                     </span>
                   </TableCell>
                   {showTitle ? (
-                    <TableCell className="align-middle">
+                    <TableCell className="align-middle @max-[64rem]/history:col-span-2 @max-[64rem]/history:[&_a]:whitespace-normal @max-[64rem]/history:[&_span]:whitespace-normal">
                       <HistoryTitleHoverLink
                         event={event}
                         label={
@@ -579,7 +582,7 @@ export function HistoryEventTable({
                       ) : null}
                     </TableCell>
                   ) : null}
-                  <TableCell className="align-middle">
+                  <TableCell className="align-middle @max-[64rem]/history:col-span-2">
                     {/* Release names are long paths that the fixed column
                      * ellipses, so the full value lives in a hover tooltip. */}
                     <ActionTooltip
@@ -590,12 +593,13 @@ export function HistoryEventTable({
                       wrapperClassName="block w-full min-w-0"
                       wrapperTabIndex={0}
                     >
-                      <div className="truncate text-sm text-foreground">
+                      <div className="truncate text-sm text-foreground @max-[64rem]/history:whitespace-normal @max-[64rem]/history:[overflow-wrap:anywhere]">
                         {releaseName}
                       </div>
                     </ActionTooltip>
                   </TableCell>
                   <TableCell className="align-middle text-center text-sm">
+                    <span className="mb-1 hidden text-xs text-muted-foreground @max-[64rem]/history:block">{t("queue.source")}</span>
                     {source ? (
                       <Link
                         to={source.to}
@@ -609,6 +613,7 @@ export function HistoryEventTable({
                     )}
                   </TableCell>
                   <TableCell className="align-middle text-center text-sm text-muted-foreground">
+                    <span className="mb-1 hidden text-xs @max-[64rem]/history:block">{t("label.type")}</span>
                     {historyTypeLabel(event, t)}
                   </TableCell>
                   {showActor ? (
@@ -616,10 +621,12 @@ export function HistoryEventTable({
                       id={selectorId("history-event-actor", event.eventType, event.id)}
                       className="align-middle text-center text-sm text-muted-foreground"
                     >
+                      <span className="mb-1 hidden text-xs @max-[64rem]/history:block">{t("history.actor")}</span>
                       {actorLabel(event)}
                     </TableCell>
                   ) : null}
                   <TableCell className="align-middle text-center text-sm text-muted-foreground">
+                    <span className="mb-1 hidden text-xs @max-[64rem]/history:block">{t("history.date")}</span>
                     <div className="font-medium text-foreground">
                       {formatUiDate(event.occurredAt ?? event.createdAt, dateTimeFormat)}
                     </div>
@@ -628,7 +635,7 @@ export function HistoryEventTable({
                     </div>
                   </TableCell>
                   {showActions ? (
-                    <TableCell className="align-middle text-center">
+                    <TableCell className="align-middle text-center @max-[64rem]/history:col-span-2">
                       {retryable && !isExpanded ? (
                         <div className="flex justify-center">
                           <Button
@@ -652,9 +659,9 @@ export function HistoryEventTable({
                   ) : null}
                 </TableRow>
                 {isExpanded ? (
-                  <TableRow>
-                    <TableCell colSpan={columnCount} className="bg-card/30">
-                      <div className="space-y-4 rounded-lg border border-border/60 bg-background/40 p-4">
+                  <TableRow id={`history-event-details-${event.id}`} className="@max-[64rem]/history:block">
+                    <TableCell colSpan={columnCount} className="bg-card/30 @max-[64rem]/history:block @max-[64rem]/history:p-3 @max-[64rem]/history:pt-0">
+                      <div className="min-w-0 space-y-4 rounded-lg border border-border/60 bg-background/40 p-3 sm:p-4">
                         {detail.hasDetail ? (
                           <HistoryEventDetailContent event={event} />
                         ) : null}
@@ -671,7 +678,7 @@ export function HistoryEventTable({
                           />
                         ) : null}
                         {event.collectionId ? (
-                          <div className="grid grid-cols-[auto_1fr] gap-x-3 text-xs">
+                          <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 text-xs">
                             <span className="whitespace-nowrap text-muted-foreground">
                               {t("history.collectionId")}
                             </span>

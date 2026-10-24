@@ -73,7 +73,15 @@ const EXPIRED_REQUEST_LEASES_RULE_NAME: &str = "Expired request leases";
 
 /// Matcher of that rule. The web editor's `expired-request-leases` template
 /// carries the same source; keep the two identical.
-pub const EXPIRED_REQUEST_LEASES_REGO: &str = "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n";
+pub const EXPIRED_REQUEST_LEASES_REGO: &str = "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n";
+
+const EXPIRED_REQUEST_LEASES_DESCRIPTION: &str =
+    "Deletes a requested title and its files once its request lease has expired.";
+
+/// The matcher and description that rule shipped with while a request could
+/// also write a keep claim. Startup replaces them with the current ones.
+const PREVIOUS_EXPIRED_REQUEST_LEASES_REGO: &str = "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n";
+const PREVIOUS_EXPIRED_REQUEST_LEASES_DESCRIPTION: &str = "Deletes a requested title and its files once its request lease has expired, unless someone keeps it.";
 
 // ── Request models ──────────────────────────────────────────────────────────
 
@@ -567,19 +575,19 @@ impl AppUseCase {
     }
 
     /// Create the rule every instance ships with: titles whose request lease
-    /// expired are deleted with their files after a seven-day grace period,
-    /// unless someone keeps them. It starts Disabled, like every other rule:
-    /// an operator enables it on purpose. Startup calls this on every boot, so
-    /// it does nothing once the rule exists.
+    /// expired are deleted with their files after a seven-day grace period.
+    /// It starts Disabled, like every other rule: an operator enables it on
+    /// purpose. Startup calls this on every boot, so once the rule exists it
+    /// only brings a previously shipped matcher up to date.
     pub async fn ensure_expired_request_leases_rule(&self) -> AppResult<()> {
         let rules = &self.services.customization.maintenance_rule_sets;
-        if rules
+        if let Some(existing) = rules
             .list_rule_sets()
             .await?
-            .iter()
-            .any(|rule| rule.system_owned && rule.name == EXPIRED_REQUEST_LEASES_RULE_NAME)
+            .into_iter()
+            .find(|rule| rule.system_owned && rule.name == EXPIRED_REQUEST_LEASES_RULE_NAME)
         {
-            return Ok(());
+            return self.upgrade_expired_request_leases_rule(existing).await;
         }
         let id = Id::new_rego_safe().0;
         let action_definition =
@@ -603,9 +611,7 @@ impl AppUseCase {
         let rule_set = MaintenanceRuleSet {
             id,
             name: EXPIRED_REQUEST_LEASES_RULE_NAME.into(),
-            description: "Deletes a requested title and its files once its request lease has \
-                          expired, unless someone keeps it."
-                .into(),
+            description: EXPIRED_REQUEST_LEASES_DESCRIPTION.into(),
             enabled: false,
             evaluation_mode: MaintenanceEvaluationMode::Disabled,
             effect_arming: scryer_domain::MaintenanceEffectArming::None,
@@ -618,6 +624,65 @@ impl AppUseCase {
             updated_at: now,
         };
         rules.create_rule_set(&rule_set, &revision).await
+    }
+
+    /// Replace the matcher the rule shipped with before leases became only a
+    /// time to delete. The new revision keeps the operator's grace period and
+    /// storage root, and like any matcher change it disarms the rule, so an
+    /// operator re-arms it against the new matcher. A rule already on any
+    /// other matcher is left alone.
+    async fn upgrade_expired_request_leases_rule(
+        &self,
+        rule_set: MaintenanceRuleSet,
+    ) -> AppResult<()> {
+        let rules = &self.services.customization.maintenance_rule_sets;
+        let Some(current) = rules
+            .get_revision(&rule_set.id, rule_set.current_revision_number)
+            .await?
+        else {
+            return Ok(());
+        };
+        let previous =
+            rewrite_package_declaration(PREVIOUS_EXPIRED_REQUEST_LEASES_REGO, &rule_set.id);
+        if scryer_rules::strip_editor_source(&current.rego_source)
+            != scryer_rules::strip_editor_source(&previous)
+        {
+            return Ok(());
+        }
+
+        let action_definition = decode_action_definition(&current)?;
+        let prepared = prepare_matcher(
+            &rule_set.id,
+            rule_set.subject_kind,
+            EXPIRED_REQUEST_LEASES_REGO,
+            &action_definition,
+            current.grace_days,
+        )?;
+        let now = Utc::now();
+        let revision = build_revision(
+            &rule_set.id,
+            rule_set.current_revision_number + 1,
+            &prepared,
+            current.grace_days,
+            current.storage_root_id.clone(),
+            None,
+            now,
+        );
+        rules.add_revision(&revision, now).await?;
+
+        if rule_set.description == PREVIOUS_EXPIRED_REQUEST_LEASES_DESCRIPTION {
+            rules
+                .update_rule_set_metadata(
+                    &rule_set.id,
+                    &rule_set.name,
+                    EXPIRED_REQUEST_LEASES_DESCRIPTION,
+                    &rule_set.library_ids,
+                    false,
+                    now,
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     /// Editor support: compile and check a draft without storing it. The

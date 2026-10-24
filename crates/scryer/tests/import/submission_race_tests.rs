@@ -238,6 +238,7 @@ impl RaceHarness {
             seeding: None,
         };
         let completed = CompletedDownload {
+            subtitle_paths: Vec::new(),
             client_type: RACE_CLIENT_TYPE.to_string(),
             client_id: RACE_CLIENT_ID.to_string(),
             download_client_item_id: RACE_JOB_ID.to_string(),

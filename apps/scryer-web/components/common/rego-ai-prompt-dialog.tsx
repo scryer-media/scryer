@@ -123,6 +123,7 @@ export function RegoAiPromptDialog({
             value={desiredOutcome}
             onChange={(event) => setDesiredOutcome(event.target.value)}
             placeholder={t("settings.ruleAiPromptOutcomePlaceholder")}
+            className="bg-field text-foreground"
             rows={3}
           />
         </div>
@@ -132,7 +133,7 @@ export function RegoAiPromptDialog({
             <pre
               id={`${id}-prompt`}
               aria-labelledby={`${id}-prompt-label`}
-              className="border-input bg-input w-full overflow-hidden rounded-md border py-2 pr-14 pl-3 font-mono text-xs leading-5 break-words whitespace-pre-wrap"
+              className="border-border bg-background text-foreground max-h-[min(50dvh,28rem)] w-full overflow-auto rounded-md border py-2 pr-14 pl-3 font-[var(--font-code)] text-xs leading-5 break-words whitespace-pre-wrap"
             >
               {promptPreview}
             </pre>
@@ -143,7 +144,7 @@ export function RegoAiPromptDialog({
                   ? t("settings.ruleAiPromptCopied")
                   : t("settings.ruleAiPromptCopy")
               }
-              className="absolute top-2 right-2"
+              className="absolute top-2 right-2 border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
               onClick={() => void copyPrompt()}
             >
               {copied ? (

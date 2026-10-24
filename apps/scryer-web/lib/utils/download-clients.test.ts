@@ -4,7 +4,10 @@ import test from "node:test";
 import {
   buildDownloadClientBaseUrl,
   buildDownloadClientConfigValues,
+  buildDownloadClientTypeOptions,
+  downloadClientConnectionTestBlocker,
   isFileBackedDownloadClientConfigField,
+  isHostlessDownloadClientType,
   normalizeDownloadClientDraft,
 } from "./download-clients.ts";
 import type { ConfigFieldDef, DownloadClientDraft } from "../types/index.ts";
@@ -218,5 +221,52 @@ test("the connection test dials what a save would store", () => {
   assert.equal(
     buildDownloadClientBaseUrl(draft({ host: "https://qbit.example.com", port: "", urlBase: "" })),
     "https://qbit.example.com",
+  );
+});
+
+test("the connection test runs for a hostless client and still needs an address otherwise", () => {
+  assert.equal(downloadClientConnectionTestBlocker(draft({ clientType: "http", host: "", port: "" })), null);
+  assert.equal(downloadClientConnectionTestBlocker(draft({ clientType: "HTTP", host: "", port: "" })), null);
+  assert.equal(
+    downloadClientConnectionTestBlocker(draft({ clientType: "http", name: "  ", host: "" })),
+    "settings.downloadClientValidation",
+  );
+  assert.equal(
+    downloadClientConnectionTestBlocker(draft({ clientType: "nzbget", host: "" })),
+    "settings.downloadClientValidation",
+  );
+  assert.equal(downloadClientConnectionTestBlocker(draft({ clientType: "nzbget" })), null);
+});
+
+test("the built-in HTTP downloader is offered with its own settings and no address", () => {
+  const option = buildDownloadClientTypeOptions([]).find((entry) => entry.value === "http");
+  assert.ok(option, "http is a built-in type");
+  assert.ok(isHostlessDownloadClientType("HTTP"));
+  assert.ok(!isHostlessDownloadClientType("weaver"));
+  const fields = option.configFields ?? [];
+  assert.deepEqual(
+    fields.map((field) => field.key),
+    ["download_dir", "max_concurrent_downloads", "max_connections_per_host", "bandwidth_limit_kbps"],
+  );
+
+  const values = buildDownloadClientConfigValues(
+    draft({
+      clientType: "http",
+      host: "",
+      port: "",
+      configValues: {
+        download_dir: "/srv/synthetic-downloads",
+        max_concurrent_downloads: "3",
+      },
+    }),
+    fields,
+  );
+  assert.deepEqual(
+    values.find((value) => value.key === "download_dir"),
+    { key: "download_dir", stringValue: "/srv/synthetic-downloads" },
+  );
+  assert.deepEqual(
+    values.find((value) => value.key === "max_concurrent_downloads"),
+    { key: "max_concurrent_downloads", intValue: 3 },
   );
 });

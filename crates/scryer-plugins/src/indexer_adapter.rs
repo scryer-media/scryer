@@ -1,16 +1,20 @@
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, DownloadSourceKind, IndexerClient, IndexerErrorOperation,
-    IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCompletion,
-    IndexerSearchIncompleteReason as HostIncompleteReason, IndexerSearchPlanCapability,
-    IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
-    IndexerStatsTracker, NullIndexerStatsTracker, ResolvedDownloadArtifact, SearchMode,
-    extract_magnet_info_hash, is_valid_magnet_uri, normalize_release_password,
+    IndexerErrorRecorder, IndexerLoginChallenge, IndexerResponseAttributes, IndexerRoutingPlan,
+    IndexerSearchCompletion, IndexerSearchIncompleteReason as HostIncompleteReason,
+    IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
+    IndexerSearchResponse, IndexerSearchResult, IndexerSearchStrategyEvent,
+    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, IndexerStatsTracker,
+    NullIndexerStatsTracker, PluginDynamicConfigFields, PluginFailureReason,
+    ResolvedDownloadArtifact, SearchMode, extract_magnet_info_hash, is_valid_magnet_uri,
+    normalize_release_password,
 };
 use scryer_domain::{IndexerConfig, ProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
-    PluginActionRequest, PluginActionResponse, PluginIndexerCommand, PluginIndexerCommandResult,
+    CONFIG_FIELDS_ACTION, ConfigFieldsRequest, ConfigFieldsResponse, LOGIN_CHALLENGE_ACTION,
+    LoginChallengeResponse, PluginActionRequest, PluginActionResponse, PluginIndexerCommand,
+    PluginIndexerCommandResult,
 };
 use scryer_plugin_sdk::{
     IndexerSearchIncompleteReason as PluginIncompleteReason, IndexerSearchPluginError, PluginError,
@@ -23,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::loader::{allowed_hosts_for_descriptor, parse_config_json_entries};
+use crate::login_session_carry::{LoginSessionCarry, LoginSessionKey};
 use crate::plugin_http_host::{IndexerErrorCaptureContext, ProxyPolicy};
 use crate::types::{
     ConfigFieldRole, IndexerProtocol, IndexerSourceKind, PluginDescriptor, PluginSearchContext,
@@ -47,6 +52,9 @@ pub struct WasmIndexerClient {
     /// constructor and every existing call site keep their signatures.
     indexer_stats: Arc<dyn IndexerStatsTracker>,
     accounting: Option<scryer_application::IndexerAccountingContext>,
+    /// Set when the plugin declares a login-challenge answer field: the
+    /// settings under which this client shares its sign-in session.
+    login_session: Option<LoginSessionKey>,
     component: Arc<ComponentIndexer>,
 }
 
@@ -126,10 +134,14 @@ fn endpoint_resolution_error() -> AppError {
     AppError::Validation("network_endpoint_resolution_failed: Cannot resolve this indexer's configured endpoints. Check the selected definition and its endpoint settings; authorities must be HTTP(S) origins available from configuration.".into())
 }
 
+const MAX_NETWORK_ENDPOINTS_RESPONSE_BYTES: usize = 1024 * 1024;
+
 fn validate_network_endpoints(bytes: &[u8]) -> AppResult<Vec<String>> {
     use scryer_plugin_sdk::command::ResolveNetworkEndpointsResponse;
     use std::collections::BTreeSet;
-    if bytes.len() > 32 * 1024 {
+    // A size bound on the reply only, not a limit on how many hosts a
+    // definition may name: every validated origin is declared.
+    if bytes.len() > MAX_NETWORK_ENDPOINTS_RESPONSE_BYTES {
         return Err(endpoint_resolution_error());
     }
     let PluginResult::Ok(response) =
@@ -170,9 +182,6 @@ fn validate_network_endpoints(bytes: &[u8]) -> AppResult<Vec<String>> {
             .filter(|host| !host.is_empty() && host.len() <= 253)
             .ok_or_else(endpoint_resolution_error)?;
         origins.insert(url.origin().ascii_serialization());
-        if origins.len() > 64 {
-            return Err(endpoint_resolution_error());
-        }
         hosts.insert(host.to_string());
     }
     Ok(hosts.into_iter().collect())
@@ -227,6 +236,23 @@ impl WasmIndexerClient {
             .into_iter()
             .collect::<BTreeMap<_, _>>();
         crate::loader::bind_plugin_settings(&mut host_config, settings);
+        let login_challenge_answer_keys = descriptor
+            .config_fields()
+            .iter()
+            .filter(|field| field.role == Some(ConfigFieldRole::LoginChallengeAnswer))
+            .map(|field| field.key.clone())
+            .collect::<Vec<_>>();
+        let login_session = (!login_challenge_answer_keys.is_empty()).then(|| {
+            LoginSessionKey::new(
+                &descriptor.id,
+                inputs
+                    .proxy_policy
+                    .as_ref()
+                    .map(|policy| policy.config.id.as_str()),
+                &host_config,
+                &login_challenge_answer_keys,
+            )
+        });
         let memory_policy = IndexerMemoryPolicy::from_env();
         let host = ComponentHost::for_indexer_with_provider_profile(
             host_config,
@@ -239,6 +265,14 @@ impl WasmIndexerClient {
             provider_profile,
         )
         .map_err(AppError::Repository)?;
+        // A sign-in session left by a login challenge for these same settings
+        // starts this client, so the answer meets the session that showed it.
+        if let Some(carried) = login_session
+            .as_ref()
+            .and_then(|key| LoginSessionCarry::shared().carried(key, std::time::Instant::now()))
+        {
+            host.seed_state(carried);
+        }
         let runtime = ComponentRuntime::new(engine::shared_async_engine(), &wasm_bytes)
             .map_err(AppError::Repository)?;
 
@@ -256,6 +290,7 @@ impl WasmIndexerClient {
             indexer_name,
             indexer_error_recorder,
             indexer_stats: Arc::new(NullIndexerStatsTracker),
+            login_session,
             component: Arc::new(ComponentIndexer {
                 runtime: Arc::new(runtime),
                 host,
@@ -414,17 +449,21 @@ impl WasmIndexerClient {
         &self,
         operation: &str,
         usage: Option<GuestMemoryUsage>,
+        reason: PluginFailureReason,
         message: String,
     ) -> AppError {
         match usage {
-            Some(usage) if usage.denied => AppError::Repository(format!(
-                "indexer component {} for indexer '{}' ({}) {operation} exceeded its guest memory cap of {} MiB and was discarded; set {INDEXER_MEMORY_CAP_ENV} to raise the cap ({message})",
-                self.descriptor.id,
-                self.indexer_name,
-                self.indexer_id,
-                usage.cap_bytes / (1024 * 1024),
-            )),
-            _ => AppError::Repository(message),
+            Some(usage) if usage.denied => AppError::plugin_host_failed(
+                PluginFailureReason::ResourceLimit,
+                format!(
+                    "indexer component {} for indexer '{}' ({}) {operation} exceeded its guest memory cap of {} MiB and was discarded; set {INDEXER_MEMORY_CAP_ENV} to raise the cap ({message})",
+                    self.descriptor.id,
+                    self.indexer_name,
+                    self.indexer_id,
+                    usage.cap_bytes / (1024 * 1024),
+                ),
+            ),
+            _ => AppError::plugin_host_failed(reason, message),
         }
     }
 
@@ -486,6 +525,7 @@ impl WasmIndexerClient {
                     return Err(self.component_call_error(
                         operation,
                         usage,
+                        PluginFailureReason::HostFailure,
                         format!("indexer component {} {operation} failed: {error}", self.descriptor.id),
                     ));
                 }
@@ -495,6 +535,7 @@ impl WasmIndexerClient {
                     return Err(self.component_call_error(
                         operation,
                         usage,
+                        PluginFailureReason::TimedOut,
                         format!(
                             "indexer component {} {operation} timed out after {} ms",
                             self.descriptor.id,
@@ -519,6 +560,7 @@ impl WasmIndexerClient {
                 return Err(self.component_call_error(
                     operation,
                     usage,
+                    PluginFailureReason::HostFailure,
                     format!(
                         "indexer component {} {operation} returned invocation error {error:?}",
                         self.descriptor.id
@@ -539,6 +581,16 @@ impl WasmIndexerClient {
                 self.descriptor.id
             ))
         })?;
+        // Where this call took a carried sign-in session (a connection test
+        // signing in with the answer) is where the next client of the same
+        // settings, the saved indexer, picks it up.
+        if let Some(key) = self.login_session.as_ref() {
+            LoginSessionCarry::shared().refresh(
+                key,
+                indexer.host.state_snapshot(),
+                std::time::Instant::now(),
+            );
+        }
         Ok(result)
     }
 
@@ -651,9 +703,13 @@ impl WasmIndexerClient {
                 );
                 indexer.host.finish_indexer_error_capture(true);
                 return Err(match usage {
-                    Some(usage) if usage.denied && !error.is_canceled() => {
-                        self.component_call_error(PLAN_OPERATION, Some(usage), error.to_string())
-                    }
+                    Some(usage) if usage.denied && !error.is_canceled() => self
+                        .component_call_error(
+                            PLAN_OPERATION,
+                            Some(usage),
+                            PluginFailureReason::HostFailure,
+                            error.to_string(),
+                        ),
                     _ => error,
                 });
             }
@@ -686,6 +742,7 @@ impl WasmIndexerClient {
             self.component_call_error(
                 PLAN_OPERATION,
                 usage,
+                PluginFailureReason::HostFailure,
                 format!(
                     "indexer component {} strategy plan returned invocation error {error:?}",
                     self.descriptor.id
@@ -829,16 +886,90 @@ impl WasmIndexerClient {
     }
 }
 
+/// The image a `checkCaptcha` reply carries, as `(content type, base64)`, or
+/// `None` when the sign-in asks for nothing. Only raster images of a bounded
+/// size are passed on to a browser.
+fn decode_login_challenge(
+    plugin_id: &str,
+    payload: serde_json::Value,
+) -> AppResult<Option<(String, String)>> {
+    use base64::Engine as _;
+    use scryer_application::login_challenge_refusal as refusal;
+
+    let response: LoginChallengeResponse = serde_json::from_value(payload).map_err(|error| {
+        warn!(plugin = plugin_id, error = %error, "login challenge reply was malformed");
+        AppError::validation_refused(
+            refusal::MALFORMED,
+            "The indexer plugin's sign-in challenge could not be read.",
+        )
+    })?;
+    let Some(request) = response.captcha_request else {
+        return Ok(None);
+    };
+    if !request.challenge_type.trim().eq_ignore_ascii_case("image") {
+        return Err(AppError::validation_refused(
+            refusal::KIND_UNSUPPORTED,
+            format!(
+                "The indexer asks for a '{}' sign-in challenge, which Scryer cannot show.",
+                request.challenge_type.trim()
+            ),
+        ));
+    }
+    let content_type = request
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !refusal::IMAGE_CONTENT_TYPES.contains(&content_type.as_str()) {
+        return Err(AppError::validation_refused(
+            refusal::IMAGE_TYPE_UNSUPPORTED,
+            format!(
+                "The indexer's sign-in challenge is a '{content_type}' file, not an image Scryer shows."
+            ),
+        ));
+    }
+    let encoded = request.image_data.trim();
+    // Base64 needs four characters for every three bytes, so a reply this
+    // long is over the limit without decoding it.
+    if encoded.len() > refusal::MAX_IMAGE_BYTES.div_ceil(3) * 4 {
+        return Err(image_too_large());
+    }
+    let image = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| {
+            AppError::validation_refused(
+                refusal::MALFORMED,
+                "The indexer plugin's sign-in challenge image could not be read.",
+            )
+        })?;
+    if image.is_empty() {
+        return Err(AppError::validation_refused(
+            refusal::MALFORMED,
+            "The indexer plugin's sign-in challenge image is empty.",
+        ));
+    }
+    if image.len() > refusal::MAX_IMAGE_BYTES {
+        return Err(image_too_large());
+    }
+    Ok(Some((
+        content_type,
+        base64::engine::general_purpose::STANDARD.encode(image),
+    )))
+}
+
+fn image_too_large() -> AppError {
+    AppError::validation_refused(
+        scryer_application::login_challenge_refusal::IMAGE_TOO_LARGE,
+        "The indexer's sign-in challenge image is too large to show.",
+    )
+}
+
 fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
     match result {
         PluginResult::Ok(value) => Ok(value),
-        PluginResult::Err(PluginError {
-            code,
-            public_message,
-            ..
-        }) => Err(AppError::Repository(format!(
-            "{context}: plugin error {code:?}: {public_message}"
-        ))),
+        PluginResult::Err(error) => Err(AppError::plugin_failed(&error, context)),
     }
 }
 
@@ -877,14 +1008,11 @@ fn decode_grab_result(
     let payload = match result {
         PluginResult::Ok(response) => response.payload,
         PluginResult::Err(error) if error.code == PluginErrorCode::Unsupported => return Ok(None),
-        PluginResult::Err(PluginError {
-            code,
-            public_message,
-            ..
-        }) => {
-            return Err(AppError::Repository(format!(
-                "indexer download resolution: plugin error {code:?}: {public_message}"
-            )));
+        PluginResult::Err(error) => {
+            return Err(AppError::plugin_failed(
+                &error,
+                "indexer download resolution",
+            ));
         }
     };
     // Shipped Newznab-family plugins report unknown actions with an empty
@@ -1018,27 +1146,31 @@ fn decode_search_result(
     }
 }
 
-/// Component plugins deliberately keep unexpected trap details out of their
-/// public error. An upstream's explicit API-key rejection is safe, actionable
-/// information, though, and the guest currently carries it only in that debug
-/// detail. Promote the category without relaying the untrusted detail itself.
+/// A credential the indexer rejected is a stable reason the client translates
+/// (`PLUGIN_INVALID_API_KEY` and friends), so a plugin that names the code
+/// needs nothing more. Plugins built before the shared codes said only the
+/// generic sentence and named the rejected key in their debug text; promote
+/// those to the same reason without relaying the untrusted detail itself.
 fn indexer_search_plugin_error(error: PluginError, context: &str) -> AppError {
-    let is_api_key_rejection = error.public_message == "indexer component failed"
+    if is_legacy_api_key_rejection(&error) {
+        let promoted = PluginError {
+            code: PluginErrorCode::from("invalid_api_key"),
+            ..error
+        };
+        return AppError::plugin_failed(&promoted, context);
+    }
+    AppError::plugin_failed(&error, context)
+}
+
+fn is_legacy_api_key_rejection(error: &PluginError) -> bool {
+    error.public_message == "indexer component failed"
         && error.debug_message.as_deref().is_some_and(|message| {
             let normalized = message.to_ascii_lowercase();
             (normalized.contains("api key") || normalized.contains("apikey"))
                 && (normalized.contains("invalid")
                     || normalized.contains("rejected")
                     || normalized.contains("error"))
-        });
-    if is_api_key_rejection {
-        return AppError::Validation("The indexer rejected the API key.".to_string());
-    }
-
-    AppError::Repository(format!(
-        "{context}: plugin error {:?}: {}",
-        error.code, error.public_message
-    ))
+        })
 }
 
 fn host_incomplete_reason(reason: PluginIncompleteReason) -> HostIncompleteReason {
@@ -1733,6 +1865,7 @@ fn explicit_source_kind(
 ) -> Option<DownloadSourceKind> {
     match result.source_kind {
         Some(IndexerSourceKind::Usenet) => Some(DownloadSourceKind::NzbUrl),
+        Some(IndexerSourceKind::Http) => Some(DownloadSourceKind::HttpResource),
         Some(IndexerSourceKind::Torrent) => {
             if result
                 .magnet_url
@@ -1750,6 +1883,7 @@ fn explicit_source_kind(
         }
         Some(IndexerSourceKind::Generic) | None => match result.protocol {
             Some(IndexerProtocol::Usenet) => Some(DownloadSourceKind::NzbUrl),
+            Some(IndexerProtocol::Http) => Some(DownloadSourceKind::HttpResource),
             Some(IndexerProtocol::Torrent) => {
                 if result
                     .magnet_url
@@ -1885,6 +2019,7 @@ fn host_search_response(
                 auto_decision_code: None,
                 auto_decision_summary: None,
                 release_listing_json: None,
+                http: result.http,
             }
         })
         .collect();
@@ -2213,8 +2348,159 @@ impl WasmIndexerClient {
     }
 }
 
+/// Upper bound on one `config_fields` answer. A tracker definition carries a
+/// few dozen settings; anything near this is a broken plugin, not a form.
+const MAX_CONFIG_FIELDS_RESPONSE_BYTES: usize = 1024 * 1024;
+
+impl WasmIndexerClient {
+    /// Run the reserved `config_fields` action on a throwaway instance.
+    ///
+    /// The answer is a function of the trigger values alone, so the instance
+    /// skips endpoint resolution (no network grants are derived from draft
+    /// values) and is dropped afterwards instead of replacing the retained
+    /// actor.
+    async fn call_config_fields_action(&self, request: Vec<u8>) -> AppResult<Vec<u8>> {
+        let indexer = &self.component;
+        let _operation_guard = indexer.invocation_lock.lock().await;
+        let _actor_guard = indexer.actor.lock().await;
+        let token = CancellationToken::new();
+        indexer.host.bind_cancellation(token);
+        let plugin = self.descriptor.id.as_str();
+        let call = async {
+            let mut actor = indexer
+                .runtime
+                .instantiate(&indexer.host)
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "indexer component {plugin} config_fields initialization failed: {error}"
+                    ))
+                })?;
+            actor
+                .action(request)
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "indexer component {plugin} config_fields failed: {error}"
+                    ))
+                })?
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "indexer component {plugin} config_fields returned invocation error {error:?}"
+                    ))
+                })
+        };
+        tokio::time::timeout(indexer.timeout, call)
+            .await
+            .map_err(|_| {
+                AppError::Repository(format!(
+                    "indexer component {plugin} config_fields timed out after {} ms",
+                    indexer.timeout.as_millis()
+                ))
+            })?
+    }
+}
+
+/// Decode one `config_fields` answer. An `unsupported` error means the plugin
+/// has no fields to add, not that the form is broken.
+fn decode_config_fields_response(
+    plugin: &str,
+    bytes: &[u8],
+) -> AppResult<Option<PluginDynamicConfigFields>> {
+    if bytes.len() > MAX_CONFIG_FIELDS_RESPONSE_BYTES {
+        return Err(AppError::Repository(format!(
+            "indexer component {plugin} config_fields response exceeds {MAX_CONFIG_FIELDS_RESPONSE_BYTES} bytes"
+        )));
+    }
+    let result =
+        serde_json::from_slice::<PluginResult<PluginActionResponse>>(bytes).map_err(|error| {
+            AppError::Repository(format!(
+                "indexer component {plugin} config_fields returned invalid JSON response: {error}"
+            ))
+        })?;
+    if let PluginResult::Err(error) = &result
+        && error.code == PluginErrorCode::Unsupported
+    {
+        return Ok(None);
+    }
+    let response = decode_command_result(result, "indexer config_fields component")?;
+    let response: ConfigFieldsResponse =
+        serde_json::from_value(response.payload).map_err(|error| {
+            AppError::Repository(format!(
+                "indexer component {plugin} config_fields returned an invalid payload: {error}"
+            ))
+        })?;
+    Ok(Some(PluginDynamicConfigFields {
+        fields: crate::types::config_fields_to_domain(&response.fields),
+        hidden_field_keys: response.hidden_field_keys,
+    }))
+}
+
 #[async_trait]
 impl IndexerClient for WasmIndexerClient {
+    async fn dynamic_config_fields(
+        &self,
+        values: &BTreeMap<String, String>,
+    ) -> AppResult<Option<PluginDynamicConfigFields>> {
+        if self
+            .descriptor
+            .indexer()
+            .and_then(|indexer| indexer.capabilities.dynamic_config_fields.as_ref())
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let payload = serde_json::to_value(ConfigFieldsRequest {
+            values: values.clone(),
+        })
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        let request = serde_json::to_vec(&PluginActionRequest {
+            action: CONFIG_FIELDS_ACTION.to_string(),
+            payload,
+        })
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        let bytes = self.call_config_fields_action(request).await?;
+        decode_config_fields_response(&self.descriptor.id, &bytes)
+    }
+
+    async fn login_challenge(&self) -> AppResult<Option<IndexerLoginChallenge>> {
+        let Some(answer_field_key) = self
+            .descriptor
+            .config_fields()
+            .iter()
+            .find(|field| field.role == Some(ConfigFieldRole::LoginChallengeAnswer))
+            .map(|field| field.key.clone())
+        else {
+            return Ok(None);
+        };
+        let Some(payload) = self
+            .indexer_action_with_operation(
+                LOGIN_CHALLENGE_ACTION,
+                BTreeMap::new(),
+                IndexerErrorOperation::ConnectionTest,
+                true,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(challenge) = decode_login_challenge(&self.descriptor.id, payload)? else {
+            return Ok(None);
+        };
+        if let Some(key) = self.login_session.as_ref() {
+            LoginSessionCarry::shared().remember(
+                key.clone(),
+                self.component.host.state_snapshot(),
+                std::time::Instant::now(),
+            );
+        }
+        Ok(Some(IndexerLoginChallenge {
+            answer_field_key,
+            content_type: challenge.0,
+            image_base64: challenge.1,
+        }))
+    }
+
     async fn probe_connection(&self) -> AppResult<bool> {
         if !self
             .descriptor
@@ -2494,6 +2780,70 @@ impl IndexerClient for WasmIndexerClient {
         indexer.host.finish_indexer_error_capture(result.is_err());
         result
     }
+
+    async fn resolve_http_release(
+        &self,
+        release: &scryer_plugin_sdk::PluginHttpRelease,
+    ) -> AppResult<Option<scryer_plugin_sdk::PluginHttpRelease>> {
+        let Some(resolve) = release.resolve.as_ref() else {
+            return Ok(None);
+        };
+        let payload = serde_json::to_value(release).map_err(|error| {
+            AppError::Repository(format!(
+                "failed to encode http release for resolve: {error}"
+            ))
+        })?;
+        let indexer = &self.component;
+        let _operation_guard = indexer.invocation_lock.lock().await;
+        indexer.host.begin_indexer_error_capture(
+            self.indexer_error_capture(IndexerErrorOperation::IndexerAction),
+        );
+        let request = PluginActionRequest {
+            action: resolve.action.clone(),
+            payload,
+        };
+        let result = self
+            .invoke_component(
+                PluginIndexerCommand::Action(request),
+                "indexer_http_resolve",
+                IndexerErrorOperation::IndexerAction,
+                None,
+            )
+            .await;
+        let result = match result {
+            Ok(PluginIndexerCommandResult::Action(result)) => decode_http_resolve_result(result),
+            Ok(_) => Err(AppError::Repository(
+                "Indexer component returned the wrong result for http resolve".into(),
+            )),
+            Err(error) => Err(error),
+        };
+        let result = indexer
+            .host
+            .captured_host_policy_error()
+            .map_or(result, Err);
+        indexer.host.finish_indexer_error_capture(result.is_err());
+        result
+    }
+}
+
+/// The `resolve` action's reply: a fresh `PluginHttpRelease`, or `None` when
+/// the plugin reports the action as unsupported. A malformed reply fails the
+/// grab rather than submitting a release the indexer did not describe.
+fn decode_http_resolve_result(
+    result: PluginResult<PluginActionResponse>,
+) -> AppResult<Option<scryer_plugin_sdk::PluginHttpRelease>> {
+    let payload = match result {
+        PluginResult::Ok(response) => response.payload,
+        PluginResult::Err(error) if error.code == PluginErrorCode::Unsupported => return Ok(None),
+        PluginResult::Err(error) => {
+            return Err(AppError::plugin_failed(&error, "indexer http resolve"));
+        }
+    };
+    serde_json::from_value(payload).map(Some).map_err(|error| {
+        AppError::Repository(format!(
+            "indexer http resolve returned an invalid release: {error}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -2508,7 +2858,168 @@ mod tests {
     }
 
     #[test]
-    fn network_endpoints_validate_and_bound_origins() {
+    fn http_resolve_reply_decodes_a_release_and_treats_unsupported_as_none() {
+        let release = scryer_plugin_sdk::PluginHttpRelease {
+            provider: "mediathek".to_string(),
+            item_id: "item-1".to_string(),
+            page_url: "https://provider.invalid/watch/item-1".to_string(),
+            ..Default::default()
+        };
+        let decoded = decode_http_resolve_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::to_value(&release).unwrap(),
+        }))
+        .unwrap();
+        assert_eq!(decoded, Some(release));
+
+        let unsupported = decode_http_resolve_result(PluginResult::Err(PluginError {
+            code: PluginErrorCode::Unsupported,
+            public_message: "no resolve".to_string(),
+            debug_message: None,
+            details: None,
+            retry_after_seconds: None,
+        }))
+        .unwrap();
+        assert_eq!(unsupported, None);
+
+        let malformed = decode_http_resolve_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({"provider": "mediathek"}),
+        }));
+        assert!(malformed.is_err());
+    }
+
+    /// A challenge reaches the browser only as a bounded raster image, and
+    /// every refusal names its reason.
+    #[test]
+    fn login_challenge_reply_is_shown_only_as_a_bounded_raster_image() {
+        use base64::Engine as _;
+        use scryer_application::login_challenge_refusal as refusal;
+
+        let reply = |kind: &str, content_type: &str, data: &str| {
+            serde_json::json!({
+                "captchaRequest": { "type": kind, "contentType": content_type, "imageData": data }
+            })
+        };
+        assert_eq!(
+            decode_login_challenge("synthetic", reply("image", "Image/PNG; q=1", "iVBORw=="))
+                .unwrap(),
+            Some(("image/png".to_string(), "iVBORw==".to_string()))
+        );
+        assert_eq!(
+            decode_login_challenge("synthetic", serde_json::json!({})).unwrap(),
+            None
+        );
+        let reason = |payload| {
+            decode_login_challenge("synthetic", payload)
+                .unwrap_err()
+                .validation_reason()
+        };
+        assert_eq!(
+            reason(serde_json::json!({"captchaRequest": {"type": "image"}})),
+            Some(refusal::MALFORMED)
+        );
+        assert_eq!(
+            reason(reply("image", "image/png", "not base64!")),
+            Some(refusal::MALFORMED)
+        );
+        assert_eq!(
+            reason(reply("image", "image/png", "")),
+            Some(refusal::MALFORMED)
+        );
+        assert_eq!(
+            reason(reply("text", "image/png", "iVBORw==")),
+            Some(refusal::KIND_UNSUPPORTED)
+        );
+        assert_eq!(
+            reason(reply("image", "image/svg+xml", "PHN2Zz4=")),
+            Some(refusal::IMAGE_TYPE_UNSUPPORTED)
+        );
+        assert_eq!(
+            reason(reply("image", "text/html", "PGh0bWw+")),
+            Some(refusal::IMAGE_TYPE_UNSUPPORTED)
+        );
+        let at_limit =
+            base64::engine::general_purpose::STANDARD.encode(vec![0u8; refusal::MAX_IMAGE_BYTES]);
+        assert!(
+            decode_login_challenge("synthetic", reply("image", "image/png", &at_limit))
+                .unwrap()
+                .is_some()
+        );
+        let over_limit =
+            base64::engine::general_purpose::STANDARD
+                .encode(vec![0u8; refusal::MAX_IMAGE_BYTES + 1]);
+        assert_eq!(
+            reason(reply("image", "image/png", &over_limit)),
+            Some(refusal::IMAGE_TOO_LARGE)
+        );
+    }
+
+    #[test]
+    fn config_fields_reply_decodes_fields_and_treats_unsupported_as_none() {
+        let response = scryer_plugin_sdk::command::ConfigFieldsResponse {
+            fields: vec![scryer_plugin_sdk::ConfigFieldDef {
+                key: "cookie".to_string(),
+                label: "Cookie".to_string(),
+                field_type: scryer_plugin_sdk::ConfigFieldType::Password,
+                required: true,
+                ..Default::default()
+            }],
+            hidden_field_keys: vec!["username".to_string()],
+        };
+        let bytes = serde_json::to_vec(&PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::to_value(&response).unwrap(),
+        }))
+        .unwrap();
+        let decoded = decode_config_fields_response("cardigann", &bytes)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded.fields.len(), 1);
+        assert_eq!(decoded.fields[0].key, "cookie");
+        assert_eq!(
+            decoded.fields[0].field_type,
+            scryer_domain::ConfigFieldType::Password
+        );
+        assert_eq!(decoded.hidden_field_keys, vec!["username".to_string()]);
+
+        let unsupported =
+            serde_json::to_vec(&PluginResult::<PluginActionResponse>::Err(PluginError {
+                code: PluginErrorCode::Unsupported,
+                public_message: "no config fields".to_string(),
+                debug_message: None,
+                details: None,
+                retry_after_seconds: None,
+            }))
+            .unwrap();
+        assert_eq!(
+            decode_config_fields_response("cardigann", &unsupported).unwrap(),
+            None
+        );
+
+        let failed = serde_json::to_vec(&PluginResult::<PluginActionResponse>::Err(PluginError {
+            code: PluginErrorCode::InvalidConfig,
+            public_message: "unknown definition".to_string(),
+            debug_message: None,
+            details: None,
+            retry_after_seconds: None,
+        }))
+        .unwrap();
+        assert!(decode_config_fields_response("cardigann", &failed).is_err());
+
+        let malformed = serde_json::to_vec(&PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({"fields": "nope"}),
+        }))
+        .unwrap();
+        assert!(decode_config_fields_response("cardigann", &malformed).is_err());
+        assert!(
+            decode_config_fields_response(
+                "cardigann",
+                &vec![b' '; MAX_CONFIG_FIELDS_RESPONSE_BYTES + 1]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn network_endpoints_validate_every_declared_origin() {
         assert_eq!(
             validate_network_endpoints(&endpoint_response(vec![
                 "https://API.example:8443".into(),
@@ -2535,18 +3046,22 @@ mod tests {
                 "{invalid}"
             );
         }
-        assert!(
+        // No cap on how many hosts a definition names.
+        assert_eq!(
             validate_network_endpoints(&endpoint_response(
-                (0..65).map(|n| format!("https://api{n}.example")).collect()
+                (0..500)
+                    .map(|n| format!("https://api{n}.example"))
+                    .collect()
             ))
-            .is_err()
+            .unwrap()
+            .len(),
+            500
         );
-        assert!(validate_network_endpoints(&vec![b' '; 32 * 1024 + 1]).is_err());
-        assert!(validate_network_endpoints(b"{}").is_err());
         assert!(
-            validate_network_endpoints(&endpoint_response(vec!["https://api.example".into(); 64]))
-                .is_ok()
+            validate_network_endpoints(&vec![b' '; MAX_NETWORK_ENDPOINTS_RESPONSE_BYTES + 1])
+                .is_err()
         );
+        assert!(validate_network_endpoints(b"{}").is_err());
     }
 
     fn page(titles: &[&str], next_cursor: Option<&str>) -> PluginSearchCallResponse {
@@ -3051,11 +3566,125 @@ mod tests {
         .err()
         .expect("an API-key rejection must fail the search");
 
+        let failure = error
+            .plugin_failure()
+            .expect("a legacy API-key rejection is promoted to the shared reason");
+        assert_eq!(failure.reason.as_str(), "PLUGIN_INVALID_API_KEY");
+        assert_eq!(failure.detail, None);
+        assert!(!format!("{error:?}").contains("secret"));
+    }
+
+    #[test]
+    fn a_plugin_code_the_sdk_never_named_reaches_the_client_as_its_own_reason() {
+        // What a guest writes for a code newer than any host or SDK release.
+        let bytes = br#"{"err":{"code":"geo_blocked","public_message":"The site refuses requests from this region","debug_message":"form answered 451 with key=example-secret"}}"#;
+        let result = serde_json::from_slice::<PluginResult<PluginSearchResponse>>(bytes)
+            .expect("an unknown code decodes unchanged");
+
+        let error = decode_search_result(result, true, "indexer search")
+            .err()
+            .expect("a plugin error must fail the search");
+
+        let failure = error.plugin_failure().expect("a typed plugin failure");
+        assert_eq!(failure.reason.as_str(), "PLUGIN_GEO_BLOCKED");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("The site refuses requests from this region")
+        );
+        assert!(!format!("{error:?}").contains("example-secret"));
+    }
+
+    fn coded_search_error(code: &str, public_message: &str, debug_message: &str) -> AppError {
+        decode_search_result(
+            PluginResult::Err(PluginError {
+                code: PluginErrorCode::from(code),
+                public_message: public_message.to_string(),
+                debug_message: Some(debug_message.to_string()),
+                retry_after_seconds: None,
+                details: None,
+            }),
+            true,
+            "indexer search",
+        )
+        .err()
+        .expect("a plugin error must fail the search")
+    }
+
+    #[test]
+    fn a_rejected_credential_code_reaches_the_client_as_its_translated_reason() {
+        for code in [
+            "invalid_api_key",
+            "invalid_passkey",
+            "invalid_cookie",
+            "invalid_username_password",
+        ] {
+            // The plugin's sentence does not matter: the code alone decides.
+            let error = coded_search_error(
+                code,
+                "the plugin could not complete the request",
+                "upstream answered 401 for key=example-secret",
+            );
+            let failure = error
+                .plugin_failure()
+                .unwrap_or_else(|| panic!("{code} stays a typed plugin failure"));
+            assert_eq!(
+                failure.reason.as_str(),
+                format!("PLUGIN_{}", code.to_ascii_uppercase()),
+                "{code}"
+            );
+            assert_eq!(failure.detail, None, "{code}");
+            assert!(!format!("{error:?}").contains("example-secret"), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_code_that_names_no_credential_stays_a_plugin_failure() {
+        for code in ["captcha_required", "quota_exceeded", "tls_error"] {
+            let error = coded_search_error(
+                code,
+                "the plugin could not complete the request",
+                "api key error: rejected",
+            );
+            let failure = error
+                .plugin_failure()
+                .unwrap_or_else(|| panic!("{code} stays a typed plugin failure"));
+            assert_eq!(
+                failure.reason.as_str(),
+                format!("PLUGIN_{}", code.to_ascii_uppercase()),
+                "{code}"
+            );
+            // The PDK's generic sentence adds nothing beside the reason.
+            assert_eq!(failure.detail, None, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_plugin_search_error_names_its_reason_and_keeps_its_public_sentence() {
+        let error = decode_search_result(
+            PluginResult::Err(PluginError {
+                code: PluginErrorCode::AuthFailed,
+                public_message: "Tracker login failed: account disabled".to_string(),
+                debug_message: Some("login form answered 200 with key=example-secret".to_string()),
+                retry_after_seconds: None,
+                details: None,
+            }),
+            true,
+            "indexer search",
+        )
+        .err()
+        .expect("a plugin error must fail the search");
+
+        let failure = error.plugin_failure().expect("a typed plugin failure");
+        assert_eq!(failure.reason, PluginFailureReason::AuthFailed);
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("Tracker login failed: account disabled")
+        );
         assert_eq!(
             error.to_string(),
-            "validation: The indexer rejected the API key."
+            "indexer search: plugin error AuthFailed: Tracker login failed: account disabled"
         );
-        assert!(!error.to_string().contains("secret"));
+        assert!(!format!("{error:?}").contains("example-secret"));
     }
 
     #[test]
@@ -3746,7 +4375,12 @@ mod tests {
         let error = client.component_call_error(
             "indexer_search",
             Some(usage(64 * 1024 * 1024, true)),
+            PluginFailureReason::HostFailure,
             "indexer component newznab indexer_search failed: wasm trap".to_string(),
+        );
+        assert_eq!(
+            error.plugin_failure().map(|failure| failure.reason.clone()),
+            Some(PluginFailureReason::ResourceLimit)
         );
         let message = error.to_string();
         assert!(message.contains("'Test' (cfg)"), "{message}");
@@ -3754,9 +4388,17 @@ mod tests {
         assert!(message.contains(INDEXER_MEMORY_CAP_ENV), "{message}");
         assert!(message.contains("wasm trap"), "{message}");
 
-        let plain = client
-            .component_call_error("indexer_search", Some(usage(1024, false)), "boom".into())
-            .to_string();
+        let plain = client.component_call_error(
+            "indexer_search",
+            Some(usage(1024, false)),
+            PluginFailureReason::TimedOut,
+            "boom".into(),
+        );
+        assert_eq!(
+            plain.plugin_failure().map(|failure| failure.reason.clone()),
+            Some(PluginFailureReason::TimedOut)
+        );
+        let plain = plain.to_string();
         assert!(!plain.contains("memory cap"), "{plain}");
     }
 

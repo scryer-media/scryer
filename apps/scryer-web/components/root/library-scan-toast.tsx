@@ -823,7 +823,7 @@ export function LibraryScanToast({
 
   return (
     <div
-      className="relative w-[392px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_20px_44px_rgba(0,0,0,0.5)] [backdrop-filter:blur(14px)]"
+      className="relative w-[392px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-[var(--scry-border)] bg-[var(--background)] shadow-[0_20px_44px_rgba(0,0,0,0.5)] [backdrop-filter:blur(14px)]"
       onMouseEnter={autoDismiss ? () => setPaused(true) : undefined}
       onMouseLeave={autoDismiss ? () => setPaused(false) : undefined}
     >

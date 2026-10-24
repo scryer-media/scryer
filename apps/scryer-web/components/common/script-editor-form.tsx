@@ -25,7 +25,8 @@ import {
 import { defaultScriptSchedule } from "@/lib/utils/script-schedule";
 
 function editorLanguageFor(language: ScriptLanguageValue): CodeEditorLanguage {
-  return language === "SHELL" ? "shell" : "plain";
+  const languages = { SHELL: "shell", PYTHON: "python", POWERSHELL: "powershell", BATCH: "batch", GO: "go" } as const;
+  return languages[language];
 }
 
 type ScriptEditorFormProps = {
@@ -140,7 +141,7 @@ export function ScriptEditorForm({
             {
               id: inlineTypeId,
               value: "inline",
-              label: isScheduled ? t("script.editor.inline") : t("settings.pp.inline"),
+              label: t("script.editor.inline"),
             },
             { id: fileTypeId, value: "file", label: t("settings.pp.filePath") },
           ]}
@@ -167,7 +168,7 @@ export function ScriptEditorForm({
         {draft.scriptType === "inline" ? (
           <>
             <Label className="mb-2 block">
-              {isScheduled ? t("script.editor.inlineHelp") : t("settings.pp.inlineHelp")}
+              {t("script.editor.inlineHelp")}
             </Label>
             <div id={contentIds.wrapper}>
               <LazyCodeEditor
@@ -175,6 +176,8 @@ export function ScriptEditorForm({
                 value={draft.scriptContent}
                 onChange={(value) => setDraft((prev) => ({ ...prev, scriptContent: value }))}
                 language={editorLanguageFor(draft.language)}
+                scriptTrigger={trigger}
+                scriptTranslate={t}
                 minLines={10}
                 maxLines={35}
               />

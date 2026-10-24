@@ -15,7 +15,10 @@ import {
   updateLibraryMutation,
   completeSetupMutation,
 } from "@/lib/graphql/mutations";
-import { buildDownloadClientTypeOptions } from "@/lib/utils/download-clients";
+import {
+  buildDownloadClientTypeOptions,
+  isHostlessDownloadClientType,
+} from "@/lib/utils/download-clients";
 import { useDownloadClientSetup } from "@/lib/hooks/use-download-client-setup";
 import {
   useIndexerSetup,
@@ -307,12 +310,14 @@ export function SetupWizardContainer({
       setDcLocalPathStyle(
         localPathStyleFromRuntimeValue(data?.runtimeInfo?.runtimePathStyle),
       );
+      // The wizard's form is a server address; hostless clients are set
+      // up from settings.
       setDcTypeOptions(
         buildDownloadClientTypeOptions(
           (data?.downloadClientProviderTypes as
             | ProviderTypeInfo[]
             | undefined) ?? [],
-        ),
+        ).filter((option) => !isHostlessDownloadClientType(option.value)),
       );
 
       if (data?.indexerProviderTypes?.length) {
@@ -328,7 +333,11 @@ export function SetupWizardContainer({
         setIdxProviderOptions(FALLBACK_PROVIDER_OPTIONS);
       }
     } catch {
-      setDcTypeOptions(buildDownloadClientTypeOptions([]));
+      setDcTypeOptions(
+        buildDownloadClientTypeOptions([]).filter(
+          (option) => !isHostlessDownloadClientType(option.value),
+        ),
+      );
       setIdxProviderOptions(FALLBACK_PROVIDER_OPTIONS);
     }
   }, [

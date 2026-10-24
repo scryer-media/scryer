@@ -1,3 +1,4 @@
+mod http;
 mod nzbget;
 mod router;
 mod sabnzbd;
@@ -21,6 +22,10 @@ use scryer_domain::MediaFacet;
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+pub use http::HttpDownloadClient;
+pub(crate) use http::{
+    apply_saved_config as apply_saved_http_config, forget_engine as forget_http_engine,
+};
 pub use nzbget::NzbgetDownloadClient;
 pub use router::{
     PrioritizedDownloadClientRouter, describe_download_client_router_metrics,
@@ -90,6 +95,10 @@ impl scryer_application::BuiltinDownloadClientConnectionTester
         proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> AppResult<()> {
         let client_type = client_type.trim().to_lowercase();
+        if client_type == "http" {
+            // A local directory, not a server: nothing to dial.
+            return http::test_http_download_dir(config_json).await;
+        }
         let config = parse_download_client_config_json(config_json)?;
         let base_url = resolve_download_client_base_url(&config).ok_or_else(|| {
             AppError::Validation("cannot compute base URL from config - host is required".into())

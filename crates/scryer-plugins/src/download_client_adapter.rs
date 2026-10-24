@@ -11,7 +11,7 @@ use scryer_application::{
     AppError, AppResult, ClientJobLocator, DownloadClient, DownloadClientAddRequest,
     DownloadClientFeedbackScope, DownloadClientMarkImportedRequest, DownloadClientObservation,
     DownloadClientStatus, DownloadGrabResult, DownloadSourceKind, ResolvedDownloadArtifact,
-    StagedNzbRef,
+    StagedNzbRef, plugin_codes,
 };
 use scryer_domain::{
     CompletedDownload, DownloadQueueItem, DownloadQueueState, DownloadSeedingSnapshot,
@@ -293,7 +293,7 @@ fn plugin_missing_observation(complete_listing: bool) -> DownloadClientObservati
 fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
     match result {
         PluginResult::Ok(value) => Ok(value),
-        PluginResult::Err(error) => Err(plugin_error_as_repository(error, context)),
+        PluginResult::Err(error) => Err(plugin_error_as_failure(error, context)),
     }
 }
 
@@ -343,6 +343,18 @@ fn feedback_scope_is_empty(scope: &DownloadClientFeedbackScope) -> bool {
             .any(|category| category.trim().is_empty())
 }
 
+/// The test is the one answer an operator reads directly, so it keeps the
+/// reason the plugin named instead of the masked repository error the other
+/// commands report.
+fn decode_test_connection_result(result: PluginResult<String>) -> AppResult<String> {
+    match result {
+        PluginResult::Ok(value) => Ok(value),
+        PluginResult::Err(error) => {
+            Err(AppError::plugin_failed(&error, "download test_connection"))
+        }
+    }
+}
+
 fn decode_download_add_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
     match result {
         PluginResult::Ok(value) => Ok(value),
@@ -357,20 +369,38 @@ fn plugin_error_message(error: &PluginError, context: &str) -> String {
     )
 }
 
-fn plugin_error_as_repository(error: PluginError, context: &str) -> AppError {
-    AppError::Repository(plugin_error_message(&error, context))
+/// A failed client command other than add or the connection test keeps the
+/// reason the plugin named, so a client can say why in its own language.
+fn plugin_error_as_failure(error: PluginError, context: &str) -> AppError {
+    AppError::plugin_failed(&error, context)
 }
+
+/// Open codes that stand for what the well-known transient codes said before
+/// codes were open: an unreachable or misbehaving client (`tls_error`,
+/// `invalid_response`) or a spent allowance (`quota_exceeded`). They stay
+/// retryable, so another client in the routing order is tried.
+const RETRYABLE_ADD_CODES: &[&str] = &[
+    plugin_codes::TLS_ERROR,
+    plugin_codes::INVALID_RESPONSE,
+    plugin_codes::QUOTA_EXCEEDED,
+];
 
 fn map_download_add_plugin_error(error: PluginError, context: &str) -> AppError {
     let message = plugin_error_message(&error, context);
-    match error.code {
+    // A well-known code sent as its open string is that code.
+    match &PluginErrorCode::from(error.code.as_str()) {
         PluginErrorCode::RateLimited
         | PluginErrorCode::UpstreamUnavailable
         | PluginErrorCode::Temporary => AppError::DownloadSubmitUnavailable(message),
+        PluginErrorCode::Other(code) if RETRYABLE_ADD_CODES.contains(&code.as_str()) => {
+            AppError::DownloadSubmitUnavailable(message)
+        }
         PluginErrorCode::InvalidConfig
         | PluginErrorCode::AuthFailed
         | PluginErrorCode::Unsupported
-        | PluginErrorCode::Permanent => AppError::DownloadSubmitRejected(message),
+        | PluginErrorCode::Permanent
+        // Any other code, known or not, is a refusal and is not retried.
+        | PluginErrorCode::Other(_) => AppError::DownloadSubmitRejected(message),
     }
 }
 
@@ -406,6 +436,7 @@ fn map_source_kind(kind: DownloadSourceKind) -> DownloadInputKind {
         DownloadSourceKind::NzbUrl => DownloadInputKind::NzbUrl,
         DownloadSourceKind::TorrentFile => DownloadInputKind::TorrentFile,
         DownloadSourceKind::MagnetUri => DownloadInputKind::MagnetUri,
+        DownloadSourceKind::HttpResource => DownloadInputKind::HttpResource,
     }
 }
 
@@ -558,7 +589,7 @@ fn map_queue_item(
     client_type: &str,
 ) -> DownloadQueueItem {
     let attention = attention_required(&item);
-    let attention_reason = item.message.clone();
+    let attention_reason = http_phase_message(item.http.as_ref(), item.message.clone());
     let info_hash = normalized_plugin_info_hash(item.info_hash.as_deref())
         .or_else(|| {
             item.torrent
@@ -626,6 +657,30 @@ fn map_queue_item(
     }
 }
 
+/// The queue item message, with the HTTP download phase in front when the
+/// client reports one. The phase is what an operator sees while a provider
+/// page is being resolved or tracks are being muxed, so it must not be lost
+/// behind an empty client message.
+fn http_phase_message(
+    http: Option<&scryer_plugin_sdk::PluginHttpItem>,
+    message: Option<String>,
+) -> Option<String> {
+    let phase = http.and_then(|http| http.phase).map(|phase| match phase {
+        scryer_plugin_sdk::HttpDownloadPhase::Resolving => "Resolving provider page",
+        scryer_plugin_sdk::HttpDownloadPhase::Downloading => "Downloading",
+        scryer_plugin_sdk::HttpDownloadPhase::Muxing => "Muxing tracks",
+        scryer_plugin_sdk::HttpDownloadPhase::WritingSubtitles => "Writing subtitles",
+    });
+    let message = message
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty());
+    match (phase, message) {
+        (Some(phase), Some(message)) => Some(format!("{phase}: {message}")),
+        (Some(phase), None) => Some(phase.to_string()),
+        (None, message) => message,
+    }
+}
+
 fn retain_queue_item(item: &PluginDownloadItem) -> bool {
     !matches!(
         item.state,
@@ -671,6 +726,12 @@ fn map_completed_download(
         completed_at: parse_timestamp(item.completed_at),
         parameters: item.parameters,
         posted_file_names: Vec::new(),
+        subtitle_paths: item
+            .subtitle_paths
+            .into_iter()
+            .map(|path| path.trim().to_string())
+            .filter(|path| !path.is_empty())
+            .collect(),
     }
 }
 
@@ -932,6 +993,7 @@ fn build_plugin_add_request(
             nzb_file_name: resolved.nzb_file_name,
             nzb_content_type: resolved.nzb_content_type,
             source_title: request.source_title_without_password(),
+            http: request.http.clone(),
             source_password: request.password_candidates().first().map(str::to_string),
             password_candidates: request.password_candidates().iter().cloned().collect(),
         },
@@ -1633,7 +1695,7 @@ impl DownloadClient for WasmDownloadClient {
                 "download-client command returned the wrong result for test_connection".to_string(),
             ));
         };
-        decode_command_result(result, "download test_connection")
+        decode_test_connection_result(result)
     }
 }
 
@@ -1678,6 +1740,7 @@ mod tests {
             raw_state: None,
             completed_at: None,
             added_at: None,
+            http: None,
         }
     }
 
@@ -1904,6 +1967,7 @@ mod tests {
                 size_bytes: Some(1),
                 completed_at: None,
                 parameters: Vec::new(),
+                subtitle_paths: Vec::new(),
             },
             "client-1",
             "qBittorrent",
@@ -1954,6 +2018,7 @@ mod tests {
                 size_bytes: Some(1),
                 completed_at: None,
                 parameters: Vec::new(),
+                subtitle_paths: Vec::new(),
             },
             "client-1",
             "qBittorrent",
@@ -1965,6 +2030,7 @@ mod tests {
 
     fn sample_request() -> DownloadClientAddRequest {
         DownloadClientAddRequest {
+            http: None,
             search_facet: None,
             title: scryer_domain::Title {
                 id: "title-1".to_string(),
@@ -2125,6 +2191,29 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_connection_test_names_the_plugin_reason() {
+        let error = decode_test_connection_result(PluginResult::Err(PluginError {
+            details: None,
+            code: PluginErrorCode::AuthFailed,
+            public_message: "the client rejected the username or password".to_string(),
+            debug_message: Some("HTTP 401 from the web UI".to_string()),
+            retry_after_seconds: None,
+        }))
+        .expect_err("a plugin error must fail the test");
+
+        let failure = error.plugin_failure().expect("a typed plugin failure");
+        assert_eq!(
+            failure.reason,
+            scryer_application::PluginFailureReason::AuthFailed
+        );
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("the client rejected the username or password")
+        );
+        assert!(!error.to_string().contains("HTTP 401"));
+    }
+
+    #[test]
     fn command_add_permanent_plugin_error_is_rejected_without_losing_its_message() {
         let error = decode_download_add_result::<()>(
             PluginResult::Err(PluginError {
@@ -2167,6 +2256,140 @@ mod tests {
 
             assert!(error.is_retryable_download_submit_failure());
         }
+    }
+
+    #[test]
+    fn command_add_unknown_plugin_code_is_rejected_not_retried() {
+        let error = decode_download_add_result::<()>(
+            PluginResult::Err(PluginError {
+                details: None,
+                code: PluginErrorCode::from("quota_exhausted_for_today"),
+                public_message: "the client refused the job".to_string(),
+                debug_message: None,
+                retry_after_seconds: None,
+            }),
+            "download add",
+        )
+        .expect_err("an unknown plugin code should fail the submission");
+
+        assert!(!error.is_retryable_download_submit_failure());
+        assert!(matches!(
+            error,
+            AppError::DownloadSubmitRejected(message)
+                if message.contains("quota_exhausted_for_today")
+                    && message.contains("the client refused the job")
+        ));
+    }
+
+    #[test]
+    fn command_add_download_rejected_surfaces_on_the_grab_and_is_not_retried() {
+        let error = decode_download_add_result::<()>(
+            PluginResult::Err(PluginError {
+                details: None,
+                code: PluginErrorCode::from("download_rejected"),
+                public_message: "the client refused the job".to_string(),
+                debug_message: None,
+                retry_after_seconds: None,
+            }),
+            "download add",
+        )
+        .expect_err("a rejected download should fail the submission");
+
+        assert!(!error.is_retryable_download_submit_failure());
+        assert!(matches!(
+            error,
+            AppError::DownloadSubmitRejected(message)
+                if message.contains("download_rejected")
+                    && message.contains("the client refused the job")
+        ));
+    }
+
+    #[test]
+    fn command_add_open_transport_codes_stay_retryable() {
+        for code in ["tls_error", "invalid_response", "quota_exceeded"] {
+            let error = decode_download_add_result::<()>(
+                PluginResult::Err(PluginError {
+                    details: None,
+                    code: PluginErrorCode::from(code),
+                    public_message: "the client could not be used right now".to_string(),
+                    debug_message: None,
+                    retry_after_seconds: None,
+                }),
+                "download add",
+            )
+            .expect_err("an open transport code should fail the submission");
+
+            assert!(error.is_retryable_download_submit_failure(), "{code}");
+        }
+    }
+
+    #[test]
+    fn command_add_refusal_codes_are_rejected_not_retried() {
+        for code in [
+            "endpoint_not_found",
+            "invalid_api_key",
+            "path_not_writable",
+            "item_not_found",
+            "account_banned",
+        ] {
+            let error = decode_download_add_result::<()>(
+                PluginResult::Err(PluginError {
+                    details: None,
+                    code: PluginErrorCode::from(code),
+                    public_message: "the client refused the job".to_string(),
+                    debug_message: None,
+                    retry_after_seconds: None,
+                }),
+                "download add",
+            )
+            .expect_err("a refusal code should fail the submission");
+
+            assert!(!error.is_retryable_download_submit_failure(), "{code}");
+            assert!(
+                matches!(error, AppError::DownloadSubmitRejected(_)),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_add_well_known_code_sent_as_a_string_keeps_its_retry_class() {
+        let error = decode_download_add_result::<()>(
+            PluginResult::Err(PluginError {
+                details: None,
+                code: PluginErrorCode::Other("temporary".into()),
+                public_message: "client is temporarily unavailable".to_string(),
+                debug_message: None,
+                retry_after_seconds: None,
+            }),
+            "download add",
+        )
+        .expect_err("a transient plugin error should fail the submission");
+
+        assert!(error.is_retryable_download_submit_failure());
+    }
+
+    #[test]
+    fn a_failed_client_command_names_the_plugin_reason() {
+        let error = decode_command_result::<()>(
+            PluginResult::Err(PluginError {
+                details: None,
+                code: PluginErrorCode::from("item_not_found"),
+                public_message: "the client no longer has this download".to_string(),
+                debug_message: Some("secret detail".to_string()),
+                retry_after_seconds: None,
+            }),
+            "download control",
+        )
+        .expect_err("a failed command should fail");
+
+        let failure = error.plugin_failure().expect("a typed plugin failure");
+        assert_eq!(failure.reason.as_str(), "PLUGIN_ITEM_NOT_FOUND");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("the client no longer has this download")
+        );
+        assert!(!error.to_string().contains("secret detail"));
     }
 
     #[test]
@@ -2306,6 +2529,126 @@ mod tests {
         );
     }
 
+    fn http_release() -> scryer_plugin_sdk::PluginHttpRelease {
+        scryer_plugin_sdk::PluginHttpRelease {
+            provider: "mediathek".to_string(),
+            item_id: "item-7".to_string(),
+            page_url: "https://provider.invalid/watch/item-7".to_string(),
+            duration_seconds: Some(1800),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn build_plugin_add_request_carries_the_http_block_verbatim() {
+        let http = scryer_plugin_sdk::PluginHttpDownloadSource {
+            release: http_release(),
+            selected: scryer_plugin_sdk::PluginHttpSelection {
+                transport_preference: vec![scryer_plugin_sdk::HttpTransport::ProviderPage],
+                max_height: Some(1080),
+                audio_languages: vec!["deu".to_string()],
+                subtitle_languages: vec!["eng".to_string()],
+                subtitle_mode: scryer_plugin_sdk::HttpSubtitleMode::SidecarPreferred,
+                ..Default::default()
+            },
+            policy: scryer_plugin_sdk::PluginHttpPolicy {
+                output_basename: "Example-download-1".to_string(),
+                expected_duration_seconds: Some(1800),
+                ..Default::default()
+            },
+        };
+        let request = DownloadClientAddRequest {
+            source_kind: Some(DownloadSourceKind::HttpResource),
+            source_hint: Some("https://provider.invalid/watch/item-7".to_string()),
+            http: Some(http.clone()),
+            ..sample_request()
+        };
+        let plugin_request = build_plugin_add_request(
+            &request,
+            DownloadSourceKind::HttpResource,
+            ResolvedTorrentSource {
+                download_url: request.source_hint.clone(),
+                magnet_uri: None,
+                torrent_bytes_base64: None,
+                torrent_url: None,
+                torrent_file_name: None,
+                torrent_content_type: None,
+                nzb_bytes_base64: None,
+                nzb_file_name: None,
+                nzb_content_type: None,
+            },
+        );
+
+        assert_eq!(plugin_request.source.kind, DownloadInputKind::HttpResource);
+        assert_eq!(plugin_request.source.http, Some(http));
+    }
+
+    #[test]
+    fn http_phase_leads_the_queue_item_message() {
+        let mut item = queue_filter_item(DownloadItemState::Downloading);
+        item.http = Some(scryer_plugin_sdk::PluginHttpItem {
+            transport_in_use: Some(scryer_plugin_sdk::HttpTransport::ProviderPage),
+            phase: Some(scryer_plugin_sdk::HttpDownloadPhase::Muxing),
+        });
+        item.message = Some(" 2 of 3 tracks ".to_string());
+        let queue_item = map_queue_item(item, "client-1", "MeTube", "metube");
+        assert_eq!(
+            queue_item.attention_reason.as_deref(),
+            Some("Muxing tracks: 2 of 3 tracks")
+        );
+        assert!(!queue_item.attention_required);
+
+        let mut bare = queue_filter_item(DownloadItemState::Downloading);
+        bare.http = Some(scryer_plugin_sdk::PluginHttpItem {
+            transport_in_use: None,
+            phase: Some(scryer_plugin_sdk::HttpDownloadPhase::Resolving),
+        });
+        let queue_item = map_queue_item(bare, "client-1", "MeTube", "metube");
+        assert_eq!(
+            queue_item.attention_reason.as_deref(),
+            Some("Resolving provider page")
+        );
+
+        let plain = queue_filter_item(DownloadItemState::Downloading);
+        let queue_item = map_queue_item(plain, "client-1", "MeTube", "metube");
+        assert_eq!(queue_item.attention_reason, None);
+    }
+
+    #[test]
+    fn completed_download_carries_subtitle_sidecar_paths() {
+        let completed = map_completed_download(
+            PluginCompletedDownload {
+                client_item_id: "http-1".to_string(),
+                download_id: None,
+                info_hash: None,
+                name: "Example Episode".to_string(),
+                release_name: None,
+                dest_dir: "/downloads/series".to_string(),
+                category: Some("series".to_string()),
+                output_kind: None,
+                content_paths: vec!["/downloads/series/Example.Episode.mkv".to_string()],
+                size_bytes: Some(1234),
+                completed_at: Some("2026-05-02T00:00:00Z".to_string()),
+                parameters: vec![],
+                subtitle_paths: vec![
+                    "/downloads/series/Example.Episode.eng.srt".to_string(),
+                    "  ".to_string(),
+                    " /downloads/series/Example.Episode.deu.srt ".to_string(),
+                ],
+            },
+            "client-1",
+            "metube",
+        );
+
+        assert_eq!(
+            completed.subtitle_paths,
+            vec![
+                "/downloads/series/Example.Episode.eng.srt".to_string(),
+                "/downloads/series/Example.Episode.deu.srt".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn completed_history_fallback_maps_to_completed_queue_item() {
         let queue_item = map_history_item_from_completed(
@@ -2322,6 +2665,7 @@ mod tests {
                 size_bytes: Some(1234),
                 completed_at: Some("2026-05-02T00:00:00Z".to_string()),
                 parameters: vec![],
+                subtitle_paths: Vec::new(),
             },
             "client-1",
             "qBittorrent",
@@ -2366,6 +2710,7 @@ mod tests {
                 raw_state: None,
                 completed_at: None,
                 added_at: None,
+                http: None,
             },
             "client-1",
             "Plugin Client",
@@ -2390,6 +2735,7 @@ mod tests {
                 size_bytes: Some(2048),
                 completed_at: Some("2026-05-02T00:00:00Z".to_string()),
                 parameters: vec![],
+                subtitle_paths: Vec::new(),
             },
             "client-1",
             "Plugin Client",
@@ -2448,6 +2794,7 @@ mod tests {
                 raw_state: Some("uploading".to_string()),
                 completed_at: Some("2026-05-02T00:00:00Z".to_string()),
                 added_at: None,
+                http: None,
             },
             "client-1",
             "Decypharr qBit",
@@ -2624,6 +2971,7 @@ mod tests {
                 raw_state: None,
                 completed_at: None,
                 added_at: None,
+                http: None,
             },
             "client-1",
             "Plugin Client",
@@ -2660,6 +3008,7 @@ mod tests {
                 size_bytes: Some(4096),
                 completed_at: Some("2026-05-03T00:00:00Z".to_string()),
                 parameters: vec![("source".to_string(), "decypharr".to_string())],
+                subtitle_paths: Vec::new(),
             },
             "client-1",
             "qbittorrent",
@@ -2700,6 +3049,7 @@ mod tests {
                     size_bytes: None,
                     completed_at: None,
                     parameters: Vec::new(),
+                    subtitle_paths: Vec::new(),
                 },
                 "client-1",
                 "plugin-client",
@@ -2732,6 +3082,7 @@ mod tests {
                     size_bytes: None,
                     completed_at: None,
                     parameters: Vec::new(),
+                    subtitle_paths: Vec::new(),
                 },
                 "client-1",
                 "plugin-client",

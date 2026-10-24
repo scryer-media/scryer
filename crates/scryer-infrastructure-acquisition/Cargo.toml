@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-acquisition"
-version = "0.21.20"
+version = "0.21.21"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -12,6 +12,7 @@ scryer-outbound-http = { path = "../scryer-outbound-http" }
 scryer-rules = { path = "../scryer-rules" }
 scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }
 scryer-infrastructure-crypto = { path = "../scryer-infrastructure-crypto" }
+scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 async-compression = { version = "0.4", default-features = false, features = ["tokio", "zstd", "gzip", "zlib"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
@@ -19,6 +20,7 @@ chrono = { workspace = true }
 aws-lc-rs = { workspace = true }
 filetime = "0.2"
 futures-util = "0.3"
+md-5 = "0.11"
 metrics = { workspace = true }
 quick-xml = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "query", "rustls-no-provider", "http2", "gzip", "brotli", "zstd", "deflate", "stream"] }
@@ -39,7 +41,6 @@ zstd = { version = "0.14", default-features = false }
 # Thread-local recorder for asserting emitted metric names, labels and values
 # without installing a global recorder.
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
-scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 # The in-process SSH server double, so tunnel tests prove egress really
 # travelled through a tunnel rather than merely failing to go direct.
 scryer-tunnel = { workspace = true, features = ["test-support"] }

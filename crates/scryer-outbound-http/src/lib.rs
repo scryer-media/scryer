@@ -1436,6 +1436,10 @@ const BLOCKED_PLUGIN_EGRESS_HOSTS: &[&str] = &["metadata.google.internal"];
 #[derive(Clone, Debug, Default)]
 pub struct PluginEgressPolicy {
     operator_origins: Vec<PluginHttpOrigin>,
+    /// Hand response bodies over exactly as the server sent them, never
+    /// decompressed. Plugin requests keep decompression; a file transfer
+    /// that counts and stores bytes against the announced length opts out.
+    raw_bodies: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1469,7 +1473,16 @@ impl PluginEgressPolicy {
                 operator_origins.push(origin);
             }
         }
-        Self { operator_origins }
+        Self {
+            operator_origins,
+            raw_bodies: false,
+        }
+    }
+
+    /// The same policy, with clients that never decompress a response body.
+    pub fn with_raw_bodies(mut self) -> Self {
+        self.raw_bodies = true;
+        self
     }
 
     /// Grants link-local authority to a single operator-configured origin.
@@ -1692,7 +1705,7 @@ pub async fn prepare_plugin_http_target_with_extra_ca(
         .map_err(|message| OutboundDestinationError::TrustBundle { label, message })?
         .redirect(reqwest::redirect::Policy::none())
         .resolve_to_addrs(&host, &resolved_addrs);
-    let client = builder
+    let client = with_body_decoding(builder, !policy.raw_bodies)
         .build()
         .map_err(|source| OutboundDestinationError::ClientBuild {
             label,
@@ -1719,9 +1732,10 @@ pub async fn prepare_plugin_http_target_from_url(
         .host_str()
         .ok_or(OutboundDestinationError::MissingHost { label })?
         .to_string();
-    let client = reqwest_client_builder()
+    let builder = reqwest_client_builder()
         .redirect(reqwest::redirect::Policy::none())
-        .resolve_to_addrs(&host, &resolved_addrs)
+        .resolve_to_addrs(&host, &resolved_addrs);
+    let client = with_body_decoding(builder, !policy.raw_bodies)
         .build()
         .map_err(|source| OutboundDestinationError::ClientBuild {
             label,
@@ -1816,6 +1830,16 @@ pub fn prepare_plugin_blocking_http_target_with_policy(
         resolved_addrs,
         client,
     })
+}
+
+/// Leave the builder's automatic body decoding as it is, or turn every
+/// content coding off so bodies arrive as the server sent them.
+fn with_body_decoding(builder: reqwest::ClientBuilder, decode: bool) -> reqwest::ClientBuilder {
+    if decode {
+        builder
+    } else {
+        builder.no_gzip().no_brotli().no_deflate().no_zstd()
+    }
 }
 
 fn reqwest_client_builder() -> reqwest::ClientBuilder {
@@ -2113,6 +2137,27 @@ pub fn transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
     extra_ca_bundle_pem: &str,
     redirect_policy: reqwest::redirect::Policy,
 ) -> Result<Client, String> {
+    transport_proxy_reqwest_client_with_options(
+        proxy_url,
+        credentials,
+        timeout,
+        extra_ca_bundle_pem,
+        redirect_policy,
+        true,
+    )
+}
+
+/// Transport client with a caller-owned redirect boundary and body decoding.
+/// `decompress: false` hands bodies over exactly as the server sent them,
+/// for transfers that store bytes against the announced length.
+pub fn transport_proxy_reqwest_client_with_options(
+    proxy_url: &str,
+    credentials: Option<TransportProxyCredentials<'_>>,
+    timeout: Duration,
+    extra_ca_bundle_pem: &str,
+    redirect_policy: reqwest::redirect::Policy,
+    decompress: bool,
+) -> Result<Client, String> {
     let proxy = transport_proxy(proxy_url, credentials)
         .map_err(|error| format!("failed to build indexer transport proxy: {error}"))?;
     let builder = reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)?
@@ -2123,7 +2168,7 @@ pub fn transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
         .pool_idle_timeout(Duration::from_secs(60))
         .no_proxy()
         .proxy(proxy);
-    builder
+    with_body_decoding(builder, decompress)
         .build()
         .map_err(|error| format!("failed to build indexer transport proxy client: {error}"))
 }

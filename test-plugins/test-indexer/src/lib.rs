@@ -1,10 +1,16 @@
 //! Test indexer fixture: a `scryer:indexer/indexer-plugin@1.1.0` component
 //! built for `wasm32-wasip2`, the only shape the plugin loader accepts.
 //!
-//! It answers every search with one deterministic result and never touches the
-//! host imports. The descriptor lives in `test-indexer-descriptor` so the xtask
-//! fixture builder can embed the same bytes as the artifact's custom section.
+//! It answers every search with one deterministic result. Its only use of the
+//! host imports is a stand-in sign-in session: `checkCaptcha` opens one in
+//! component state and shows an image challenge, and a search made with an
+//! answer signs that session in and names it in the result title, so tests can
+//! see which session a client started from. The descriptor lives in
+//! `test-indexer-descriptor` so the xtask fixture builder can embed the same
+//! bytes as the artifact's custom section.
 
+use scryer::indexer::host;
+use scryer_plugin_sdk::command::{PluginActionRequest, PluginActionResponse};
 use scryer_plugin_sdk::{
     PluginResult, PluginSearchRequest, PluginSearchResponse, PluginSearchResult,
 };
@@ -14,6 +20,10 @@ wit_bindgen::generate!({
     world: "indexer-plugin",
     path: "../../crates/scryer-plugins/wit/indexer-v1.1.0",
 });
+
+const SESSION_KEY: &str = "session";
+/// The first four bytes of a PNG file, base64.
+const CHALLENGE_IMAGE: &str = "iVBORw==";
 
 struct TestIndexer;
 
@@ -28,8 +38,18 @@ impl Guest for TestIndexer {
             serde_json::from_slice(&request).map_err(|_| InvocationError::InvalidResponse)?;
         let limit = if req.limit == 0 { 10 } else { req.limit };
 
+        let mut title = format!("{} 2024 2160p WEB-DL H.265", req.query);
+        if let Some(session) = host::state_get(SESSION_KEY) {
+            title.push_str(&format!(" session-{}", String::from_utf8_lossy(&session)));
+            let answered = host::config_get("challenge_answer")
+                .is_some_and(|answer| !answer.trim().is_empty());
+            if answered {
+                host::state_cas(SESSION_KEY, Some(&session), Some(b"signed-in"));
+            }
+        }
+
         let results = vec![PluginSearchResult {
-            title: format!("{} 2024 2160p WEB-DL H.265", req.query),
+            title,
             link: Some("https://example.com/details/12345".to_string()),
             download_url: Some("https://example.com/download/12345.nzb".to_string()),
             size_bytes: Some(8_000_000_000),
@@ -52,8 +72,25 @@ impl Guest for TestIndexer {
         Err(InvocationError::Failed)
     }
 
-    async fn action(_request: Vec<u8>) -> Result<Vec<u8>, InvocationError> {
-        Err(InvocationError::Failed)
+    async fn action(request: Vec<u8>) -> Result<Vec<u8>, InvocationError> {
+        let request: PluginActionRequest =
+            serde_json::from_slice(&request).map_err(|_| InvocationError::InvalidResponse)?;
+        if request.action != "checkCaptcha" {
+            return Err(InvocationError::Failed);
+        }
+        if host::state_get(SESSION_KEY).is_none() {
+            host::state_cas(SESSION_KEY, None, Some(b"challenge-session"));
+        }
+        serde_json::to_vec(&PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "captchaRequest": {
+                    "type": "image",
+                    "contentType": "image/png; charset=binary",
+                    "imageData": CHALLENGE_IMAGE,
+                }
+            }),
+        }))
+        .map_err(|_| InvocationError::Failed)
     }
 }
 

@@ -48,6 +48,15 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
             ActivitySeverity::Info,
             format!("Deleted '{}' from Scryer.", data.title.title_name),
         ),
+        DomainEventPayload::MediaFileReassigned(data) => (
+            ActivityKind::TitleUpdated,
+            ActivitySeverity::Info,
+            format!(
+                "Assigned a media file of '{}' to {} episode(s).",
+                data.title.title_name,
+                data.episode_ids.len()
+            ),
+        ),
         DomainEventPayload::ConfigurationChanged(data) => (
             ActivityKind::SettingSaved,
             ActivitySeverity::Success,
@@ -854,6 +863,27 @@ pub(crate) fn title_history_record_from_domain_event(
             None,
             None,
         ),
+        DomainEventPayload::MediaFileReassigned(data) => (
+            Some(data.title.title_name.clone()),
+            Some(data.title.facet.clone()),
+            TitleHistoryEventType::Rematched,
+            Some(data.file_path.clone()),
+            Some(data.file_path.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            (data.previous_path != data.file_path).then(|| data.previous_path.clone()),
+            Some(data.file_path.clone()),
+        ),
         DomainEventPayload::TitleRematched(_) => (
             None,
             event.facet.clone(),
@@ -987,6 +1017,7 @@ pub(crate) fn history_event_from_domain_event(event: &DomainEvent) -> Option<His
         DomainEventPayload::TitleAdded(_) => EventType::TitleAdded,
         DomainEventPayload::TitleUpdated(_) => EventType::TitleUpdated,
         DomainEventPayload::TitleRematched(_) => EventType::TitleUpdated,
+        DomainEventPayload::MediaFileReassigned(_) => EventType::TitleUpdated,
         DomainEventPayload::MediaFileUpgraded(_) => EventType::FileUpgraded,
         DomainEventPayload::DownloadFailed(_)
         | DomainEventPayload::ReleaseBlocklisted(_)
@@ -1071,6 +1102,18 @@ fn event_episode_ids(event: &DomainEvent) -> Vec<String> {
         DomainEventPayload::ImportRejected(data) => data.episode_ids.iter(),
         DomainEventPayload::MediaFileAnalyzed(data) => data.episode_ids.iter(),
         DomainEventPayload::MediaFileRenamed(data) => data.episode_ids.iter(),
+        DomainEventPayload::MediaFileReassigned(data) => {
+            for episode_id in data
+                .previous_episode_ids
+                .iter()
+                .chain(data.episode_ids.iter())
+            {
+                if !ids.contains(episode_id) {
+                    ids.push(episode_id.clone());
+                }
+            }
+            return ids;
+        }
         DomainEventPayload::MediaFileDeleted(data) => data.episode_ids.iter(),
         DomainEventPayload::MediaFileRestored(data) => data.episode_ids.iter(),
         DomainEventPayload::MediaFileUpgraded(data) => data.episode_ids.iter(),

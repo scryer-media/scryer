@@ -13,7 +13,7 @@
 //! unknown (which holds rules) rather than stopping the pass.
 
 use chrono::{DateTime, Duration, Utc};
-use scryer_domain::{LifecycleClaim, LifecycleClaimKind, LifecycleClaimState};
+use scryer_domain::{LifecycleClaim, LifecycleClaimState};
 use tracing::warn;
 
 use crate::maintenance_rules::facts::first_imported_instant;
@@ -223,20 +223,15 @@ impl AppUseCase {
     }
 }
 
-/// When a claim's window closes, given the instant its clock starts. A keep
-/// claim never closes.
+/// When a claim's window closes, given the instant its clock starts. A claim
+/// without a positive duration never closes.
 fn claim_expiry(claim: &LifecycleClaim, starts_at: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    match claim.kind {
-        LifecycleClaimKind::Keep => None,
-        LifecycleClaimKind::RetainUntil => {
-            claim.duration_days.filter(|days| *days > 0).map(|days| {
-                // An operator's explicit extension is a minimum expiry, even
-                // when granted before the first import starts the clock.
-                let duration_expiry = starts_at + Duration::days(days);
-                claim
-                    .expires_at
-                    .map_or(duration_expiry, |expiry| expiry.max(duration_expiry))
-            })
-        }
-    }
+    claim.duration_days.filter(|days| *days > 0).map(|days| {
+        // An operator's explicit extension is a minimum expiry, even
+        // when granted before the first import starts the clock.
+        let duration_expiry = starts_at + Duration::days(days);
+        claim
+            .expires_at
+            .map_or(duration_expiry, |expiry| expiry.max(duration_expiry))
+    })
 }

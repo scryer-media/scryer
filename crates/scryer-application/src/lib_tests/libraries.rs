@@ -21,6 +21,7 @@ async fn title_slug_lookup_short_route_uses_default_library() {
             movie_library.name.clone(),
             "custom-default-movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/Movies".to_string(),
                 is_default: true,
             }],
@@ -86,6 +87,7 @@ async fn create_library_rejects_root_used_by_other_facet_library() {
             series_library.name.clone(),
             series_library.slug.clone(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/TV".to_string(),
                 is_default: true,
             }],
@@ -99,6 +101,7 @@ async fn create_library_rejects_root_used_by_other_facet_library() {
             MediaFacet::Anime,
             "Anime2".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/TV".to_string(),
                 is_default: true,
             }],
@@ -146,6 +149,7 @@ async fn update_library_rejects_root_used_by_other_facet_library() {
             series_library.name.clone(),
             series_library.slug.clone(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/TV".to_string(),
                 is_default: true,
             }],
@@ -159,6 +163,7 @@ async fn update_library_rejects_root_used_by_other_facet_library() {
             &anime_library_id,
             Some(anime_library.name.clone()),
             Some(vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/TV".to_string(),
                 is_default: true,
             }]),
@@ -208,6 +213,7 @@ async fn delete_library_purges_library_state_for_non_default_library() {
             MediaFacet::Movie,
             "Kids".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/Kids".to_string(),
                 is_default: true,
             }],
@@ -350,6 +356,7 @@ async fn delete_library_purges_history_before_deleting_title_rows() {
             MediaFacet::Movie,
             "Kids".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/Kids".to_string(),
                 is_default: true,
             }],
@@ -438,6 +445,7 @@ async fn delete_library_returns_error_when_title_dependency_cleanup_fails() {
             MediaFacet::Movie,
             "Kids".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/Kids".to_string(),
                 is_default: true,
             }],
@@ -553,6 +561,7 @@ async fn update_non_default_library_rederives_slug_from_name() {
             MediaFacet::Movie,
             "Kids Movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/Kids".to_string(),
                 is_default: true,
             }],
@@ -2263,6 +2272,7 @@ async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() 
             MediaFacet::Movie,
             "Kids".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/Kids".to_string(),
                 is_default: true,
             }],
@@ -2401,6 +2411,7 @@ async fn library_access_surfaces_agree_for_catalog_settings_only_users() {
             MediaFacet::Movie,
             "Kids".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/Kids".to_string(),
                 is_default: true,
             }],
@@ -2509,6 +2520,7 @@ async fn delete_preview_checks_the_title_folder_against_its_own_library_roots() 
             MediaFacet::Anime,
             "Anime Archive".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: tempdir.path().to_string_lossy().to_string(),
                 is_default: true,
             }],
@@ -2606,6 +2618,7 @@ async fn folder_ownership_two_movie_libraries(roots: &[&str]) -> (AppUseCase, Ti
                 .iter()
                 .enumerate()
                 .map(|(index, path)| LibraryRootDraft {
+                    id: None,
                     path: path.to_string(),
                     is_default: index == 0,
                 })
@@ -2618,6 +2631,7 @@ async fn folder_ownership_two_movie_libraries(roots: &[&str]) -> (AppUseCase, Ti
         MediaFacet::Movie,
         "Other Movies".to_string(),
         vec![LibraryRootDraft {
+            id: None,
             path: "/Volumes/Media/Other Movies".to_string(),
             is_default: true,
         }],
@@ -2839,6 +2853,7 @@ async fn unscoped_slug_lookup_prefers_the_default_library_over_a_vault_copy() {
             MediaFacet::Movie,
             "Vault".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/Volumes/Media/Vault".to_string(),
                 is_default: true,
             }],

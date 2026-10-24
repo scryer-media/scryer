@@ -1045,6 +1045,24 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
             .await
     }
 
+    async fn abandon_title_download_cleanup(&self, ids: &[DownloadId]) -> AppResult<()> {
+        let ids = ids.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "abandon_title_download_cleanup", move |tx| {
+            let ids = ids.clone();
+            Box::pin(async move {
+                for chunk in ids.chunks(256) {
+                    let placeholders = vec!["{}"; chunk.len()].join(", ");
+                    let query = format!("UPDATE download_cleanup SET status = 'completed', outcome = 'cleanup_abandoned', last_error = {{}}, history_offset = 0, next_attempt_at = {{}}, lease_until = NULL, updated_at = {{}} WHERE status != 'completed' AND download_id IN ({placeholders})");
+                    let now = Utc::now();
+                    let mut args = vec![SqlArg::Text("title deleted; the client entry is left for the operator".into()), SqlArg::Timestamp(now), SqlArg::Timestamp(now)];
+                    args.extend(chunk.iter().map(|id| SqlArg::Text(id.to_string())));
+                    SqlRuntime::execute(SqlExec::Tx(tx), &query, &args).await?;
+                }
+                Ok(())
+            })
+        }).await
+    }
+
     async fn find_info_hash_for_title_release(
         &self,
         title_id: &str,
@@ -1983,6 +2001,31 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
         .await
     }
 
+    async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
+        let sql = download_submission_select_sql(
+            &self.datastore,
+            "WHERE password_retry_state IS NOT NULL
+             AND EXISTS (SELECT 1 FROM download_identity_states st
+                 WHERE st.canonical_download_id = download_submissions.id AND st.reason = {})
+             AND EXISTS (SELECT 1 FROM downloads d
+                 WHERE d.id = download_submissions.id AND d.terminal_at IS NULL)
+             AND EXISTS (SELECT 1 FROM download_client_bindings b
+                 WHERE b.download_id = download_submissions.id AND b.ended_at IS NULL
+                 AND b.client_config_id = download_submissions.download_client_id
+                 AND b.client_type_snapshot = download_submissions.download_client_type
+                 AND b.native_item_id = download_submissions.download_client_item_id
+                 AND b.native_item_id IS NOT NULL)",
+        );
+        fetch_download_submissions(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(
+                scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into(),
+            )],
+        )
+        .await
+    }
+
     async fn list_client_ids_with_live_downloads(&self) -> AppResult<Vec<String>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
@@ -2027,7 +2070,9 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
     async fn list_active_unbound_submitted_before(
         &self,
         submitted_before: chrono::DateTime<Utc>,
-    ) -> AppResult<Vec<DownloadSubmission>> {
+    ) -> AppResult<Vec<scryer_application::UnconfirmedDownloadSubmission>> {
+        // The release path needs each intent's submission time to judge
+        // whether a client's bounded history window reaches back to it.
         let sql = download_submission_select_sql(
             &self.datastore,
             "WHERE submitted_at < {}
@@ -2040,13 +2085,26 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                       AND binding.ended_at IS NULL
                )
              ORDER BY submitted_at, id",
+        )
+        .replacen(
+            "SELECT ",
+            "SELECT download_submissions.submitted_at AS unconfirmed_submitted_at, ",
+            1,
         );
-        fetch_download_submissions(
+        SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &sql,
             &[SqlArg::Timestamp(submitted_before)],
         )
-        .await
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(scryer_application::UnconfirmedDownloadSubmission {
+                submission: download_submission_from_row(&row)?,
+                submitted_at: lenient_timestamp(&row, "unconfirmed_submitted_at")?,
+            })
+        })
+        .collect()
     }
 
     async fn release_unconfirmed_submission(&self, download_id: &DownloadId) -> AppResult<bool> {
@@ -2279,6 +2337,34 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                 )
                 .await?;
                 Ok(true)
+            })
+        })
+        .await
+    }
+
+    async fn delete_by_download_id(&self, download_id: &DownloadId) -> AppResult<()> {
+        let id = *download_id;
+        SqlRuntime::run_in_transaction(&self.datastore, "delete_canonical_submission", move |tx| {
+            Box::pin(async move {
+                // Explicit queue removal cancels local ownership even when a
+                // password retry remains fenced. Unlike automatic retirement,
+                // this operator action must recover an abandoned retry; the
+                // terminal binding prevents late observations from reviving it.
+                end_binding_tx(tx, &id).await?;
+                let args = [SqlArg::Text(id.to_string())];
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM download_submission_episode_links WHERE download_id = {}",
+                    &args,
+                )
+                .await?;
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM download_submissions WHERE id = {}",
+                    &args,
+                )
+                .await?;
+                Ok(())
             })
         })
         .await
@@ -3895,6 +3981,214 @@ mod seed_goal_tests {
     }
 
     #[tokio::test]
+    async fn password_retry_recovery_lists_only_owned_active_bindings() {
+        let store = store().await;
+        let active = DownloadId::new();
+        let ended = DownloadId::new();
+        let unrelated = DownloadId::new();
+        let mismatched = DownloadId::new();
+        for (id, job, fenced) in [
+            (active, "active", true),
+            (ended, "ended", true),
+            (unrelated, "unrelated", false),
+            (mismatched, "mismatched", true),
+        ] {
+            store
+                .record_submission_with_identity(
+                    submission(id, job, "retry-title"),
+                    submission_identity(id),
+                    None,
+                )
+                .await
+                .unwrap();
+            if fenced {
+                SqlRuntime::execute(
+                    store.datastore.read_exec(),
+                    "UPDATE download_submissions SET password_retry_state = {} WHERE id = {}",
+                    &[SqlArg::Text("{}".into()), SqlArg::Text(id.to_string())],
+                )
+                .await
+                .unwrap();
+                store
+                    .record_identity_tracked_state_for_download(
+                        Some(&id),
+                        &submission_identity(id),
+                        None,
+                        "failed",
+                        Some(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "UPDATE download_client_bindings SET ended_at = {} WHERE download_id = {}",
+            &[
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Text(ended.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "UPDATE download_client_bindings SET native_item_id = {} WHERE download_id = {}",
+            &[
+                SqlArg::Text("foreign-item".into()),
+                SqlArg::Text(mismatched.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+        let rows = store
+            .list_password_retry_recovery_submissions()
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row.download_id).collect::<Vec<_>>(),
+            vec![active]
+        );
+        assert_eq!(rows[0].download_client_item_id, "active");
+        store.delete_by_download_id(&active).await.unwrap();
+        assert!(
+            store
+                .list_password_retry_recovery_submissions()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_queue_removal_retires_password_retry_fenced_download() {
+        let store = store().await;
+        let id = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(id, "job-1", "retry-title"),
+                submission_identity(id),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &submission_identity(id),
+                None,
+                "failed",
+                Some(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON),
+                None,
+            )
+            .await
+            .unwrap();
+        // Give the row the durable fence a real retry claim leaves behind.
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "UPDATE download_submissions SET password_retry_state = {} WHERE id = {}",
+            &[
+                SqlArg::Text(
+                    serde_json::json!({
+                        "previous_reason": scryer_application::DOWNLOAD_PASSWORD_REQUIRED_REASON,
+                        "claimed_at": "2026-01-01T00:00:00Z",
+                        "confirmed": false,
+                    })
+                    .to_string(),
+                ),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+        store.delete_by_download_id(&id).await.unwrap();
+        assert!(
+            store
+                .list_for_title("retry-title")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .list_active_unbound_for_title("retry-title")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            active_binding_download_id(store.datastore.read_exec(), &identity())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let terminal = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT id FROM downloads WHERE id = {} AND terminal_at IS NOT NULL",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await
+        .unwrap();
+        assert!(
+            terminal.is_some(),
+            "late observations must not revive the removed retry"
+        );
+        // The old identity record is retained, but cannot fence any title once
+        // its submission is gone and cannot resurrect its terminal binding.
+        let retained = SqlRuntime::fetch_optional(store.datastore.read_exec(),
+            "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason = {}",
+            &[SqlArg::Text(id.to_string()), SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await.unwrap();
+        assert!(retained.is_some());
+    }
+
+    #[tokio::test]
+    async fn delayed_canonical_delete_preserves_reused_locator() {
+        let store = store().await;
+        let old = DownloadId::new();
+        let new = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(old, "job-1", "old-title"),
+                submission_identity(old),
+                None,
+            )
+            .await
+            .unwrap();
+        store.delete_by_download_id(&old).await.unwrap();
+        store
+            .record_submission_with_identity(
+                submission(new, "job-1", "new-title"),
+                submission_identity(new),
+                None,
+            )
+            .await
+            .unwrap();
+        // A command completing after reuse must never follow the old locator.
+        store.delete_by_download_id(&old).await.unwrap();
+        assert_eq!(
+            active_binding_download_id(store.datastore.read_exec(), &identity())
+                .await
+                .unwrap(),
+            Some(new)
+        );
+        assert!(
+            store
+                .find_by_canonical_download_id(&new)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .find_by_canonical_download_id(&old)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn deleting_a_submission_releases_its_locator_for_a_fresh_identity() {
         let store = store().await;
         let first_id = DownloadId::new();
@@ -4436,16 +4730,25 @@ mod seed_goal_tests {
             .await
             .expect("unconfirmed intents should list")
             .into_iter()
-            .map(|submission| (submission.download_id, submission.title_id))
+            .map(|intent| {
+                (
+                    intent.submission.download_id,
+                    intent.submission.title_id,
+                    // Seconds behind `now`, rounded: storage precision varies.
+                    intent
+                        .submitted_at
+                        .map(|at| ((now - at).num_milliseconds() as f64 / 1000.0).round() as i64),
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(
             listed,
             vec![
-                (stale_id, "title-1".to_string()),
-                (ambiguous_id, "title-2".to_string()),
+                (stale_id, "title-1".to_string(), Some(3600)),
+                (ambiguous_id, "title-2".to_string(), Some(1800)),
             ],
-            "only unbound intents older than the cutoff list, oldest first; a fresh intent and a bound grab do not"
+            "only unbound intents older than the cutoff list, oldest first, each with its submission time; a fresh intent and a bound grab do not"
         );
     }
 

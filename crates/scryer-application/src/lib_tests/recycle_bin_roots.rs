@@ -273,6 +273,7 @@ async fn upgrade_refuses_a_custom_bin_inside_another_library_root_and_keeps_the_
                 updated_at: now,
             },
             vec![LibraryRootDraft {
+                id: None,
                 path: root_b.to_string_lossy().to_string(),
                 is_default: true,
             }],
@@ -425,6 +426,7 @@ impl TitleDeleteFixture {
                     updated_at: now,
                 },
                 vec![LibraryRootDraft {
+                    id: None,
                     path: fixture.root_b().to_string_lossy().to_string(),
                     is_default: true,
                 }],
@@ -605,10 +607,325 @@ async fn title_delete_leaves_a_custom_bin_untouched_when_library_roots_are_unrea
     assert!(kept_entry.exists());
 }
 
+fn rewrite_entry(entry: &Path, reason: &str, status: &str) {
+    let path = entry.join("manifest.json");
+    let mut manifest: crate::recycle_bin::RecycleManifest =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    manifest.reason = reason.into();
+    manifest.status = Some(status.into());
+    std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+}
+
+#[tokio::test]
+async fn title_delete_policy_cleanup_keeps_replacement_validation() {
+    let fixture = TitleDeleteFixture::new().await;
+    let bin = fixture.fixture.root_a().join(".scryer-recycle");
+    let (deleted, kept) = fixture.seed_bin(&bin).await;
+    rewrite_entry(
+        &deleted,
+        "upgrade_replaced",
+        crate::recycle_bin::RECYCLE_STATUS_COMMITTED,
+    );
+    let kept_before = snapshot_tree(&kept);
+    fixture
+        .with_bin_setting(None)
+        .purge_title_logical_dependents(&fixture.deleted, true, DomainEventActor::system())
+        .await
+        .unwrap();
+    let manifest: crate::recycle_bin::RecycleManifest =
+        serde_json::from_slice(&std::fs::read(deleted.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(
+        manifest.status.as_deref(),
+        Some(crate::recycle_bin::RECYCLE_STATUS_QUARANTINED)
+    );
+    assert_eq!(snapshot_tree(&kept), kept_before);
+    assert!(deleted.exists());
+}
+
+#[tokio::test]
+async fn title_delete_purges_upgrade_without_replacement_but_preserves_other_title() {
+    let fixture = TitleDeleteFixture::new().await;
+    let bin = fixture.fixture.root_a().join(".scryer-recycle");
+    let (deleted, kept) = fixture.seed_bin(&bin).await;
+    rewrite_entry(
+        &deleted,
+        "upgrade_replaced",
+        crate::recycle_bin::RECYCLE_STATUS_COMMITTED,
+    );
+    let before = snapshot_tree(&kept);
+    let outcome = fixture
+        .with_bin_setting(None)
+        .delete_title_with_outcome(&fixture.user, &fixture.deleted.id, false, None)
+        .await
+        .unwrap();
+    assert_eq!(outcome.purged, 1);
+    assert!(!outcome.incomplete());
+    assert!(!deleted.exists());
+    assert_eq!(snapshot_tree(&kept), before);
+}
+
+#[tokio::test]
+async fn title_delete_preserves_pending_and_quarantined_entries() {
+    for status in [
+        crate::recycle_bin::RECYCLE_STATUS_PENDING,
+        crate::recycle_bin::RECYCLE_STATUS_QUARANTINED,
+    ] {
+        let fixture = TitleDeleteFixture::new().await;
+        let bin = fixture.fixture.root_a().join(".scryer-recycle");
+        let (deleted, _) = fixture.seed_bin(&bin).await;
+        rewrite_entry(&deleted, "upgrade_replaced", status);
+        let before = snapshot_tree(&bin);
+        let outcome = fixture
+            .with_bin_setting(None)
+            .delete_title_with_outcome(&fixture.user, &fixture.deleted.id, false, None)
+            .await
+            .unwrap();
+        assert_eq!(outcome.purged, 0);
+        assert_eq!(snapshot_tree(&bin), before);
+    }
+}
+
+#[tokio::test]
+async fn title_delete_bulk_reports_recycle_warning_without_losing_successful_id() {
+    let fixture = TitleDeleteFixture::new().await;
+    let bin = fixture.fixture.root_a().join(".scryer-recycle");
+    let (deleted, _) = fixture.seed_bin(&bin).await;
+    let jobs = Arc::new(RecordingJobRunRepo::default());
+    let app = fixture
+        .with_bin_setting(None)
+        .with_test_overrides(|services| services.with_job_runs(jobs.clone()));
+    let entry_id = deleted.file_name().unwrap().to_str().unwrap();
+    let _guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .try_acquire(&format!("recycle-entry:{entry_id}"))
+        .await
+        .unwrap();
+    let accepted = app
+        .start_delete_titles_job(
+            &fixture.user,
+            DeleteTitlesJobRequest {
+                items: vec![DeleteTitlesJobItem {
+                    title_id: fixture.deleted.id.clone(),
+                    preview_fingerprint: None,
+                }],
+                delete_files_on_disk: false,
+                typed_confirmation: None,
+            },
+        )
+        .await
+        .unwrap();
+    let run = crate::test_wait::wait_for("the specific deletion job to finish", || async {
+        jobs.runs
+            .lock()
+            .await
+            .iter()
+            .find(|run| run.id == accepted.job_run.id && run.status.is_terminal())
+            .cloned()
+    })
+    .await;
+    assert_eq!(run.status, JobRunStatus::Warning);
+    let summary: serde_json::Value =
+        serde_json::from_str(run.summary_json.as_deref().unwrap()).unwrap();
+    assert_eq!(summary["succeededTitleIds"][0], fixture.deleted.id);
+    assert_eq!(
+        summary["recycleIncomplete"][0]["reason"],
+        crate::title_delete::RECYCLE_ENTRY_BUSY
+    );
+    assert_eq!(summary["recycleIncomplete"][0]["preservedCount"], 1);
+    assert!(deleted.exists());
+}
+
+#[tokio::test]
+async fn title_delete_bulk_purges_recycle_entry_created_during_earlier_item() {
+    crate::test_wait::within_deadline("late recycle entry is purged by its batch item", async {
+        let fixture = TitleDeleteFixture::new().await;
+        let titles = Arc::new(MockTitleRepo::default());
+        titles.create(fixture.deleted.clone()).await.unwrap();
+        titles.create(fixture.kept.clone()).await.unwrap();
+        let operations = Arc::new(Mutex::new(Vec::new()));
+        titles.set_delete_operation_log(operations.clone()).await;
+        let barrier = operations.lock().await;
+        let jobs = Arc::new(RecordingJobRunRepo::default());
+        let mut app = fixture
+            .with_bin_setting(None)
+            .with_test_overrides(|services| services.with_job_runs(jobs.clone()));
+        app.services.catalog.titles = titles.clone();
+        let accepted = app
+            .start_delete_titles_job(
+                &fixture.user,
+                DeleteTitlesJobRequest {
+                    items: [&fixture.deleted.id, &fixture.kept.id]
+                        .into_iter()
+                        .map(|id| DeleteTitlesJobItem {
+                            title_id: id.clone(),
+                            preview_fingerprint: None,
+                        })
+                        .collect(),
+                    delete_files_on_disk: false,
+                    typed_confirmation: None,
+                },
+            )
+            .await
+            .unwrap();
+        crate::test_wait::wait_until(
+            "first recycle batch item reaches catalog deletion",
+            || async {
+                titles
+                    .delete_started
+                    .lock()
+                    .await
+                    .contains(&fixture.deleted.id)
+            },
+        )
+        .await;
+        let root = fixture.fixture.root_a();
+        let config = crate::recycle_bin::RecycleBinConfig {
+            enabled: true,
+            base_path: root.join(".scryer-recycle"),
+            retention_days: 7,
+            cleanup_enabled: true,
+            validation_error: None,
+            source_roots: vec![root.clone()],
+        };
+        let source = root.join("late-recycled-feature.mkv");
+        std::fs::write(&source, b"late recycle bytes").unwrap();
+        let mut manifest = removal_manifest(&source);
+        manifest.title_id = Some(fixture.kept.id.clone());
+        let recycled = crate::recycle_bin::recycle_file(&config, &source, manifest)
+            .await
+            .unwrap()
+            .unwrap();
+        let unrelated = config.base_path.join("unrelated.txt");
+        std::fs::write(&unrelated, b"keep unrelated bytes").unwrap();
+        drop(barrier);
+        let run = crate::test_wait::wait_for("specific late-recycle batch completes", || async {
+            jobs.runs
+                .lock()
+                .await
+                .iter()
+                .find(|run| run.id == accepted.job_run.id && run.status.is_terminal())
+                .cloned()
+        })
+        .await;
+        let summary: serde_json::Value =
+            serde_json::from_str(run.summary_json.as_deref().unwrap()).unwrap();
+        assert_eq!(run.status, JobRunStatus::Completed);
+        assert_eq!(
+            summary["succeededTitleIds"],
+            serde_json::json!([fixture.deleted.id, fixture.kept.id])
+        );
+        assert_eq!(summary["recycleOutcomes"][&fixture.kept.id]["purged"], 1);
+        assert!(!recycled.recycled_path.exists());
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"keep unrelated bytes");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn title_delete_reports_busy_recycle_entry_and_still_deletes_catalog_title() {
+    let fixture = TitleDeleteFixture::new().await;
+    let bin = fixture.fixture.root_a().join(".scryer-recycle");
+    let (deleted, _) = fixture.seed_bin(&bin).await;
+    let app = fixture.with_bin_setting(None);
+    let entry_id = deleted.file_name().unwrap().to_str().unwrap();
+    let _guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .try_acquire(&format!("recycle-entry:{entry_id}"))
+        .await
+        .unwrap();
+    let before = snapshot_tree(&bin);
+    let outcome = app
+        .delete_title_with_outcome(&fixture.user, &fixture.deleted.id, false, None)
+        .await
+        .unwrap();
+    assert_eq!(outcome.busy, 1);
+    assert!(outcome.incomplete());
+    assert_eq!(snapshot_tree(&bin), before);
+    assert!(
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&fixture.deleted.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn title_delete_exclusive_guard_preserves_title_and_recycle_files() {
+    let fixture = TitleDeleteFixture::new().await;
+    let bin = fixture.fixture.root_a().join(".scryer-recycle");
+    fixture.seed_bin(&bin).await;
+    let app = fixture.with_bin_setting(None);
+    let _guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .try_acquire(&format!("title-delete:{}", fixture.deleted.id))
+        .await
+        .unwrap();
+    let before = snapshot_tree(&bin);
+    let error = app
+        .delete_title(&fixture.user, &fixture.deleted.id, false, None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::title_delete::IN_PROGRESS)
+    );
+    assert_eq!(snapshot_tree(&bin), before);
+    assert!(
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&fixture.deleted.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn title_delete_rechecks_revoked_permissions_before_purging_files() {
+    let fixture = TitleDeleteFixture::new().await;
+    let bin = fixture.fixture.root_a().join(".scryer-recycle");
+    fixture.seed_bin(&bin).await;
+    let app = fixture.with_bin_setting(None);
+    // The request actor still carries its old administrator projection.
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&fixture.user.id, AppPermissionMask::NONE)
+        .await
+        .unwrap();
+    let before = snapshot_tree(&bin);
+    assert!(matches!(
+        app.delete_title(&fixture.user, &fixture.deleted.id, false, None)
+            .await,
+        Err(AppError::Unauthorized(_))
+    ));
+    assert_eq!(snapshot_tree(&bin), before);
+    assert!(
+        app.services
+            .catalog
+            .titles
+            .get_by_id(&fixture.deleted.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
 // ── A new or changed library root must stay clear of the custom bin ─────────
 
 fn root_draft(path: &Path) -> LibraryRootDraft {
     LibraryRootDraft {
+        id: None,
         path: path.to_string_lossy().to_string(),
         is_default: true,
     }

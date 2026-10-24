@@ -80,6 +80,7 @@ async fn configure_movie_library(ctx: &TestContext) -> String {
             library.name,
             library.slug,
             vec![LibraryRootDraft {
+                id: None,
                 path: SCRYER_ROOT.to_string(),
                 is_default: true,
             }],

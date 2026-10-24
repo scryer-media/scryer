@@ -36,19 +36,28 @@ pub fn descriptor() -> PluginDescriptor {
                 ..IndexerCapabilities::default()
             },
             scoring_policies: vec![],
-            config_fields: vec![ConfigFieldDef {
-                key: "base_url".to_string(),
-                label: "Base URL".to_string(),
-                field_type: ConfigFieldType::String,
-                required: true,
-                default_value: None,
-                value_source: ConfigFieldValueSource::User,
-                role: Some(ConfigFieldRole::ConnectionUrl),
-                host_binding: None,
-                options: vec![],
-                help_text: None,
-                ..Default::default()
-            }],
+            config_fields: vec![
+                ConfigFieldDef {
+                    key: "base_url".to_string(),
+                    label: "Base URL".to_string(),
+                    field_type: ConfigFieldType::String,
+                    required: true,
+                    default_value: None,
+                    value_source: ConfigFieldValueSource::User,
+                    role: Some(ConfigFieldRole::ConnectionUrl),
+                    host_binding: None,
+                    options: vec![],
+                    help_text: None,
+                    ..Default::default()
+                },
+                ConfigFieldDef {
+                    key: "challenge_answer".to_string(),
+                    label: "Challenge Answer".to_string(),
+                    field_type: ConfigFieldType::String,
+                    role: Some(ConfigFieldRole::LoginChallengeAnswer),
+                    ..Default::default()
+                },
+            ],
             allowed_hosts: vec![],
             rate_limit_seconds: None,
             search_semantics_version: Some(1),

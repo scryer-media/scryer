@@ -54,14 +54,34 @@ impl AppUseCase {
             source,
             attempt_id: scryer_domain::Id::new().0,
         };
-        if repository.claim_password_retry(&claim, password).await?
-            != crate::DownloadPasswordRetryClaimOutcome::Claimed
-        {
+        // Serialize claim admission with deletion preflight, but never hold a
+        // title guard across the remote client's retry request.
+        let title_guard = if claim.authorized_title_id.is_empty() {
+            None
+        } else {
+            Some(
+                self.runtime
+                    .jobs
+                    .interactive_operation_guards
+                    .try_acquire(&format!("title-delete:{}", claim.authorized_title_id))
+                    .await
+                    .ok_or_else(|| {
+                        AppError::validation_refused(
+                            crate::title_delete::IN_PROGRESS,
+                            "Title deletion is in progress; retry after it finishes.",
+                        )
+                    })?,
+            )
+        };
+        let claimed = repository.claim_password_retry(&claim, password).await;
+        self.invalidate_download_queue_read_model().await;
+        if claimed? != crate::DownloadPasswordRetryClaimOutcome::Claimed {
             return Err(AppError::Validation(
                 "download is not eligible for a password retry or is awaiting reconciliation"
                     .into(),
             ));
         }
+        drop(title_guard);
         // The durable claim and encrypted replacement precede the single remote
         // mutation. A dropped request or process retains that claim for recovery.
         // The request is bounded, so the claim's store can tell a dispatch
@@ -78,11 +98,11 @@ impl AppUseCase {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(_)) | Err(_) => crate::DownloadClientRetryOutcome::Uncertain,
         };
-        if repository
-            .finish_password_retry(&claim, &outcome)
-            .await
-            .is_err()
-        {
+        let finished = repository.finish_password_retry(&claim, &outcome).await;
+        // An error may follow a committed state change; never retain the old
+        // recovery projection on an ambiguous completion.
+        self.invalidate_download_queue_read_model().await;
+        if finished.is_err() {
             return Ok(crate::DownloadClientRetryOutcome::Uncertain);
         }
         if matches!(outcome, crate::DownloadClientRetryOutcome::Accepted { .. }) {

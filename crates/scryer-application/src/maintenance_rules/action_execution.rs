@@ -49,7 +49,6 @@ use crate::maintenance_rules::evaluation::MaintenanceEvaluationTrigger;
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
     QUALITY_PROFILE_TAG_PREFIX, build_subject_input_with_completed_retention_episodes,
-    claim_is_live_at,
 };
 use crate::maintenance_rules::safety::{MaintenanceActivityCheck, MaintenancePlaybackHold};
 use crate::maintenance_rules::sequence_execution::SequenceCandidateExecutionContext;
@@ -203,11 +202,6 @@ pub mod execution_reason {
     /// The shared high-risk allowance was spent by earlier destructive
     /// sequence steps. Reversible predecessors may still run in a later pass.
     pub const PASS_HIGH_RISK_STEP_BUDGET: &str = "pass_high_risk_step_budget";
-    /// A lifecycle claim still holds the title (spec 0003 FR-042): a request
-    /// lease that is running or has not started yet, or a keep claim. The
-    /// action retries once every claim has lapsed or been released — which is
-    /// why this is a hold and not a cancel.
-    pub const RETENTION_CLAIM_HOLD: &str = "retention_claim_hold";
     /// The action completed.
     pub const ACTION_SUCCEEDED: &str = "action_succeeded";
     /// The postcondition already held; nothing was mutated.
@@ -1857,16 +1851,10 @@ impl AppUseCase {
                 Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
             }
         }
-        // (3c) A lifecycle claim on the title (spec 0003 FR-042). Read here
-        // rather than left to the matcher, because this hold does not depend on
-        // the rule mentioning leases: a request the instance approved is a
-        // promise about *this title*, and every high-risk action waits for it
-        // the way it waits for a location operation. Dormant counts — a lease
-        // whose title has not been imported yet is the one case where deleting
-        // would destroy something nobody ever got.
-        //
-        // The same read answers the fact builder below, so preview, the
-        // scheduled pass, and this recheck all decide on one claim snapshot.
+        // (3c) The title's lifecycle claims, for the fact builder below, so
+        // preview, the scheduled pass, and this recheck all decide on one
+        // claim snapshot. A lease is only a time to delete: it reaches rules
+        // through the request_lease facts and holds nothing by itself.
         let recheck_time = Utc::now();
         let claims_by_title = match self
             .maintenance_claims_for_titles(std::slice::from_ref(&title))
@@ -1880,20 +1868,6 @@ impl AppUseCase {
             }
             Err(_) => None,
         };
-        if high_risk
-            && let Some(claims) = claims_by_title.as_ref()
-            && claims.get(&title.id).is_some_and(|claims| {
-                claims
-                    .iter()
-                    // Derived against this recheck's own clock, exactly as the
-                    // facts are: a lease whose window elapsed since the last
-                    // sweep is spent, and holding on it would make the executor
-                    // disagree with the rule that selected the candidate.
-                    .any(|claim| claim_is_live_at(claim, recheck_time))
-            })
-        {
-            return SafetyDecision::Hold(execution_reason::RETENTION_CLAIM_HOLD);
-        }
         let files_by_title = match self
             .maintenance_files_for_titles(std::slice::from_ref(&title))
             .await

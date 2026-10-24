@@ -6151,6 +6151,7 @@ async fn movie_full_scan_by_id_uses_selected_library_scope() {
             MediaFacet::Movie,
             "Selected Movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: selected_root.to_string_lossy().to_string(),
                 is_default: true,
             }],
@@ -7122,6 +7123,7 @@ async fn additive_scan_keeps_title_match_total_unknown_until_completion() {
         &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
         None,
         Some(vec![LibraryRootDraft {
+            id: None,
             path: series_root.to_string_lossy().to_string(),
             is_default: true,
         }]),
@@ -7240,10 +7242,12 @@ async fn background_refresh_movies_scans_all_configured_roots() {
         None,
         Some(vec![
             LibraryRootDraft {
+                id: None,
                 path: root_one.to_string_lossy().to_string(),
                 is_default: true,
             },
             LibraryRootDraft {
+                id: None,
                 path: root_two.to_string_lossy().to_string(),
                 is_default: false,
             },
@@ -7417,6 +7421,7 @@ async fn distinct_movie_libraries_scan_concurrently_and_cancel_independently() {
             MediaFacet::Movie,
             "First Movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: first_root.to_string_lossy().to_string(),
                 is_default: true,
             }],
@@ -7430,6 +7435,7 @@ async fn distinct_movie_libraries_scan_concurrently_and_cancel_independently() {
             MediaFacet::Movie,
             "Second Movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: second_root.to_string_lossy().to_string(),
                 is_default: true,
             }],
@@ -7658,6 +7664,7 @@ async fn cancel_library_scan_rejects_additive_sessions() {
         &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
         None,
         Some(vec![LibraryRootDraft {
+            id: None,
             path: series_root.to_string_lossy().to_string(),
             is_default: true,
         }]),
@@ -8213,6 +8220,7 @@ async fn reconcile_default_library_roots_backfills_legacy_root_folders_when_boot
             anime_library.name.clone(),
             anime_library.slug.clone(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/data/anime".to_string(),
                 is_default: true,
             }],
@@ -8261,6 +8269,7 @@ async fn reconcile_default_library_roots_keeps_non_bootstrap_canonical_roots() {
             movie_library.name.clone(),
             movie_library.slug.clone(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/canonical/movies".to_string(),
                 is_default: true,
             }],
@@ -8671,6 +8680,7 @@ async fn update_default_library_roots_updates_all_facet_root_read_paths() {
             expected_roots
                 .iter()
                 .map(|root| LibraryRootDraft {
+                    id: None,
                     path: root.path.clone(),
                     is_default: root.is_default,
                 })
@@ -8707,6 +8717,7 @@ async fn title_root_resolution_uses_owning_library_roots() {
         &movie_library_id,
         None,
         Some(vec![LibraryRootDraft {
+            id: None,
             path: "/library/default-movies".to_string(),
             is_default: true,
         }]),
@@ -8720,6 +8731,7 @@ async fn title_root_resolution_uses_owning_library_roots() {
             MediaFacet::Movie,
             "Kids Movies".to_string(),
             vec![LibraryRootDraft {
+                id: None,
                 path: "/library/kids-movies".to_string(),
                 is_default: true,
             }],
@@ -8749,6 +8761,7 @@ async fn update_default_library_rejects_empty_roots_without_persisting_them() {
         &movie_library_id,
         None,
         Some(vec![LibraryRootDraft {
+            id: None,
             path: "/library/movies-main".to_string(),
             is_default: true,
         }]),
@@ -8793,6 +8806,7 @@ async fn update_library_removing_root_clears_pending_imports_for_removed_root() 
         &movie_library_id,
         None,
         Some(vec![LibraryRootDraft {
+            id: None,
             path: "/movies-old".to_string(),
             is_default: true,
         }]),
@@ -8818,6 +8832,7 @@ async fn update_library_removing_root_clears_pending_imports_for_removed_root() 
         &movie_library_id,
         None,
         Some(vec![LibraryRootDraft {
+            id: None,
             path: "/movies-new".to_string(),
             is_default: true,
         }]),
@@ -11499,6 +11514,14 @@ async fn deleting_a_title_removes_its_pending_imports() {
         .await
         .expect("seed bystander row");
 
+    // Deletion re-reads the actor's stored grants, so the fixture
+    // administrator's permissions have to be persisted like a real account's.
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, user.authorization.app)
+        .await
+        .expect("persist fixture administrator permissions");
     app.delete_title(&user, &title.id, false, None)
         .await
         .expect("delete title");
@@ -12098,6 +12121,23 @@ async fn a_file_bound_by_hand_without_an_original_path_keeps_its_episodes_throug
 
     assert_eq!(summary.relinked, 0);
     assert_eq!(fixture.linked_episode_ids().await, fixture.episodes(&[3]));
+}
+
+#[tokio::test]
+async fn reassigning_a_file_to_no_episodes_is_refused_with_a_reason() {
+    let fixture = episode_relink_fixture("Relink Harbor - S01E01 - Tide 1.mkv", None).await;
+    for episode_ids in [Vec::new(), vec!["   ".to_string()]] {
+        let error = fixture
+            .app
+            .reassign_episode_file(&fixture.user, fixture.file_id(), &episode_ids, false)
+            .await
+            .expect_err("no episodes is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::episode_file_reassign_refusal::NO_EPISODES)
+        );
+    }
+    assert_eq!(fixture.linked_episode_ids().await, fixture.episodes(&[1]));
 }
 
 #[tokio::test]

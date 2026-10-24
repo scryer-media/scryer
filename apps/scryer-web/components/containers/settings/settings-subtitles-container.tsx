@@ -775,6 +775,7 @@ export function SettingsSubtitlesContainer({
           startMessage: t("status.testingSubtitleProviderConnection"),
           successMessage: t("status.subtitleProviderConnectionTestPassed"),
           failureFallbackMessage: t("status.subtitleProviderConnectionTestFailed"),
+          t,
           announceSuccess: false,
           run: () => probeProviderConnection(payload.providerType, config),
         });
@@ -1061,6 +1062,7 @@ export function SettingsSubtitlesContainer({
         startMessage: t("status.testingSubtitleProviderConnection"),
         successMessage: t("status.subtitleProviderConnectionTestPassed"),
         failureFallbackMessage: t("status.subtitleProviderConnectionTestFailed"),
+        t,
         run: () =>
           probeProviderConnection(
             normalizedProviderType,

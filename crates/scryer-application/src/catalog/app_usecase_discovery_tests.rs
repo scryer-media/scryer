@@ -110,6 +110,7 @@ fn make_search_result(
     source_kind: DownloadSourceKind,
 ) -> IndexerSearchResult {
     IndexerSearchResult {
+        http: None,
         indexer_id: None,
         source: source.to_string(),
         title: title.to_string(),

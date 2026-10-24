@@ -93,7 +93,8 @@ export type ConfigFieldTypeValue =
   | "FILTERED_SELECT"
   | "NUMBER"
   | "PATH"
-  | "TAG";
+  | "TAG"
+  | "INFO";
 
 export type ConditionOpValue = "EQ" | "NE" | "IN" | "NOT_IN" | "NON_EMPTY";
 
@@ -108,7 +109,19 @@ export type FieldCondition = {
 };
 
 export type ConfigFieldValueSourceValue = "USER" | "HOST_BINDING";
-export type ConfigFieldRoleValue = "CONNECTION_URL";
+export type ConfigFieldRoleValue = "CONNECTION_URL" | "LOGIN_CHALLENGE_ANSWER";
+
+/**
+ * The sign-in image an indexer's login asks the operator to read, fetched
+ * for the draft settings and never stored. `none` means the plugin asked for
+ * nothing this time.
+ */
+export type LoginChallengeStatus =
+  | { state: "idle" }
+  | { state: "loading" }
+  | { state: "none" }
+  | { state: "ready"; contentType: string; imageData: string }
+  | { state: "error"; message: string };
 
 export type ConfigFieldDef = {
   key: string;
@@ -137,6 +150,9 @@ export type ProviderTypeInfo = {
   configFields: ConfigFieldDef[];
   availableHostBindings: string[];
   recommendedFacets: Array<"MOVIE" | "SERIES" | "ANIME">;
+  /// Static field keys whose values decide extra fields the plugin adds.
+  /// Empty (or absent on hand-built records) when it adds none.
+  dynamicConfigTriggerKeys?: string[];
 };
 
 /// Which of a provider's declared fields the form offers.

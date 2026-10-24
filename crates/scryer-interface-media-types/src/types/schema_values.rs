@@ -409,6 +409,8 @@ pub enum DownloadSourceKindValue {
     TorrentFile,
     /// Torrent supplied as a magnet URI.
     MagnetUri,
+    /// HTTP-family release: a provider page, direct file, or streaming manifest.
+    HttpResource,
 }
 
 /// Reason a queued download was requested.
@@ -684,6 +686,8 @@ pub enum DomainEventTypeValue {
     MediaFileAnalyzed,
     /// A media file was renamed.
     MediaFileRenamed,
+    /// An operator assigned a media file to different episodes of its title.
+    MediaFileReassigned,
     /// A media file was deleted.
     MediaFileDeleted,
     /// A media file was restored from the recycle bin.
@@ -780,6 +784,7 @@ impl DomainEventTypeValue {
             DomainEventType::MediaFileImported => Self::MediaFileImported,
             DomainEventType::MediaFileAnalyzed => Self::MediaFileAnalyzed,
             DomainEventType::MediaFileRenamed => Self::MediaFileRenamed,
+            DomainEventType::MediaFileReassigned => Self::MediaFileReassigned,
             DomainEventType::MediaFileDeleted => Self::MediaFileDeleted,
             DomainEventType::MediaFileRestored => Self::MediaFileRestored,
             DomainEventType::MediaFileUpgraded => Self::MediaFileUpgraded,
@@ -843,6 +848,7 @@ impl DomainEventTypeValue {
             Self::MediaFileImported => DomainEventType::MediaFileImported,
             Self::MediaFileAnalyzed => DomainEventType::MediaFileAnalyzed,
             Self::MediaFileRenamed => DomainEventType::MediaFileRenamed,
+            Self::MediaFileReassigned => DomainEventType::MediaFileReassigned,
             Self::MediaFileDeleted => DomainEventType::MediaFileDeleted,
             Self::MediaFileRestored => DomainEventType::MediaFileRestored,
             Self::MediaFileUpgraded => DomainEventType::MediaFileUpgraded,

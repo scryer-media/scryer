@@ -1,5 +1,5 @@
 
-import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useClient } from "urql";
 import {
@@ -15,7 +15,6 @@ import {
   ListChecks,
   Puzzle,
   Rss,
-  ScanSearch,
   Server,
   Settings2,
   ShieldCheck,
@@ -24,16 +23,15 @@ import {
   SquareTerminal,
   Tag,
   Timer,
-  UploadCloud,
   User,
   Users,
   Wrench,
-  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { UnderlineTabLink } from "@/components/common/underline-filter-button";
 import { Button } from "@/components/ui/button";
-import { IconButton } from "@/components/ui/icon-button";
+import { GutterPanel, GutterPanelButton } from "@/components/common/gutter-panel";
+import { GutterPanelContext } from "@/lib/context/gutter-panel-context";
 import type {
   IndexerSettingsTab,
   MaintenanceRulesSection,
@@ -43,12 +41,12 @@ import type {
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
+import { type GutterPanelSize, useGutterPanel } from "@/lib/hooks/use-gutter-panel";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
   buildIndexerSettingsPath,
   buildRulesPath,
-  buildViewPath,
   indexerSettingsTabFromPath,
   indexerSettingsTabs as allIndexerSettingsTabs,
   maintenanceRulesSectionFromPath,
@@ -146,55 +144,33 @@ const SettingsBackupsContainer = lazy(async () => ({
  * so they anchor to the top of the pane. */
 export const SETTINGS_REFERENCE_SLOT_ID = "settings-content-reference";
 export const SETTINGS_HEADER_ACTIONS_SLOT_ID = "settings-header-actions";
+const SETTINGS_PLUGINS_PANEL_ID = "settings-plugins-panel";
 
-const DOCKED_REFERENCE_GAP_PX = 20;
+/**
+ * The plugins panel is pinned to the right edge beside the centered settings
+ * pane. The pane keeps its content width (padding included) whether the panel
+ * is open or not, so the panel never narrows or shifts the content; it closes
+ * behind its edge tab once the gutter cannot hold it. The pane's own right
+ * padding separates the panel from the content, so the panel needs no gap of
+ * its own.
+ */
+const SETTINGS_PLUGINS_PANEL_SIZE: GutterPanelSize = { width: 320, gap: 0 };
+const STANDARD_FILTERED_PLUGIN_CONTENT_WIDTH = 1280;
+const INDEXERS_FILTERED_PLUGIN_CONTENT_WIDTH = 1460;
+// The Search pane carries its own refine rail beside the results table, so it
+// keeps the wider pane it had before it carried the plugins rail.
+const INDEXER_SEARCH_FILTERED_PLUGIN_CONTENT_WIDTH = 1640;
 
-type DockedReferenceLayout = {
-  mainMinWidth: number;
-  railMinWidth: number;
-  contentClass: string;
-  mainClass: string;
-  railClass: string;
+const INDEXER_SETTINGS_TAB_LABEL_KEYS: Record<IndexerSettingsTab, string> = {
+  indexers: "settings.indexers",
+  search: "settings.indexerSearch",
+  seedingProfiles: "settings.seedingProfiles",
 };
 
-const STANDARD_FILTERED_PLUGIN_LAYOUT: DockedReferenceLayout = {
-  mainMinWidth: 1080,
-  railMinWidth: 288,
-  contentClass: "max-w-none",
-  mainClass: "min-w-0 max-w-[1280px] flex-[1_1_1280px]",
-  railClass: "sticky top-[26px] z-auto min-w-[288px] max-w-[720px] flex-[1_1_720px]",
-};
-
-const INDEXERS_FILTERED_PLUGIN_LAYOUT: DockedReferenceLayout = {
-  mainMinWidth: 1360,
-  railMinWidth: 288,
-  contentClass: "max-w-none",
-  mainClass: "min-w-[1360px] max-w-[1520px] flex-[1_1_1520px]",
-  railClass: "sticky top-[26px] z-auto min-w-[288px] max-w-[720px] flex-[1_1_720px]",
-};
-
-const SUBTITLES_FILTERED_PLUGIN_LAYOUT: DockedReferenceLayout = {
-  mainMinWidth: 960,
-  railMinWidth: 320,
-  contentClass: "max-w-none",
-  mainClass: "min-w-0 max-w-[1120px] flex-[1_1_960px]",
-  railClass: "sticky top-[26px] z-auto min-w-[320px] max-w-[560px] flex-[1_1_560px]",
-};
-
-const INDEXER_SETTINGS_TAB_ITEMS: Record<
-  IndexerSettingsTab,
-  { labelKey: string; icon: LucideIcon }
-> = {
-  indexers: { labelKey: "settings.indexers", icon: Database },
-  search: { labelKey: "settings.indexerSearch", icon: ScanSearch },
-  seedingProfiles: { labelKey: "settings.seedingProfiles", icon: UploadCloud },
-};
-
-/// Pane switcher for the Indexers page. An indexer and the seeding profile it
+/// Pane tabs for the Indexers page. An indexer and the seeding profile it
 /// applies are two views of the same subject, so they share a page instead of
-/// scattering across the settings nav. Same shape as the Wanted view's section
-/// rail.
-function IndexerSettingsSubnav({
+/// scattering across the settings nav. Same shape as the Lists page's tabs.
+function IndexerSettingsTabs({
   activeTab,
   tabs,
   t,
@@ -204,40 +180,25 @@ function IndexerSettingsSubnav({
   t: ReturnType<typeof useTranslate>;
 }) {
   return (
-    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 2xl:h-full 2xl:w-[218px] 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r 2xl:p-[22px_14px]">
-      <nav
+    <div className="mb-6 flex flex-wrap items-end gap-3 border-b border-[var(--scry-border3)]">
+      <div
         id="settings-indexers-subnav"
-        className="flex gap-2 overflow-x-auto pb-1 2xl:flex-col 2xl:overflow-visible 2xl:pb-0"
+        role="tablist"
         aria-label={t("settings.indexers")}
+        className="relative top-px flex min-h-12 flex-wrap gap-x-2"
       >
-        {tabs.map((tab) => {
-          const item = INDEXER_SETTINGS_TAB_ITEMS[tab];
-          const Icon = item.icon;
-          const active = activeTab === tab;
-          return (
-            <Link
-              key={tab}
-              id={selectorId("settings-indexers-subnav", tab)}
-              to={buildIndexerSettingsPath(tab)}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
-                active &&
-                  "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
-              )}
-            >
-              <Icon
-                className={cn(
-                  "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                  active && "text-[var(--scry-accent-text)]",
-                )}
-              />
-              <span className="whitespace-nowrap">{t(item.labelKey)}</span>
-            </Link>
-          );
-        })}
-      </nav>
-    </aside>
+        {tabs.map((tab) => (
+          <UnderlineTabLink
+            key={tab}
+            id={selectorId("settings-indexers-subnav", tab)}
+            to={buildIndexerSettingsPath(tab)}
+            selected={activeTab === tab}
+            label={t(INDEXER_SETTINGS_TAB_LABEL_KEYS[tab])}
+            badge={tab === "search" ? t("settings.pluginBeta") : undefined}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -381,8 +342,6 @@ export const SettingsContainer = memo(function SettingsContainer({
   selectedLanguage,
   uiLanguage,
   onSelectLanguage,
-  pluginUpdateCount,
-  pluginBlockedCount,
 }: SettingsContainerProps) {
   const t = useTranslate();
   const client = useClient();
@@ -496,76 +455,34 @@ export const SettingsContainer = memo(function SettingsContainer({
     settingsSection !== "notifications" &&
     settingsSection !== "subtitles";
   // Pages that render an inline plugins rail anchored to the top of the content
-  // pane. The Search pane owns its full width (its own refine rail plus a
-  // 1020px table), so the plugins rail stays with the provider panes.
+  // pane.
   const showReferenceRail =
-    (settingsSection === "indexers" && effectiveIndexerSettingsTab !== "search") ||
+    settingsSection === "indexers" ||
     settingsSection === "downloadClients" ||
     settingsSection === "notifications" ||
     settingsSection === "subtitles";
-  const isSubtitlesSection = settingsSection === "subtitles";
-  const referenceLayout = showReferenceRail
-    ? isSubtitlesSection
-      ? SUBTITLES_FILTERED_PLUGIN_LAYOUT
-      : settingsSection === "indexers"
-        ? INDEXERS_FILTERED_PLUGIN_LAYOUT
-        : STANDARD_FILTERED_PLUGIN_LAYOUT
+  const referenceContentWidth = showReferenceRail
+    ? settingsSection === "indexers"
+      ? effectiveIndexerSettingsTab === "search"
+        ? INDEXER_SEARCH_FILTERED_PLUGIN_CONTENT_WIDTH
+        : INDEXERS_FILTERED_PLUGIN_CONTENT_WIDTH
+      : STANDARD_FILTERED_PLUGIN_CONTENT_WIDTH
     : null;
   const settingsContentRef = useRef<HTMLElement | null>(null);
-  const [referenceRailOpen, setReferenceRailOpen] = useState(false);
-  const [referenceRailDocked, setReferenceRailDocked] = useState(false);
-
-  useEffect(() => {
-    setReferenceRailOpen(false);
-  }, [referenceRailDocked, settingsSection]);
-
-  useEffect(() => {
-    if (!referenceLayout) {
-      setReferenceRailDocked(false);
-      return;
-    }
-
-    const contentElement = settingsContentRef.current;
-    if (!contentElement) {
-      setReferenceRailDocked(false);
-      return;
-    }
-
-    const minimumDockedWidth =
-      referenceLayout.mainMinWidth +
-      referenceLayout.railMinWidth +
-      DOCKED_REFERENCE_GAP_PX;
-    const syncReferenceRailMode = () => {
-      setReferenceRailDocked(
-        contentElement.getBoundingClientRect().width >= minimumDockedWidth,
-      );
-    };
-
-    syncReferenceRailMode();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", syncReferenceRailMode);
-      return () => window.removeEventListener("resize", syncReferenceRailMode);
-    }
-
-    const resizeObserver = new ResizeObserver(syncReferenceRailMode);
-    resizeObserver.observe(contentElement);
-    return () => resizeObserver.disconnect();
-  }, [referenceLayout]);
-
-  useEffect(() => {
-    if (!referenceRailOpen || referenceRailDocked) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setReferenceRailOpen(false);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [referenceRailDocked, referenceRailOpen]);
+  const settingsPaneRef = useRef<HTMLDivElement | null>(null);
+  const referencePanel = useGutterPanel(
+    settingsContentRef,
+    settingsPaneRef,
+    showReferenceRail ? SETTINGS_PLUGINS_PANEL_SIZE : null,
+    settingsSection,
+  );
+  const setReferencePanelOpen = referencePanel.setOpen;
+  // The plugin lists are portaled into the panel from the section containers,
+  // so the panel's context has to wrap the content they render from.
+  const referencePanelContext = useMemo(
+    () => ({ close: () => setReferencePanelOpen(false) }),
+    [setReferencePanelOpen],
+  );
 
   const settingsSectionLabel =
     settingsSection === "profile"
@@ -657,9 +574,6 @@ export const SettingsContainer = memo(function SettingsContainer({
       visible: canManageSystemSettings,
     },
   ].filter((item) => item.visible);
-  const showPrimarySettingsSubnav = primarySettingsNav.some(
-    (item) => item.section === settingsSection,
-  );
   // Both kinds of rule are panes of one page, so both carry its gutter.
   const isRulesSection =
     settingsSection === "rules" ||
@@ -715,14 +629,10 @@ export const SettingsContainer = memo(function SettingsContainer({
         );
     }
   })();
-  // The Indexers page's panes are pages in their own right, so the header and
-  // the breadcrumb name the pane rather than the section that hosts it.
-  const activeIndexerTab =
-    settingsSection === "indexers" && effectiveIndexerSettingsTab !== "indexers"
-      ? INDEXER_SETTINGS_TAB_ITEMS[effectiveIndexerSettingsTab]
-      : undefined;
-  // Same for the Maintenance Rules panes. The rule list is the page itself
-  // rather than a pane of it, so it adds no crumb and keeps the page's icon.
+  // The Maintenance Rules panes are pages in their own right, so the header
+  // and the breadcrumb name the pane rather than the section that hosts it.
+  // The rule list is the page itself rather than a pane of it, so it adds no
+  // crumb and keeps the page's icon.
   const activeMaintenancePane =
     settingsSection === "maintenanceRules" &&
     !maintenanceRulesHidden &&
@@ -731,7 +641,7 @@ export const SettingsContainer = memo(function SettingsContainer({
           (item) => item.section === maintenanceRulesSection,
         )
       : undefined;
-  const activePane = activeIndexerTab ?? activeMaintenancePane;
+  const activePane = activeMaintenancePane;
   const pageLabel = activePane ? t(activePane.labelKey) : settingsSectionLabel;
   const PageIcon = activePane ? activePane.icon : SettingsSectionIcon;
   const breadcrumbRootLabel =
@@ -761,11 +671,10 @@ export const SettingsContainer = memo(function SettingsContainer({
     subscribeToProviderCatalog,
   );
 
-  // The Indexers and Rules rails only become a side column at 2xl; below that
-  // they are a full-width strip, so the row has to stack or the strip takes
-  // the whole row and leaves the page content zero wide.
-  const showSectionSubnav =
-    settingsSection === "indexers" || (isRulesSection && rulesSections.length >= 2);
+  // The Rules rail only becomes a side column at 2xl; below that it is a
+  // full-width strip, so the row has to stack or the strip takes the whole
+  // row and leaves the page content zero wide.
+  const showSectionSubnav = isRulesSection && rulesSections.length >= 2;
 
   return (
     <div
@@ -774,64 +683,6 @@ export const SettingsContainer = memo(function SettingsContainer({
         showSectionSubnav ? "2xl:flex-row" : "md:flex-row",
       )}
     >
-      {showPrimarySettingsSubnav ? (
-        <aside
-          data-slot="settings-subnav-scroll"
-          className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[218px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]"
-        >
-          <nav className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0">
-            {primarySettingsNav.map((item) => {
-              const Icon = item.icon;
-              const active = settingsSection === item.section;
-              return (
-                <Link
-                  key={item.section}
-                  id={selectorId("root-sidebar-settings", item.section)}
-                  to={buildViewPath("settings", item.section)}
-                  className={cn(
-                    "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
-                    active &&
-                      "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
-                  )}
-                >
-                  <Icon
-                    className={cn(
-                      "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                      active && "text-[var(--scry-accent-text)]",
-                    )}
-                  />
-                  <span className="whitespace-nowrap">{item.label}</span>
-                  {item.section === "plugins" && pluginBlockedCount > 0 ? (
-                    <span
-                      data-ui="settings-nav-plugin-blocked-count"
-                      className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--scry-danger-solid)] px-1 text-xs font-medium tabular-nums text-[var(--scry-danger-on-solid)]"
-                    >
-                      {pluginBlockedCount}
-                    </span>
-                  ) : null}
-                  {item.section === "plugins" && pluginUpdateCount > 0 ? (
-                    <span
-                      className={cn(
-                        "inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--scry-warning-solid)] px-1 text-xs font-medium tabular-nums text-[var(--scry-warning-on-solid)]",
-                        pluginBlockedCount > 0 ? "ml-1" : "ml-auto",
-                      )}
-                    >
-                      {pluginUpdateCount}
-                    </span>
-                  ) : null}
-                </Link>
-              );
-            })}
-          </nav>
-        </aside>
-      ) : null}
-      {settingsSection === "indexers" ? (
-        <IndexerSettingsSubnav
-          activeTab={effectiveIndexerSettingsTab}
-          tabs={indexerSettingsTabs}
-          t={t}
-        />
-      ) : null}
       {isRulesSection ? (
         <RulesSubnav
           activeSection={effectiveRulesSection}
@@ -843,17 +694,18 @@ export const SettingsContainer = memo(function SettingsContainer({
       <main
         ref={settingsContentRef}
         data-slot="settings-main-scroll"
-        className="min-w-0 flex-1 overflow-visible bg-transparent min-[981px]:overflow-y-auto"
+        className={cn(
+          "min-w-0 flex-1 overflow-visible bg-transparent min-[981px]:overflow-y-auto",
+          showReferenceRail && "[scrollbar-gutter:stable]",
+        )}
       >
         <div
+          ref={settingsPaneRef}
+          style={referenceContentWidth ? { maxWidth: referenceContentWidth } : undefined}
           className={cn(
             "mx-auto w-full px-4 py-5 pb-[calc(env(safe-area-inset-bottom)+5rem)] sm:px-6 md:px-[30px] md:py-[26px] md:pb-[60px]",
             showReferenceRail
-              ? referenceRailDocked
-                ? referenceLayout?.contentClass
-                : settingsSection === "indexers"
-                  ? "max-w-none"
-                  : "max-w-[1280px]"
+              ? null
               : settingsSection === "rules" ||
                   settingsSection === "maintenanceRules" ||
                   settingsSection === "requestRules" ||
@@ -861,38 +713,18 @@ export const SettingsContainer = memo(function SettingsContainer({
                 ? "max-w-none"
                 : settingsSection === "users"
                   ? "max-w-[1620px]"
-                  : settingsSection === "indexers"
-                    ? "max-w-[1640px]"
-                    : "max-w-[1280px]",
+                  : "max-w-[1280px]",
           )}
         >
-          <div
-            className={cn(
-              showReferenceRail && referenceRailDocked
-                ? "flex items-start justify-center gap-5"
-                : "contents",
-            )}
-          >
-            <div
-              className={cn(
-                showReferenceRail && referenceRailDocked
-                  ? referenceLayout?.mainClass
-                  : showReferenceRail
-                    ? "min-w-0"
-                  : "contents",
-              )}
-            >
+          <div className="contents">
+            <div className={showReferenceRail ? "min-w-0" : "contents"}>
           <div className="mb-4 flex items-center gap-1.5 text-[12.5px] text-[var(--scry-faint)]">
             <span>{breadcrumbRootLabel}</span>
             <ChevronRight className="h-3.5 w-3.5" />
             {activePane ? (
               <>
                 <Link
-                  to={
-                    activeIndexerTab
-                      ? buildIndexerSettingsPath("indexers")
-                      : buildRulesPath("maintenance")
-                  }
+                  to={buildRulesPath("maintenance")}
                   className="transition hover:text-[var(--scry-ink2)]"
                 >
                   {settingsSectionLabel}
@@ -905,7 +737,9 @@ export const SettingsContainer = memo(function SettingsContainer({
           <div
             className={cn(
               "mb-6 flex gap-3",
-              showReferenceRail && !referenceRailDocked
+              // The plugins button is small enough to share the title's row
+              // on any screen; other header actions stack below it on phones.
+              showReferenceRail
                 ? "flex-row items-center justify-between"
                 : "flex-col sm:flex-row sm:items-center sm:justify-between",
             )}
@@ -917,11 +751,6 @@ export const SettingsContainer = memo(function SettingsContainer({
               <div className="min-w-0">
                 <h1 className="flex flex-wrap items-center gap-2.5 text-[25px] font-bold tracking-normal text-[var(--scry-ink2)]">
                   {pageLabel}
-                  {settingsSection === "indexers" && effectiveIndexerSettingsTab === "search" ? (
-                    <Badge id="settings-indexer-search-beta" tone="warning" className="text-[11px]">
-                      {t("settings.pluginBeta")}
-                    </Badge>
-                  ) : null}
                 </h1>
                 {settingsSection === "indexers" && effectiveIndexerSettingsTab === "search" ? (
                   <p
@@ -947,18 +776,14 @@ export const SettingsContainer = memo(function SettingsContainer({
                 ) : null}
               </div>
             </div>
-            {showReferenceRail && !referenceRailDocked ? (
-              <Button
-                type="button"
-                variant="primary"
-                className="h-10 w-auto shrink-0 self-start rounded-[10px] px-3 text-[13px]"
-                onClick={() => setReferenceRailOpen(true)}
-                aria-expanded={referenceRailOpen}
-                aria-controls={SETTINGS_REFERENCE_SLOT_ID}
-              >
-                <Puzzle className="h-4 w-4" />
-                {t("settings.plugins")}
-              </Button>
+            {showReferenceRail ? (
+              <GutterPanelButton
+                panelId={SETTINGS_PLUGINS_PANEL_ID}
+                label={t("settings.plugins")}
+                icon={<Puzzle className="h-4 w-4" />}
+                open={referencePanel.open}
+                onOpenChange={setReferencePanelOpen}
+              />
             ) : settingsSection === "plugins" ? (
               <div
                 id={SETTINGS_HEADER_ACTIONS_SLOT_ID}
@@ -970,6 +795,14 @@ export const SettingsContainer = memo(function SettingsContainer({
               </Button>
             ) : null}
           </div>
+          {settingsSection === "indexers" ? (
+            <IndexerSettingsTabs
+              activeTab={effectiveIndexerSettingsTab}
+              tabs={indexerSettingsTabs}
+              t={t}
+            />
+          ) : null}
+          <GutterPanelContext.Provider value={showReferenceRail ? referencePanelContext : null}>
           <Suspense fallback={<div className="py-6 text-sm text-[var(--scry-muted3)]">{t("label.loading")}</div>}>
           {settingsSection === "profile" ? (
             <SettingsProfileContainer
@@ -1063,57 +896,22 @@ export const SettingsContainer = memo(function SettingsContainer({
             <SettingsQualityProfilesContainer />
           )}
           </Suspense>
+          </GutterPanelContext.Provider>
             </div>
             {showReferenceRail ? (
-              <>
-                {!referenceRailDocked ? (
-                  <button
-                    type="button"
-                    aria-label={t("label.close")}
-                    className={cn(
-                      "fixed inset-0 z-40 bg-black/45 backdrop-blur-[2px] transition-opacity",
-                      referenceRailOpen
-                        ? "opacity-100"
-                        : "pointer-events-none opacity-0",
-                    )}
-                    onClick={() => setReferenceRailOpen(false)}
-                  />
-                ) : null}
-                <aside
-                  aria-label={t("settings.plugins")}
-                  className={cn(
-                    referenceRailDocked
-                      ? referenceLayout?.railClass
-                      : "fixed bottom-4 right-4 top-[118px] z-50 flex w-[min(420px,calc(100vw-2rem))] min-w-0 flex-col gap-3 overflow-y-auto rounded-[16px] border border-[var(--scry-border)] bg-[var(--scry-bg)] p-3 shadow-[0_20px_50px_rgba(0,0,0,0.38)] transition duration-200",
-                    !referenceRailDocked &&
-                      (referenceRailOpen
-                        ? "translate-x-0 opacity-100"
-                        : "pointer-events-none translate-x-[calc(100%+1rem)] opacity-0"),
-                  )}
-                >
-                  {!referenceRailDocked ? (
-                    <div className="flex items-center justify-between gap-3 rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-bg)] px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.16)]">
-                      <div className="flex min-w-0 items-center gap-2 text-[15px] font-semibold text-[var(--scry-ink2)]">
-                        <Puzzle className="h-4 w-4 shrink-0" />
-                        <span className="truncate">{t("settings.plugins")}</span>
-                      </div>
-                      <IconButton
-                        id="settings-plugins-panel-close"
-                        label={t("label.close")}
-                        tone="neutral"
-                        onClick={() => setReferenceRailOpen(false)}
-                      >
-                        <X className="h-4 w-4" />
-                      </IconButton>
-                    </div>
-                  ) : null}
-                  <div
-                    id={SETTINGS_REFERENCE_SLOT_ID}
-                    data-slot="settings-reference"
-                    className="min-w-0"
-                  />
-                </aside>
-              </>
+              <GutterPanel
+                id={SETTINGS_PLUGINS_PANEL_ID}
+                label={t("settings.plugins")}
+                frame={referencePanel.frame}
+                open={referencePanel.open}
+                onOpenChange={setReferencePanelOpen}
+              >
+                <div
+                  id={SETTINGS_REFERENCE_SLOT_ID}
+                  data-slot="settings-reference"
+                  className="min-w-0"
+                />
+              </GutterPanel>
             ) : null}
           </div>
         </div>

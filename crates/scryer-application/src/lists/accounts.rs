@@ -2,7 +2,7 @@
 use super::account_transport::*;
 use super::privacy::ensure_account_owner;
 use super::refusal::{self, refused};
-use crate::{AppError, AppResult, AppUseCase};
+use crate::{AppError, AppResult, AppUseCase, plugin_codes};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use scryer_domain::{
@@ -1448,12 +1448,10 @@ impl AppUseCase {
             // The provider could not be asked right now; the same credential
             // may verify on the next attempt.
             Ok(PluginResult::Err(error))
-                if matches!(
-                    error.code,
-                    PluginErrorCode::RateLimited
-                        | PluginErrorCode::UpstreamUnavailable
-                        | PluginErrorCode::Temporary
-                ) =>
+                if error.code == PluginErrorCode::RateLimited
+                    || error.code.as_str() == plugin_codes::QUOTA_EXCEEDED
+                    || error.code == PluginErrorCode::UpstreamUnavailable
+                    || error.code == PluginErrorCode::Temporary =>
             {
                 Err(AppError::temporary_unavailable(
                     "list account identity could not be verified right now",
@@ -1467,7 +1465,8 @@ impl AppUseCase {
             // yet, so the member is asked for the right key rather than to reconnect.
             Ok(PluginResult::Err(error))
                 if account.is_none()
-                    && error.code == PluginErrorCode::AuthFailed
+                    && (error.code == PluginErrorCode::AuthFailed
+                        || error.code.as_str() == plugin_codes::INVALID_API_KEY)
                     && token.token_type.as_deref() == Some(LIST_CREDENTIAL_TYPE_API_KEY) =>
             {
                 Err(key_rejected())

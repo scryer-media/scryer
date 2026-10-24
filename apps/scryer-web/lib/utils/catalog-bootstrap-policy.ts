@@ -64,14 +64,16 @@ export function resolveCatalogSurfacePhase({
   loadedTitleCount,
   rootValidationState,
 }: CatalogSurfacePhaseInput): CatalogSurfacePhase {
-  if (canManageLibrarySettings && !hasConfiguredRoots) {
-    return "rootsMissing";
-  }
+  // Titles already in the catalog are shown whatever the roots look like; the
+  // root prompts only replace an empty catalog.
   if (loadedTitleCount === null) {
     return "resolving";
   }
   if (loadedTitleCount > 0) {
     return "content";
+  }
+  if (canManageLibrarySettings && !hasConfiguredRoots) {
+    return "rootsMissing";
   }
   return rootValidationState === "invalid" ? "rootsInvalid" : "empty";
 }

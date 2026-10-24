@@ -884,37 +884,89 @@ pub fn from_provider_type(
         supports_test,
         config_fields: config_fields
             .into_iter()
-            .map(|f| PluginConfigFieldPayload {
-                key: f.key,
-                label: f.label,
-                field_type: PluginConfigFieldTypeValue::from_domain(f.field_type),
-                required: f.required,
-                default_value: f.default_value,
-                value_source: PluginConfigValueSourceValue::from_domain(f.value_source),
-                role: f.role.map(PluginConfigFieldRoleValue::from_domain),
-                host_binding: f.host_binding.map(|binding| binding.as_str().to_string()),
-                options: f
-                    .options
+            .map(plugin_config_field_payload)
+            .collect(),
+        dynamic_config_trigger_keys: Vec::new(),
+    }
+}
+
+/// One config field as the settings form receives it.
+pub fn plugin_config_field_payload(f: scryer_domain::ConfigFieldDef) -> PluginConfigFieldPayload {
+    PluginConfigFieldPayload {
+        key: f.key,
+        label: f.label,
+        field_type: PluginConfigFieldTypeValue::from_domain(f.field_type),
+        required: f.required,
+        default_value: f.default_value,
+        value_source: PluginConfigValueSourceValue::from_domain(f.value_source),
+        role: f.role.map(PluginConfigFieldRoleValue::from_domain),
+        host_binding: f.host_binding.map(|binding| binding.as_str().to_string()),
+        options: f
+            .options
+            .into_iter()
+            .map(|o| PluginConfigFieldOptionPayload {
+                value: o.value,
+                label: o.label,
+                config_overrides: o
+                    .config_overrides
                     .into_iter()
-                    .map(|o| PluginConfigFieldOptionPayload {
-                        value: o.value,
-                        label: o.label,
-                        config_overrides: o
-                            .config_overrides
-                            .into_iter()
-                            .map(|(key, value)| PluginConfigFieldOverridePayload { key, value })
-                            .collect(),
-                    })
+                    .map(|(key, value)| PluginConfigFieldOverridePayload { key, value })
                     .collect(),
-                help_text: f.help_text,
-                visible_when: f.visible_when.map(PluginFieldConditionPayload::from_domain),
-                required_when: f
-                    .required_when
-                    .map(PluginFieldConditionPayload::from_domain),
-                advanced: f.advanced,
             })
             .collect(),
+        help_text: f.help_text,
+        visible_when: f.visible_when.map(PluginFieldConditionPayload::from_domain),
+        required_when: f
+            .required_when
+            .map(PluginFieldConditionPayload::from_domain),
+        advanced: f.advanced,
     }
+}
+
+pub fn from_plugin_dynamic_config_fields(
+    dynamic: scryer_application::PluginDynamicConfigFields,
+) -> PluginDynamicConfigFieldsPayload {
+    PluginDynamicConfigFieldsPayload {
+        fields: dynamic
+            .fields
+            .into_iter()
+            .map(plugin_config_field_payload)
+            .collect(),
+        hidden_field_keys: dynamic.hidden_field_keys,
+        login_challenge: None,
+    }
+}
+
+pub fn from_indexer_login_challenge(
+    challenge: scryer_application::IndexerLoginChallenge,
+) -> PluginLoginChallengePayload {
+    PluginLoginChallengePayload {
+        answer_field_key: challenge.answer_field_key,
+        content_type: challenge.content_type,
+        image_data: challenge.image_base64,
+    }
+}
+
+/// Submitted config values as plain strings, the way a plugin reads config.
+/// Cleared secrets and empty slots are left out.
+pub fn provider_config_values_to_string_map(
+    values: Vec<ProviderConfigValueInput>,
+) -> scryer_application::AppResult<std::collections::BTreeMap<String, String>> {
+    let json = provider_config_values_to_json(values)?;
+    let object = serde_json::from_str::<serde_json::Map<String, Value>>(&json)
+        .map_err(|error| scryer_application::AppError::Repository(error.to_string()))?;
+    Ok(object
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let value = match value {
+                Value::String(value) => value,
+                Value::Bool(value) => value.to_string(),
+                Value::Number(value) => value.to_string(),
+                _ => return None,
+            };
+            Some((key, value))
+        })
+        .collect())
 }
 
 pub fn from_download_client_config(config: DownloadClientConfig) -> DownloadClientConfigPayload {

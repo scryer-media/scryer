@@ -1277,6 +1277,14 @@ impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
         self.delegate.config_fields_for_provider(provider_type)
     }
 
+    fn dynamic_config_trigger_keys_for_provider(&self, provider_type: &str) -> Vec<String> {
+        if is_prowlarr_provider(provider_type) {
+            return Vec::new();
+        }
+        self.delegate
+            .dynamic_config_trigger_keys_for_provider(provider_type)
+    }
+
     fn plugin_name_for_provider(&self, provider_type: &str) -> Option<String> {
         if is_prowlarr_provider(provider_type) {
             return Some("Prowlarr".to_string());

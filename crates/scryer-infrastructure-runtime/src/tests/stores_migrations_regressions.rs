@@ -42,6 +42,7 @@ async fn pending_release_tracker_minimums_round_trip_and_legacy_rows_read_back_a
         last_decision_code: None,
         release_age_unknown: false,
         release_listing_json: None,
+        http_release: None,
     };
     parked.seed_minimums = scryer_application::ReleaseSeedMinimums {
         min_seed_ratio: Some(1.5),
@@ -1192,6 +1193,7 @@ async fn pending_release_listing_snapshot_survives_park_standby_and_promotion() 
         last_decision_code: None,
         release_age_unknown: false,
         release_listing_json: Some(SAMPLE_LISTING_JSON.to_string()),
+        http_release: None,
     };
     let id = PendingReleaseRepository::insert_pending_release(&pending_store, &parked)
         .await

@@ -76,7 +76,7 @@ test("mixed roots remain usable and unavailable validation does not block", () =
   );
 });
 
-test("only a missing configured root blocks catalog bootstrap", () => {
+test("a missing configured root replaces only an empty catalog", () => {
   assert.equal(
     resolveCatalogSurfacePhase({
       canManageLibrarySettings: true,
@@ -84,7 +84,25 @@ test("only a missing configured root blocks catalog bootstrap", () => {
       loadedTitleCount: null,
       rootValidationState: "notRun",
     }),
+    "resolving",
+  );
+  assert.equal(
+    resolveCatalogSurfacePhase({
+      canManageLibrarySettings: true,
+      hasConfiguredRoots: false,
+      loadedTitleCount: 0,
+      rootValidationState: "notRun",
+    }),
     "rootsMissing",
+  );
+  assert.equal(
+    resolveCatalogSurfacePhase({
+      canManageLibrarySettings: true,
+      hasConfiguredRoots: false,
+      loadedTitleCount: 4,
+      rootValidationState: "notRun",
+    }),
+    "content",
   );
   assert.equal(
     resolveCatalogSurfacePhase({

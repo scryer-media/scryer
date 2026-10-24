@@ -41,6 +41,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
+import { EditorValidationStatus } from "@/components/common/editor-validation-status";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import {
   Table,
@@ -1173,6 +1174,7 @@ export function SettingsRulesSection({
                       }))
                     }
                     diagnostics={validationDiagnostics}
+                    feedback={<EditorValidationStatus checking={validating} result={validationResult} formatError={(error) => formatRuleValidationError(error, ruleSetDraft.regoSource)} />}
                     minLines={10}
                     maxLines={35}
                   />
@@ -1197,31 +1199,6 @@ export function SettingsRulesSection({
                     }}
                   />
                 </div>
-
-                {validationResult ? (
-                  <div
-                    className={`rounded border px-3 py-2 text-sm ${
-                      validationResult.valid
-                        ? "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]"
-                        : "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]"
-                    }`}
-                  >
-                    {validationResult.valid ? (
-                      t("settings.ruleValid")
-                    ) : (
-                      <div className="space-y-2">
-                        {validationResult.errors.map((err, i) => (
-                          <pre
-                            key={i}
-                            className="overflow-x-auto whitespace-pre rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 font-mono font-[var(--font-code)] text-[12px] leading-5 text-[var(--scry-danger-text)]"
-                          >
-                            {formatRuleValidationError(err, ruleSetDraft.regoSource)}
-                          </pre>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
 
                 <div className="flex gap-2">
                   <Button

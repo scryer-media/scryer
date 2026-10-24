@@ -312,6 +312,7 @@ async fn resolve_direct_nzb_request(
         panic!("direct NZB must be staged");
     };
     let request = DownloadClientAddRequest {
+        http: None,
         search_facet: Some(title.facet.clone()),
         title,
         download_id: None,
@@ -652,6 +653,7 @@ fn request_with_staged_nzb(
     source_title: &str,
 ) -> DownloadClientAddRequest {
     DownloadClientAddRequest {
+        http: None,
         search_facet: None,
         title,
         download_id: None,

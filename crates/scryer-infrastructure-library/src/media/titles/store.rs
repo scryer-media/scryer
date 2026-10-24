@@ -3112,6 +3112,16 @@ impl TitleRepository for TitleStore {
         result
     }
 
+    async fn claim_missing_folder_path(&self, id: &str, folder_path: &str) -> AppResult<bool> {
+        let rows = SqlRuntime::execute_write(
+            &self.datastore,
+            "claim_missing_title_folder",
+            "UPDATE titles SET folder_path = {} WHERE id = {} AND (folder_path IS NULL OR folder_path = '')",
+            vec![SqlArg::Text(folder_path.to_owned()), SqlArg::Text(id.to_owned())],
+        ).await?;
+        Ok(rows == 1)
+    }
+
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
         let id = id.to_string();
         let folder_path = folder_path.to_string();

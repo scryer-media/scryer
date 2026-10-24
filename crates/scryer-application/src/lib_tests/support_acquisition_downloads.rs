@@ -299,6 +299,22 @@ pub(super) async fn title_blocklist_entries(
 
 #[derive(Default, Clone)]
 pub(super) struct TrackingDownloadSubmissionRepo {
+    pub(super) password_retry_recovery: Arc<Mutex<Vec<DownloadSubmission>>>,
+    /// Calls to `list_password_retry_recovery_submissions`.
+    pub(super) password_retry_recovery_reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// Registry that `delete_by_download_id` ends the binding in, the way the
+    /// real store ends it in the same transaction regardless of retry fences.
+    pub(super) linked_registry:
+        Arc<Mutex<Option<Arc<super::downloads::RecordingDownloadRegistry>>>>,
+    pub(super) simulate_password_retry: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) password_claim_gate: Arc<
+        Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                tokio::sync::oneshot::Receiver<()>,
+            )>,
+        >,
+    >,
     pub(super) store: Arc<Mutex<Vec<DownloadSubmission>>>,
     pub(super) record_submission_error: Arc<Mutex<Option<String>>>,
     pub(super) identities: DownloadSubmissionIdentities,
@@ -857,6 +873,68 @@ impl TrackingDownloadSubmissionRepo {
 
 #[async_trait]
 impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+    async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
+        self.password_retry_recovery_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.password_retry_recovery.lock().await.clone())
+    }
+
+    async fn claim_password_retry(
+        &self,
+        claim: &crate::DownloadPasswordRetryClaim,
+        _password: &str,
+    ) -> AppResult<crate::DownloadPasswordRetryClaimOutcome> {
+        if self
+            .simulate_password_retry
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            let submission = self
+                .store
+                .lock()
+                .await
+                .iter()
+                .find(|row| row.download_id == claim.download_id)
+                .cloned()
+                .unwrap();
+            self.password_retry_recovery.lock().await.push(submission);
+            return Ok(crate::DownloadPasswordRetryClaimOutcome::Claimed);
+        }
+        let gate = self.password_claim_gate.lock().await.take();
+        if let Some((entered, release)) = gate {
+            entered.send(()).expect("claim observer alive");
+            crate::test_wait::within_deadline("release synthetic password claim", release)
+                .await
+                .expect("claim released");
+            Ok(crate::DownloadPasswordRetryClaimOutcome::Busy)
+        } else {
+            Err(AppError::Repository(
+                "durable download password retry is unavailable".into(),
+            ))
+        }
+    }
+
+    async fn finish_password_retry(
+        &self,
+        claim: &crate::DownloadPasswordRetryClaim,
+        outcome: &crate::DownloadClientRetryOutcome,
+    ) -> AppResult<()> {
+        if self
+            .simulate_password_retry
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            if matches!(outcome, crate::DownloadClientRetryOutcome::Refused) {
+                self.password_retry_recovery
+                    .lock()
+                    .await
+                    .retain(|row| row.download_id != claim.download_id);
+            }
+            return Ok(());
+        }
+        Err(AppError::Repository(
+            "durable download password retry is unavailable".into(),
+        ))
+    }
+
     async fn set_password_candidates(
         &self,
         id: &scryer_domain::download_identity::DownloadId,
@@ -1352,18 +1430,19 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
     async fn list_active_unbound_submitted_before(
         &self,
         submitted_before: chrono::DateTime<Utc>,
-    ) -> AppResult<Vec<DownloadSubmission>> {
+    ) -> AppResult<Vec<crate::UnconfirmedDownloadSubmission>> {
         let submitted_at = self.unbound_submitted_at.lock().await.clone();
         let entries = self.store.lock().await;
         Ok(entries
             .iter()
-            .filter(|entry| {
-                entry.download_client_item_id.trim().is_empty()
-                    && submitted_at
-                        .get(&entry.download_id)
-                        .is_some_and(|at| *at < submitted_before)
+            .filter(|entry| entry.download_client_item_id.trim().is_empty())
+            .filter_map(|entry| {
+                let at = *submitted_at.get(&entry.download_id)?;
+                (at < submitted_before).then(|| crate::UnconfirmedDownloadSubmission {
+                    submission: entry.clone(),
+                    submitted_at: Some(at),
+                })
             })
-            .cloned()
             .collect())
     }
 
@@ -1428,6 +1507,26 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             .lock()
             .await
             .retain(|key, _| !removed_keys.iter().any(|removed| removed == key));
+        Ok(())
+    }
+
+    async fn delete_by_download_id(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<()> {
+        self.store
+            .lock()
+            .await
+            .retain(|entry| entry.download_id != *download_id);
+        self.password_retry_recovery
+            .lock()
+            .await
+            .retain(|entry| entry.download_id != *download_id);
+        if let Some(registry) = self.linked_registry.lock().await.as_ref() {
+            registry
+                .end_binding_ignoring_password_retry(download_id)
+                .await;
+        }
         Ok(())
     }
 
@@ -2168,6 +2267,14 @@ impl StubSubmitError {
 
 #[derive(Default, Clone)]
 pub(super) struct StubDownloadClient {
+    pub(super) password_retry_gate: Arc<
+        Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                tokio::sync::oneshot::Receiver<()>,
+            )>,
+        >,
+    >,
     pub(super) native_data_removal: bool,
     pub(super) observation_error: Arc<Mutex<Option<String>>>,
     /// Scripted `observe_download` answers, consumed front to back before the
@@ -2191,12 +2298,14 @@ pub(super) struct StubDownloadClient {
     pub(super) deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
     pub(super) deleted_requests: DeletedDownloadRequests,
     pub(super) delete_error: Arc<Mutex<Option<String>>>,
-    /// Refuse every delete that asks for the data (as Weaver does for an API
-    /// key without admin scope) while entry-only deletes still succeed.
-    pub(super) payload_delete_refusal: Arc<Mutex<Option<String>>>,
+    /// Every delete the client was asked for as `(item id, is_history)`,
+    /// recorded before `delete_error` is applied.
+    pub(super) delete_attempts: Arc<Mutex<Vec<(String, bool)>>>,
     pub(super) queue_error: Arc<Mutex<Option<String>>>,
     pub(super) recent_activity_error: Arc<Mutex<Option<String>>>,
     pub(super) snapshot_authoritative_client_ids: Arc<Mutex<HashSet<String>>>,
+    pub(super) snapshot_saturated_activity_windows:
+        Arc<Mutex<HashMap<String, Option<chrono::DateTime<Utc>>>>>,
     pub(super) submit_error: Arc<Mutex<Option<StubSubmitError>>>,
     pub(super) submit_errors: Arc<Mutex<std::collections::VecDeque<StubSubmitError>>>,
     pub(super) submit_started: Arc<tokio::sync::Notify>,
@@ -2260,6 +2369,19 @@ impl StubDownloadClient {
         *self.snapshot_authoritative_client_ids.lock().await = client_ids.into_iter().collect();
     }
 
+    /// Report `client_id`'s recent-activity window as filled to the limit,
+    /// reaching back to `oldest` (`None`: the window's age is unknown).
+    pub(super) async fn set_snapshot_saturated_activity_window(
+        &self,
+        client_id: &str,
+        oldest: Option<chrono::DateTime<Utc>>,
+    ) {
+        self.snapshot_saturated_activity_windows
+            .lock()
+            .await
+            .insert(client_id.to_string(), oldest);
+    }
+
     pub(super) async fn set_submit_error(&self, error: Option<StubSubmitError>) {
         *self.submit_error.lock().await = error;
     }
@@ -2300,6 +2422,10 @@ impl StubDownloadClient {
                 path.display()
             );
         }
+        self.delete_attempts
+            .lock()
+            .await
+            .push((id.to_string(), is_history));
         if let Some(error) = self.delete_error.lock().await.clone() {
             return Err(AppError::Repository(error));
         }
@@ -2310,9 +2436,6 @@ impl StubDownloadClient {
             is_history,
             remove_data,
         ));
-        if remove_data && let Some(refusal) = self.payload_delete_refusal.lock().await.clone() {
-            return Err(AppError::Unauthorized(refusal));
-        }
         self.deleted_items
             .lock()
             .await
@@ -2323,6 +2446,22 @@ impl StubDownloadClient {
 
 #[async_trait]
 impl DownloadClient for StubDownloadClient {
+    async fn retry_failed_job_for_client(
+        &self,
+        _client_id: &str,
+        _id: &str,
+        _password: &str,
+    ) -> AppResult<crate::DownloadClientRetryOutcome> {
+        let gate = self.password_retry_gate.lock().await.take();
+        if let Some((entered, release)) = gate {
+            entered.send(()).expect("retry observer alive");
+            crate::test_wait::within_deadline("release synthetic retry client", release)
+                .await
+                .expect("retry released");
+        }
+        Ok(crate::DownloadClientRetryOutcome::Refused)
+    }
+
     fn supports_native_data_removal(&self) -> bool {
         self.native_data_removal
     }
@@ -2527,6 +2666,11 @@ impl DownloadClient for StubDownloadClient {
                 Ok(crate::ports::DownloadClientSnapshotOutcome {
                     items: queue_items,
                     authoritative_client_ids,
+                    saturated_activity_windows: self
+                        .snapshot_saturated_activity_windows
+                        .lock()
+                        .await
+                        .clone(),
                     any_client_read_succeeded: true,
                     ..Default::default()
                 })

@@ -610,10 +610,12 @@ async fn title_folder_recovery_uses_tracked_folder_in_another_root_of_the_same_l
             library.slug,
             vec![
                 LibraryRootDraft {
+                    id: None,
                     path: first.to_string_lossy().into_owned(),
                     is_default: true,
                 },
                 LibraryRootDraft {
+                    id: None,
                     path: second.to_string_lossy().into_owned(),
                     is_default: false,
                 },

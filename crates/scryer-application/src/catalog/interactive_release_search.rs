@@ -460,7 +460,7 @@ impl AppUseCase {
         let indexer_priority_by_name = self
             .build_indexer_priority_by_name(indexer_routing.as_ref())
             .await;
-        let preferred_source_kind = self.download_source_capabilities().await.2;
+        let preferred_source_kind = self.download_source_capabilities().await.preferred;
 
         let configs = self
             .services
@@ -1405,6 +1405,7 @@ impl AppUseCase {
             .grab_indexer_name(result.indexer_id.as_deref(), Some(result.source.as_str()))
             .await;
         let mut request = DownloadClientAddRequest {
+            http: None,
             title: stand_in_title.clone(),
             search_facet: None,
             purpose: DownloadSubmissionPurpose::OperatorQueued,
@@ -1635,6 +1636,7 @@ impl AppUseCase {
                 .integrations
                 .download_client
                 .fetch_release_artifact(&DownloadClientAddRequest {
+                    http: None,
                     title: stand_in_title.clone(),
                     search_facet: None,
                     purpose: DownloadSubmissionPurpose::OperatorQueued,
