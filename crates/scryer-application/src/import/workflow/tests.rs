@@ -1909,6 +1909,7 @@ mod tests {
         let context = crate::canonical_scoring::ScoringContext {
             profile: &profile,
             required_audio_languages: &profile.criteria.required_audio_languages,
+            language_preferences: &crate::media::language_preference::NO_LANGUAGE_PREFERENCES,
             category: title.facet.as_str(),
             size_basis: crate::quality_profile::CoverageSizeBasis::default(),
             rules: None,

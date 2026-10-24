@@ -60,7 +60,11 @@ import type {
   QualityProfileSettingsPayload,
   ViewCategoryId,
 } from "@/lib/types/quality-profiles";
-import type { ImportMode, MediaSettings } from "@/lib/types/settings";
+import type {
+  AudioLanguagePreferences,
+  ImportMode,
+  MediaSettings,
+} from "@/lib/types/settings";
 import { FACET_REGISTRY } from "@/lib/facets/registry";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 import {
@@ -91,6 +95,10 @@ export type UseMediaSettingsResult = {
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
   categoryRequiredAudioLanguages: Record<ViewCategoryId, string[]>;
   saveCategoryRequiredAudioLanguages: (languages: string[]) => Promise<void> | void;
+  categoryAudioLanguagePreferences: Record<ViewCategoryId, AudioLanguagePreferences>;
+  saveCategoryAudioLanguagePreferences: (
+    update: Partial<AudioLanguagePreferences>,
+  ) => Promise<void> | void;
   categoryPersonaSelections: Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>;
   categoryFolderTemplates: Record<ViewCategoryId, string>;
   setCategoryFolderTemplates: React.Dispatch<
@@ -192,6 +200,36 @@ const DEFAULT_CATEGORY_REQUIRED_AUDIO_LANGUAGES: Record<ViewCategoryId, string[]
   SERIES: [],
   ANIME: [],
 };
+const DEFAULT_AUDIO_LANGUAGE_PREFERENCES: AudioLanguagePreferences = {
+  preferredAudioLanguages: [],
+  optionalAudioLanguages: [],
+  audioLanguagePriority: "QUALITY_FIRST",
+  optionalAudioLanguagesKeepSearching: false,
+};
+
+function audioLanguagePreferencesFromSettings(
+  settings: MediaSettings,
+): AudioLanguagePreferences {
+  return {
+    preferredAudioLanguages: settings.preferredAudioLanguages ?? [],
+    optionalAudioLanguages: settings.optionalAudioLanguages ?? [],
+    audioLanguagePriority:
+      settings.audioLanguagePriority ?? DEFAULT_AUDIO_LANGUAGE_PREFERENCES.audioLanguagePriority,
+    optionalAudioLanguagesKeepSearching: settings.optionalAudioLanguagesKeepSearching ?? false,
+  };
+}
+
+function sameAudioLanguagePreferences(
+  left: AudioLanguagePreferences,
+  right: AudioLanguagePreferences,
+): boolean {
+  return (
+    left.preferredAudioLanguages.join("\n") === right.preferredAudioLanguages.join("\n") &&
+    left.optionalAudioLanguages.join("\n") === right.optionalAudioLanguages.join("\n") &&
+    left.audioLanguagePriority === right.audioLanguagePriority &&
+    left.optionalAudioLanguagesKeepSearching === right.optionalAudioLanguagesKeepSearching
+  );
+}
 
 function buildMediaSettingsInitVariables(activeQualityScopeId: ViewCategoryId) {
   return {
@@ -238,6 +276,12 @@ export function useMediaSettings({
   const [categoryRequiredAudioLanguages, setCategoryRequiredAudioLanguages] =
     React.useState<Record<ViewCategoryId, string[]>>({
       ...DEFAULT_CATEGORY_REQUIRED_AUDIO_LANGUAGES,
+    });
+  const [categoryAudioLanguagePreferences, setCategoryAudioLanguagePreferences] =
+    React.useState<Record<ViewCategoryId, AudioLanguagePreferences>>({
+      MOVIE: DEFAULT_AUDIO_LANGUAGE_PREFERENCES,
+      SERIES: DEFAULT_AUDIO_LANGUAGE_PREFERENCES,
+      ANIME: DEFAULT_AUDIO_LANGUAGE_PREFERENCES,
     });
   const [categoryPersonaSelections, setCategoryPersonaSelections] =
     React.useState<Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>>({
@@ -660,6 +704,12 @@ export function useMediaSettings({
             nextLanguages,
           );
         });
+        setCategoryAudioLanguagePreferences((previous) => {
+          const nextPreferences = audioLanguagePreferencesFromSettings(mediaSettings);
+          return sameAudioLanguagePreferences(previous[mediaSettingsScopeId], nextPreferences)
+            ? previous
+            : { ...previous, [mediaSettingsScopeId]: nextPreferences };
+        });
         setCategoryFolderTemplates((previous) => {
           const nextTemplate = mediaSettings.folderTemplate || DEFAULT_FOLDER_TEMPLATE;
           return updateFacetScopedStringRecord(
@@ -1066,6 +1116,61 @@ export function useMediaSettings({
     ],
   );
 
+  const saveCategoryAudioLanguagePreferences = React.useCallback(
+    async (update: Partial<AudioLanguagePreferences>) => {
+      const previousPreferences =
+        categoryAudioLanguagePreferences[activeQualityScopeId] ??
+        DEFAULT_AUDIO_LANGUAGE_PREFERENCES;
+      const nextPreferences = { ...previousPreferences, ...update };
+      if (sameAudioLanguagePreferences(previousPreferences, nextPreferences)) {
+        return;
+      }
+
+      setCategoryAudioLanguagePreferences((previous) => ({
+        ...previous,
+        [activeQualityScopeId]: nextPreferences,
+      }));
+      setMediaSettingsSaving(true);
+
+      try {
+        const { data, error } = await client
+          .mutation(updateMediaSettingsMutation, {
+            input: {
+              scope: activeQualityScopeId,
+              ...update,
+            },
+          })
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+
+        applyMediaSettingsFromPayload(undefined, data?.updateMediaSettings);
+        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
+      } catch (error) {
+        setCategoryAudioLanguagePreferences((previous) => ({
+          ...previous,
+          [activeQualityScopeId]: previousPreferences,
+        }));
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          { level: "ERROR" },
+        );
+        throw error;
+      } finally {
+        setMediaSettingsSaving(false);
+      }
+    },
+    [
+      activeQualityScopeId,
+      applyMediaSettingsFromPayload,
+      categoryAudioLanguagePreferences,
+      client,
+      setGlobalStatus,
+      t,
+    ],
+  );
+
   const updateCategoryMediaProfileSettings = React.useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -1317,6 +1422,8 @@ export function useMediaSettings({
     categoryQualityProfileOverrides,
     categoryRequiredAudioLanguages,
     saveCategoryRequiredAudioLanguages,
+    categoryAudioLanguagePreferences,
+    saveCategoryAudioLanguagePreferences,
     categoryPersonaSelections,
     categoryFolderTemplates,
     setCategoryFolderTemplates,

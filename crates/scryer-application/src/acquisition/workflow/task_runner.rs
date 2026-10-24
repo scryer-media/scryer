@@ -7726,6 +7726,7 @@ mod task_runner_tests {
                 tier_index: Some(0),
                 size_fit_penalty: 0,
                 revision_preference: 0,
+                language: Default::default(),
             }),
         );
         let pack = arbitration_candidate(
@@ -7739,6 +7740,7 @@ mod task_runner_tests {
                 tier_index: Some(3),
                 size_fit_penalty: 0,
                 revision_preference: 0,
+                language: Default::default(),
             }),
         );
         assert_eq!(

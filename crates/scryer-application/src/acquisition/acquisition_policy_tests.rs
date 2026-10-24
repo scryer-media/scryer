@@ -15,6 +15,7 @@ fn occupied(groups: &[Option<&str>], revision: i32) -> AdmissionSubject {
                     file_path: format!("/library/file-{index}.mkv"),
                     release_group: group.map(str::to_owned),
                     score: 900,
+                    language: Default::default(),
                     covers: vec![format!("ep-{}", index + 1)],
                     created_at: "2026-01-01T00:00:00Z".into(),
                 },
@@ -138,6 +139,7 @@ fn revision_queue_comparison_uses_the_profile_policy() {
         revision: 2,
         release_group: Some("group".into()),
         score: 900,
+        language: Default::default(),
         release_key: None,
     }]);
     for (revision, score, group, ignore, admitted) in [
