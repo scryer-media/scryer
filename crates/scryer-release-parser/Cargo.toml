@@ -7,7 +7,7 @@ edition.workspace = true
 aho-corasick = "1.1"
 chrono.workspace = true
 fixedbitset.workspace = true
-html-escape = "0.2"
+html-escape = "0.3"
 serde.workspace = true
 smallvec = { version = "1.16", features = ["serde"] }
 unicode-normalization = "0.1"
