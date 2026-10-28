@@ -6160,3 +6160,6 @@ mod tests {
         assert_eq!(nothing.captcha_request, None);
     }
 }
+
+#[cfg(test)]
+mod nab_contract_tests;
