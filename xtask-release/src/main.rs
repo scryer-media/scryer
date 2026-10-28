@@ -4073,7 +4073,14 @@ fn run_sdk_release(ctx: &TaskContext, args: SdkReleaseArgs) -> Result<()> {
 
     step("Running SDK validation");
     let mut cargo_test = ctx.release_command_in("cargo", &ctx.repo_root);
-    cargo_test.args(["test", "--locked", "-p", PLUGIN_SDK_PACKAGE]);
+    cargo_test.args([
+        "nextest",
+        "run",
+        "--locked",
+        "--no-fail-fast",
+        "-p",
+        PLUGIN_SDK_PACKAGE,
+    ]);
     run_checked(&mut cargo_test)?;
     let mut cargo_package = ctx.release_command_in("cargo", &ctx.repo_root);
     cargo_package.args([
