@@ -47,6 +47,8 @@ pub struct LibrarySettingsPayload {
     /// Effective season-folder setting after inheritance.
     pub use_season_folders: bool,
     /// Library override quality-profile ID; null means inherit.
+    pub default_monitor_type: String,
+    pub default_monitor_type_override: Option<String>,
     pub quality_profile_id_override: Option<ID>,
     /// Effective quality-profile ID.
     pub quality_profile_id: ID,
@@ -1382,6 +1384,8 @@ pub struct LibrarySettingsInput {
     /// Whether episodic titles use season folders; null inherits the facet setting.
     pub use_season_folders: Option<bool>,
     /// Default quality profile identity.
+    /// Initial monitoring choice for new Add/Request dialogs; null restores the built-in default.
+    pub default_monitor_type: Option<String>,
     pub quality_profile_id: Option<ID>,
     /// Quality profile identities allowed for requests.
     pub request_quality_profile_ids: Option<Vec<ID>>,

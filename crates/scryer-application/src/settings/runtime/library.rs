@@ -1,3 +1,23 @@
+fn validate_default_monitor_type(facet: &MediaFacet, value: &str) -> AppResult<()> {
+    let allowed: &[&str] = if *facet == MediaFacet::Movie {
+        &["MONITORED", "UNMONITORED"]
+    } else {
+        &[
+            "FUTURE_EPISODES",
+            "MISSING_AND_FUTURE_EPISODES",
+            "ALL_EPISODES",
+            "NONE",
+        ]
+    };
+    if !allowed.contains(&value) {
+        return Err(AppError::validation_refused(
+            "INVALID_DEFAULT_MONITOR_TYPE",
+            "Choose a monitoring default supported by this library",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryPathsSettings {
     pub movie_path: String,
@@ -711,6 +731,35 @@ impl AppUseCase {
             .await
     }
 
+    pub async fn default_monitor_type_for_library(
+        &self,
+        actor: &User,
+        library_id: &str,
+    ) -> AppResult<String> {
+        self.request_quality_profile_settings_for_library(actor, library_id)
+            .await?;
+        let library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(library_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+        let value = self
+            .read_setting_string_value_explicit("catalog.default_monitor_type", Some(library_id))
+            .await?;
+        Ok(value
+            .filter(|v| validate_default_monitor_type(&library.facet, v).is_ok())
+            .unwrap_or_else(|| {
+                if library.facet == MediaFacet::Movie {
+                    "MONITORED"
+                } else {
+                    "FUTURE_EPISODES"
+                }
+                .to_string()
+            }))
+    }
+
     pub async fn title_quality_profile_id_for_library(
         &self,
         actor: &User,
@@ -795,6 +844,20 @@ impl AppUseCase {
         } else {
             true
         };
+        let default_monitor_type_override = self
+            .read_setting_string_value_explicit("catalog.default_monitor_type", Some(&library.id))
+            .await?;
+        let default_monitor_type = default_monitor_type_override
+            .clone()
+            .filter(|v| validate_default_monitor_type(&library.facet, v).is_ok())
+            .unwrap_or_else(|| {
+                if library.facet == MediaFacet::Movie {
+                    "MONITORED"
+                } else {
+                    "FUTURE_EPISODES"
+                }
+                .to_string()
+            });
         let quality_profile_id_override = self
             .read_setting_string_value_explicit(QUALITY_PROFILE_ID_KEY, Some(&library.id))
             .await?
@@ -1002,6 +1065,8 @@ impl AppUseCase {
             metadata_language,
             use_season_folders_override,
             use_season_folders,
+            default_monitor_type,
+            default_monitor_type_override,
             quality_profile_id_override,
             quality_profile_id,
             request_quality_profile_ids_override,
@@ -1460,8 +1525,9 @@ impl AppUseCase {
             .lock()
             .await;
         let is_anime_library = library.facet == MediaFacet::Anime;
-        let search_languages =
-            crate::normalize_search_languages(settings.search_languages.clone().unwrap_or_default())?;
+        let search_languages = crate::normalize_search_languages(
+            settings.search_languages.clone().unwrap_or_default(),
+        )?;
         let metadata_language_override = normalize_optional_string(settings.metadata_language.clone())
             .map(|value| {
                 crate::normalize_metadata_language_code(&value).ok_or_else(|| {
@@ -1499,6 +1565,9 @@ impl AppUseCase {
                 "plexmatch_write_on_import is only valid for series and anime libraries"
                     .to_string(),
             ));
+        }
+        if let Some(value) = &settings.default_monitor_type {
+            validate_default_monitor_type(&library.facet, value)?;
         }
         let movie_availability = settings.movie_availability.clone().normalized()?;
         if library.facet != MediaFacet::Movie && !movie_availability.is_empty() {
@@ -1577,6 +1646,18 @@ impl AppUseCase {
             }
         }
 
+        if let Some(value) = &settings.default_monitor_type {
+            self.upsert_scoped_system_setting_json(
+                "catalog.default_monitor_type",
+                &library.id,
+                value,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        } else {
+            self.delete_scoped_system_setting("catalog.default_monitor_type", &library.id)
+                .await?;
+        }
         if let Some(profile_id) = normalize_optional_string(settings.quality_profile_id) {
             self.upsert_scoped_system_setting_json(
                 QUALITY_PROFILE_ID_KEY,
@@ -1849,6 +1930,7 @@ impl AppUseCase {
             REQUIRED_AUDIO_LANGUAGES_KEY.to_string(),
             METADATA_LANGUAGE_KEY.to_string(),
             USE_SEASON_FOLDERS_KEY.to_string(),
+            "catalog.default_monitor_type".to_string(),
             QUALITY_PROFILE_ID_KEY.to_string(),
             REQUEST_QUALITY_PROFILE_IDS_KEY.to_string(),
             SCORING_PERSONA_KEY.to_string(),

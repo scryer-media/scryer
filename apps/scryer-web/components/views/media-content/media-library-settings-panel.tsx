@@ -325,6 +325,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
   const [draftMetadataLanguage, setDraftMetadataLanguage] = React.useState(INHERIT_VALUE);
   const [draftUseSeasonFolders, setDraftUseSeasonFolders] = React.useState(INHERIT_VALUE);
   const [draftQualityProfileId, setDraftQualityProfileId] = React.useState(INHERIT_VALUE);
+  const [draftDefaultMonitorType, setDraftDefaultMonitorType] = React.useState(INHERIT_VALUE);
   const [draftRequestQualityProfileIds, setDraftRequestQualityProfileIds] = React.useState<string[]>([]);
   const [draftScoringPersona, setDraftScoringPersona] = React.useState(INHERIT_VALUE);
   const [draftFillerPolicy, setDraftFillerPolicy] = React.useState(INHERIT_VALUE);
@@ -439,6 +440,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
       setDraftFileChmod(settings?.fileChmodOverride ?? "");
       setDraftFolderChmod(settings?.folderChmodOverride ?? "");
       setDraftChownGroup(settings?.chownGroupOverride ?? "");
+      setDraftDefaultMonitorType(settings?.defaultMonitorTypeOverride ?? INHERIT_VALUE);
       setDraftMovieAvailability(settings?.defaultMovieAvailabilityOverride ?? INHERIT_VALUE);
       setDraftMovieReleaseMarket(settings?.movieReleaseMarketOverride ?? "");
       setDraftMovieAvailabilityDelayDays(
@@ -669,6 +671,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
   const settingsDraft = React.useMemo<LibrarySettingsDraft>(
     () => {
       const draft: LibrarySettingsDraft = {
+        defaultMonitorType: draftDefaultMonitorType === INHERIT_VALUE ? null : draftDefaultMonitorType,
         searchLanguages: draftSearchLanguages,
         requiredAudioLanguages:
           draftRequiredAudioLanguages.length > 0 ? draftRequiredAudioLanguages : null,
@@ -744,6 +747,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
       draftNfoWriteOnImport,
       draftPlexmatchWriteOnImport,
       draftQualityProfileId,
+      draftDefaultMonitorType,
       draftRequestQualityProfileIds,
       draftRecapPolicy,
       draftRequiredAudioLanguages,
@@ -765,6 +769,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
         draftSearchLanguages.join("\n") !== (savedSettings.searchLanguages ?? []).join("\n") ||
         settingsDraft.metadataLanguage !== savedSettings.metadataLanguageOverride ||
         settingsDraft.useSeasonFolders !== savedSettings.useSeasonFoldersOverride ||
+        settingsDraft.defaultMonitorType !== (savedSettings.defaultMonitorTypeOverride ?? null) ||
         settingsDraft.qualityProfileId !== savedSettings.qualityProfileIdOverride ||
         (settingsDraft.requestQualityProfileIds ?? []).join("\n") !==
           (savedSettings.requestQualityProfileIdsOverride ?? []).join("\n") ||
@@ -1599,6 +1604,19 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <Label htmlFor="library-default-monitor-type">{t("settings.defaultMonitorType")}</Label>
+                <Select value={draftDefaultMonitorType} onValueChange={setDraftDefaultMonitorType} disabled={settingsBusy}>
+                  <SelectTrigger id="library-default-monitor-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={INHERIT_VALUE}>{t("settings.libraryInheritFacet")}</SelectItem>
+                    {(isMovieFacet ? ["MONITORED", "UNMONITORED"] : ["FUTURE_EPISODES", "MISSING_AND_FUTURE_EPISODES", "ALL_EPISODES", "NONE"]).map((value) => (
+                      <SelectItem key={value} value={value}>{t(({ MONITORED: "search.monitorType.monitored", UNMONITORED: "search.monitorType.unmonitored", FUTURE_EPISODES: "search.monitorType.futureEpisodes", MISSING_AND_FUTURE_EPISODES: "search.monitorType.missingAndFutureEpisodes", ALL_EPISODES: "search.monitorType.allEpisodes", NONE: "search.monitorType.none" } as Record<string, string>)[value])}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{t("settings.defaultMonitorTypeHelp")}</p>
+              </div>
               <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] p-4">
                 <div className="mb-3 flex items-center gap-2">
                   <Send className="h-[15px] w-[15px] text-[var(--scry-accent-text)]" />

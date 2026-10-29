@@ -491,6 +491,7 @@ function sameLibrariesByFacet(
           entry.name === candidate.name &&
           entry.slug === candidate.slug &&
           entry.isDefault === candidate.isDefault &&
+          entry.defaultMonitorType === candidate.defaultMonitorType &&
           (entry.qualityProfileId ?? null) ===
             (candidate.qualityProfileId ?? null) &&
           (entry.requestQualityProfileDefaultId ?? null) ===

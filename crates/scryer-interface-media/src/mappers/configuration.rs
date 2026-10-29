@@ -429,6 +429,8 @@ pub fn from_library_settings(settings: LibrarySettings) -> LibrarySettingsPayloa
         metadata_language: settings.metadata_language,
         use_season_folders_override: settings.use_season_folders_override,
         use_season_folders: settings.use_season_folders,
+        default_monitor_type: settings.default_monitor_type,
+        default_monitor_type_override: settings.default_monitor_type_override,
         quality_profile_id_override: settings.quality_profile_id_override.map(Into::into),
         quality_profile_id: settings.quality_profile_id.into(),
         request_quality_profile_ids_override: settings
