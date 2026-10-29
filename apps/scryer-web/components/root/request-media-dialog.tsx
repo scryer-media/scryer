@@ -196,7 +196,7 @@ export function RequestMediaDialog({
         "",
     );
     setQualityProfileId("");
-    setMonitorType(defaultMonitorTypeForFacet(facet));
+    setMonitorType(defaultMonitorTypeForFacet(facet, requestableLibraries.find((l) => l.isDefault)?.defaultMonitorType ?? requestableLibraries[0]?.defaultMonitorType));
     setMonitorSelection(EMPTY_MONITOR_SELECTION);
     setMonitorSelectionLoading(false);
     setIsSubmitting(false);
@@ -214,8 +214,11 @@ export function RequestMediaDialog({
         : Number(leaseChoice);
 
   const selectedLibrary = requestableLibraries.find((library) => library.id === libraryId) ?? null;
-  const canRequestMonitorType = facet !== "MOVIE";
-  const monitorOptions: Array<{ value: MetadataCatalogMonitorType; label: string }> = [
+  const canRequestMonitorType = true;
+  const monitorOptions: Array<{ value: MetadataCatalogMonitorType; label: string }> = facet === "MOVIE" ? [
+    { value: "MONITORED", label: t("search.monitorType.monitored") },
+    { value: "UNMONITORED", label: t("search.monitorType.unmonitored") },
+  ] : [
     { value: "FUTURE_EPISODES", label: t("search.monitorType.futureEpisodes") },
     {
       value: "MISSING_AND_FUTURE_EPISODES",
@@ -373,7 +376,7 @@ export function RequestMediaDialog({
               </span>
               <Select
                 value={selectedLibrary?.id || ""}
-                onValueChange={setLibraryId}
+                onValueChange={(id) => { setLibraryId(id); setMonitorType(defaultMonitorTypeForFacet(facet, requestableLibraries.find((l) => l.id === id)?.defaultMonitorType)); setMonitorSelection(EMPTY_MONITOR_SELECTION); }}
                 disabled={isSubmitting || requestableLibraries.length <= 1}
               >
                 <SelectTrigger id="request-media-library" className="h-12 w-full">

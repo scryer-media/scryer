@@ -1,6 +1,8 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "settings.defaultMonitorType": "Default monitoring for new titles",
+  "settings.defaultMonitorTypeHelp": "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
   "httpRelease.refusal.detailsUnavailable": "This release's details are no longer available. Search again to grab it.",
   "httpRelease.refusal.live": "This release is a live stream, which cannot be downloaded.",
   "httpRelease.refusal.upcoming": "This release has not been published yet.",

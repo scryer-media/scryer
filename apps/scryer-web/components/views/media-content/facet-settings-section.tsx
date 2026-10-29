@@ -161,17 +161,17 @@ export function FacetSettingsSection({
   );
 
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent md:flex-row">
+    <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent xl:flex-row">
       {showSubnav ? (
         <aside
           data-slot="facet-settings-subnav"
-          className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[218px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]"
+          className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 xl:h-full xl:w-[218px] xl:overflow-y-auto xl:border-b-0 xl:border-r xl:p-[22px_14px]"
         >
-          <div className="mb-3 flex items-center gap-2 px-2 text-[var(--scry-ink2)] md:mb-4">
+          <div className="mb-3 flex items-center gap-2 px-2 text-[var(--scry-ink2)] xl:mb-4">
             <Settings2 className="h-[18px] w-[18px] text-[var(--scry-accent-text)]" />
             <span className="text-[16px] font-bold">{facetLabel}</span>
           </div>
-          <nav className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0">
+          <nav className="flex gap-2 overflow-x-auto pb-1 xl:flex-col xl:overflow-visible xl:pb-0">
             {availableSections.map((id) => {
               const ItemIcon = SECTION_META[id].icon;
               const active = section === id;
@@ -181,7 +181,7 @@ export function FacetSettingsSection({
                   id={selectorId("root-sidebar-media", view, id)}
                   to={buildViewPath(view, undefined, id)}
                   className={cn(
-                    "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
+                    "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] xl:w-full",
                     active &&
                       "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
                   )}
@@ -205,7 +205,7 @@ export function FacetSettingsSection({
         <aside
           id={LIBRARY_SECONDARY_NAV_SLOT_ID}
           data-slot="facet-secondary-nav"
-          className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[220px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]"
+          className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 xl:h-full xl:w-[220px] xl:overflow-y-auto xl:border-b-0 xl:border-r xl:p-[22px_14px]"
         />
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-transparent">

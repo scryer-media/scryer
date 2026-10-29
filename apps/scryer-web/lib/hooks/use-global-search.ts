@@ -27,6 +27,7 @@ import { addTitleMutation, submitMediaRequestMutation } from "@/lib/graphql/muta
 import {
   ANIME_INTER_SEASON_MOVIES_KEY,
   ANIME_MONITOR_SPECIALS_KEY,
+  DEFAULT_MONITOR_TYPE_KEY,
   QUALITY_PROFILE_CATALOG_KEY,
   QUALITY_PROFILE_ID_KEY,
   QUALITY_PROFILE_INHERIT_VALUE,
@@ -491,6 +492,7 @@ function sameLibrariesByFacet(
           entry.name === candidate.name &&
           entry.slug === candidate.slug &&
           entry.isDefault === candidate.isDefault &&
+          entry.defaultMonitorType === candidate.defaultMonitorType &&
           (entry.qualityProfileId ?? null) ===
             (candidate.qualityProfileId ?? null) &&
           (entry.requestQualityProfileDefaultId ?? null) ===
@@ -877,6 +879,7 @@ export function useGlobalSearch({
         QUALITY_PROFILE_CATALOG_KEY,
         QUALITY_PROFILE_ID_KEY,
         REQUEST_QUALITY_PROFILE_IDS_KEY,
+        DEFAULT_MONITOR_TYPE_KEY,
         ...FACET_REGISTRY.map((f) => f.rootFoldersKey),
         ...FACET_REGISTRY.map((f) => f.folderSettingKey),
         ANIME_MONITOR_SPECIALS_KEY,

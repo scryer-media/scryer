@@ -2933,3 +2933,82 @@ async fn unscoped_slug_lookup_prefers_the_default_library_over_a_vault_copy() {
         Some(only_in_vault.title.id.clone())
     );
 }
+
+#[tokio::test]
+async fn library_default_monitor_type_round_trip_and_reset_are_isolated() {
+    let repo = Arc::new(StoredSettingsRepo::default());
+    let (app, user) = bootstrap_with_settings_repo_and_profiles(
+        repo.clone(),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let series = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let anime = scryer_domain::default_library_id_for_facet(&MediaFacet::Anime);
+    assert_eq!(
+        app.default_monitor_type_for_library(&user, &series)
+            .await
+            .unwrap(),
+        "FUTURE_EPISODES"
+    );
+    app.update_library_settings(
+        &user,
+        &series,
+        LibrarySettingsOverrideDraft {
+            default_monitor_type: Some("MISSING_AND_FUTURE_EPISODES".into()),
+            ..empty_library_settings_override()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        app.default_monitor_type_for_library(&user, &series)
+            .await
+            .unwrap(),
+        "MISSING_AND_FUTURE_EPISODES"
+    );
+    assert_eq!(
+        app.default_monitor_type_for_library(&user, &anime)
+            .await
+            .unwrap(),
+        "FUTURE_EPISODES"
+    );
+    app.update_library_settings(&user, &series, empty_library_settings_override())
+        .await
+        .unwrap();
+    assert_eq!(
+        app.default_monitor_type_for_library(&user, &series)
+            .await
+            .unwrap(),
+        "FUTURE_EPISODES"
+    );
+}
+
+#[tokio::test]
+async fn library_default_monitor_type_invalid_choice_writes_nothing() {
+    let repo = Arc::new(StoredSettingsRepo::default());
+    let (app, user) = bootstrap_with_settings_repo_and_profiles(
+        repo.clone(),
+        Arc::new(MockQualityProfileRepo),
+        Arc::new(MockIndexerClient),
+    );
+    let library = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    repo.reset_write_log();
+    for value in ["ADVANCED", "MONITORED", "unknown"] {
+        let error = app
+            .update_library_settings(
+                &user,
+                &library,
+                LibrarySettingsOverrideDraft {
+                    default_monitor_type: Some(value.into()),
+                    ..empty_library_settings_override()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::settings::library_refusal::DEFAULT_MONITOR_TYPE_INVALID)
+        );
+    }
+    assert!(repo.write_log().is_empty());
+}
