@@ -174,7 +174,7 @@ function LibrarySettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-[16px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5 sm:p-6">
+    <section className="min-w-0 rounded-[16px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5 sm:p-6">
       <div className="flex items-center gap-2.5">
         <Icon className="h-[17px] w-[17px] text-[var(--scry-accent-text)]" />
         <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">{title}</h2>
@@ -184,7 +184,7 @@ function LibrarySettingsSection({
           {description}
         </p>
       ) : null}
-      <div className="mt-5 space-y-5">{children}</div>
+      <div className="mt-5 min-w-0 space-y-5 [&_[data-slot=select-trigger]]:min-w-0 [&_[data-slot=select-trigger]]:w-full">{children}</div>
     </section>
   );
 }
@@ -1449,7 +1449,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                 title={t("settings.mediaProfilesTitle")}
                 description={t("settings.mediaProfilesHelp")}
               >
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
                 <div className="space-y-2">
                   <Label>{t("settings.libraryRequiredAudioLabel")}</Label>
                   <AudioLanguagePicker
@@ -1665,7 +1665,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                   title={t("settings.movieAvailability")}
                   description={t("settings.libraryMovieAvailabilityDescription")}
                 >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
                     <div className="space-y-2">
                       <Label htmlFor="library-movie-default-availability">
                         {t("settings.movieDefaultAvailability")}
@@ -1754,7 +1754,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
               <div
                 className={cn(
                   "grid gap-5",
-                  canManageDownloadClientRouting && "md:grid-cols-2",
+                  canManageDownloadClientRouting && "grid-cols-[repeat(auto-fit,minmax(min(100%,22rem),1fr))]",
                 )}
               >
                 <div className="space-y-2">
@@ -1787,7 +1787,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                     </EffectiveChip>
                   ) : null}
                   {showUnixPermissions ? (
-                    <div className="grid gap-3 pt-2 sm:grid-cols-2">
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,13rem),1fr))] gap-3 pt-2">
                       <div className="space-y-2">
                         <Label>{t("settings.setPermissionsLinuxLabel")}</Label>
                         <Select
@@ -1996,7 +1996,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
               >
               <div>
                 <div
-                  className={`grid gap-3 ${showPlexmatch ? "md:grid-cols-2" : "md:grid-cols-1"}`}
+                  className={`grid gap-3 ${showPlexmatch ? "grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))]" : "grid-cols-1"}`}
                 >
                   <div className="space-y-2">
                     <Label>{t("settings.nfoWriteOnImportLabel")}</Label>
@@ -2075,7 +2075,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                   icon={SlidersVertical}
                   title={t("settings.animeSettings")}
                 >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
                     <div className="space-y-2">
                       <Label>{t("settings.fillerPolicyLabel")}</Label>
                       <Select
