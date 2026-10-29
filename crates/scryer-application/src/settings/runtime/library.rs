@@ -11,7 +11,7 @@ fn validate_default_monitor_type(facet: &MediaFacet, value: &str) -> AppResult<(
     };
     if !allowed.contains(&value) {
         return Err(AppError::validation_refused(
-            "INVALID_DEFAULT_MONITOR_TYPE",
+            super::library_refusal::DEFAULT_MONITOR_TYPE_INVALID,
             "Choose a monitoring default supported by this library",
         ));
     }

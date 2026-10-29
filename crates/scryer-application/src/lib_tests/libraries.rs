@@ -2994,17 +2994,20 @@ async fn library_default_monitor_type_invalid_choice_writes_nothing() {
     let library = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
     repo.reset_write_log();
     for value in ["ADVANCED", "MONITORED", "unknown"] {
-        assert!(
-            app.update_library_settings(
+        let error = app
+            .update_library_settings(
                 &user,
                 &library,
                 LibrarySettingsOverrideDraft {
                     default_monitor_type: Some(value.into()),
                     ..empty_library_settings_override()
-                }
+                },
             )
             .await
-            .is_err()
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::settings::library_refusal::DEFAULT_MONITOR_TYPE_INVALID)
         );
     }
     assert!(repo.write_log().is_empty());
