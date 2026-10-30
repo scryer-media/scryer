@@ -9811,6 +9811,7 @@ pub trait IndexerClient: Send + Sync {
         absolute_episode: Option<u32>,
         year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
+        _title_context: crate::IndexerSearchTitleContext,
         learning_context: Option<IndexerSearchLearningContext>,
         cancel_token: tokio_util::sync::CancellationToken,
         page_sink: crate::IndexerSearchPageSink,

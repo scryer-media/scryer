@@ -64,6 +64,7 @@ fn config(provider: &str, base: &str) -> IndexerConfig {
 
 fn strategy(cursor: Option<String>) -> IndexerSearchStrategyRequest {
     IndexerSearchStrategyRequest {
+        title_context: Default::default(),
         strategy_id: "fixture-search".into(),
         labels: vec!["freetext".into()],
         query: "Example Show".into(),

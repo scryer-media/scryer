@@ -12,7 +12,7 @@ use super::*;
 
 use super::release_search::{
     QualityProfileLookup, compare_release_search_results, dedupe_cross_indexer_release_results,
-    incomplete_indexer_reason,
+    interactive_indexer_failure_reason,
 };
 use crate::acquisition::submission::{GrabTrigger, record_direct_grab_outcome};
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
@@ -1118,7 +1118,7 @@ impl AppUseCase {
         if let Some(skip) = own_outcome.and_then(InteractiveIndexerSkipReason::from_outcome) {
             return Ok((Vec::new(), None, Some(skip)));
         }
-        let failure_reason = own_outcome.and_then(incomplete_indexer_reason);
+        let failure_reason = own_outcome.and_then(interactive_indexer_failure_reason);
         let results = response
             .results
             .into_iter()

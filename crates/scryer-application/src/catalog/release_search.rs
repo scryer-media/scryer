@@ -569,6 +569,54 @@ pub(crate) fn reason_is_rate_limit(reason: &str) -> bool {
         || reason.starts_with(QUERY_BUDGET_INDEXER_REASON)
 }
 
+pub(crate) fn interactive_indexer_failure_reason(outcome: IndexerSearchOutcome) -> Option<String> {
+    match outcome {
+        IndexerSearchOutcome::Partial {
+            reason:
+                Some(
+                    IndexerSearchIncompleteReason::PageCeilingReached
+                    | IndexerSearchIncompleteReason::SaturatedPartition,
+                ),
+            ..
+        } => None,
+        other => incomplete_indexer_reason(other),
+    }
+}
+
+/// Supply episode identity only when the catalog coordinates identify one
+/// episode. Series/season searches and ambiguous absolute numbers stay unset.
+fn indexer_title_context(
+    context: &ReleaseParseContext,
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
+) -> crate::IndexerSearchTitleContext {
+    let mut titles = vec![context.title.name.clone()];
+    for alias in context.aliases.iter().take(20) {
+        if !alias.name.trim().is_empty() && !titles.contains(&alias.name) {
+            titles.push(alias.name.clone());
+        }
+    }
+    titles.retain(|title| !title.trim().is_empty());
+    let mut episodes = context.episodes.iter().filter(|candidate| {
+        if let (Some(season), Some(episode)) = (season, episode) {
+            candidate.season == Some(season) && candidate.episode == Some(episode)
+        } else if let Some(absolute) = absolute_episode {
+            candidate.absolute_number == Some(absolute)
+        } else if let Some(episode) = episode {
+            candidate.episode == Some(episode)
+        } else {
+            false
+        }
+    });
+    let selected = episodes.next().filter(|_| episodes.next().is_none());
+    crate::IndexerSearchTitleContext {
+        scene_titles: titles,
+        episode_title: selected.and_then(|ep| ep.title.clone()),
+        air_date: selected.and_then(|ep| ep.air_date.map(|date| date.to_string())),
+    }
+}
+
 pub(crate) fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option<String> {
     let (reason, retry_after) = match outcome {
         IndexerSearchOutcome::Complete { .. } => return None,
@@ -1683,6 +1731,7 @@ impl AppUseCase {
             .as_ref()
             .map(|facet| facet.as_str().to_string());
         let tagged_aliases = tagged_aliases.to_vec();
+        let title_context = indexer_title_context(parse_context, season, episode, absolute_episode);
         let query_cancel_token = cancel_token.child_token();
         let plan_page_sink = page_sink.clone();
         let plan_indexer_routing = dispatch_indexer_routing;
@@ -1704,6 +1753,7 @@ impl AppUseCase {
                     absolute_episode,
                     year,
                     tagged_aliases,
+                    title_context,
                     learning_context,
                     query_cancel_token,
                     plan_page_sink,
@@ -1773,7 +1823,11 @@ impl AppUseCase {
                 Ok(Ok(response)) => {
                     successful_searches += 1;
                     for outcome in &response.indexer_outcomes {
-                        if let Some(reason) = incomplete_indexer_reason(outcome.outcome) {
+                        if let Some(reason) = if mode == SearchMode::Interactive {
+                            interactive_indexer_failure_reason(outcome.outcome)
+                        } else {
+                            incomplete_indexer_reason(outcome.outcome)
+                        } {
                             incomplete_indexer_reasons
                                 .entry(outcome.indexer_id.clone())
                                 .or_insert(reason);

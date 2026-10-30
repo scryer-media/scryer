@@ -813,8 +813,8 @@ pub use types::{
     IndexerSearchPage, IndexerSearchPageReservation, IndexerSearchPageSink,
     IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
     IndexerSearchResponse, IndexerSearchResult, IndexerSearchStrategyEvent,
-    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, NewIndexerError,
-    RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
+    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, IndexerSearchTitleContext,
+    NewIndexerError, RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
     ReleaseStrategyKind, extract_magnet_info_hash, indexer_search_identity, is_valid_magnet_uri,
     search_relevant_indexer_caps, search_relevant_managed_indexer_metadata,
 };

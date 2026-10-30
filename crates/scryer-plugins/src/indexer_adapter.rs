@@ -1628,7 +1628,7 @@ fn plugin_search_request_from_strategy(
     strategy: IndexerSearchStrategyRequest,
     mode: SearchMode,
 ) -> PluginSearchRequest {
-    let context = build_search_context(
+    let mut context = build_search_context(
         &strategy.query,
         &strategy.ids,
         strategy.facet.as_deref(),
@@ -1638,6 +1638,14 @@ fn plugin_search_request_from_strategy(
         strategy.absolute_episode,
         strategy.year,
     );
+    // A text strategy already names the alias the host chose. Supplying the
+    // canonical name as its first scene title would override that choice in
+    // plugins that prefer scene_titles over query (for example Nyaa).
+    if strategy.query.trim().is_empty() {
+        context.scene_titles = strategy.title_context.scene_titles;
+    }
+    context.episode_title = strategy.title_context.episode_title;
+    context.air_date = strategy.title_context.air_date;
     PluginSearchRequest {
         query: strategy.query,
         ids: strategy.ids,
@@ -3288,6 +3296,7 @@ mod tests {
         rss_catch_up: Option<scryer_application::IndexerRssCatchUp>,
     ) -> IndexerSearchStrategyRequest {
         IndexerSearchStrategyRequest {
+            title_context: Default::default(),
             page_cursor: None,
             page_budget: None,
             result_limit: None,
@@ -3306,6 +3315,47 @@ mod tests {
             tagged_aliases: Vec::new(),
             rss_catch_up,
         }
+    }
+
+    #[test]
+    fn strategy_request_carries_catalog_title_context_to_id_searches() {
+        let mut strategy = rss_strategy(None);
+        strategy.ids.insert("tvdb_id".into(), "123".into());
+        strategy.title_context = scryer_application::IndexerSearchTitleContext {
+            scene_titles: vec!["Synthetic Series".into(), "Série synthétique".into()],
+            episode_title: Some("La forêt".into()),
+            air_date: Some("2026-09-06".into()),
+        };
+        strategy.season = Some(26);
+        strategy.episode = Some(14);
+        let request = plugin_search_request_from_strategy(strategy, SearchMode::Interactive);
+        let context = request.context.as_ref().unwrap();
+        assert_eq!(
+            context.scene_titles,
+            vec!["Synthetic Series", "Série synthétique"]
+        );
+        assert_eq!(context.episode_title.as_deref(), Some("La forêt"));
+        assert_eq!(context.air_date.as_deref(), Some("2026-09-06"));
+        assert_eq!(context.query_kind, PluginSearchQueryKind::Id);
+        assert_eq!(request.season, Some(26));
+        assert_eq!(request.episode, Some(14));
+        assert!(
+            request.query.is_empty(),
+            "catalog titles do not rewrite the provider query"
+        );
+    }
+
+    #[test]
+    fn catalog_scene_titles_do_not_override_a_text_strategy_alias() {
+        let mut strategy = rss_strategy(None);
+        strategy.query = "Localized Alias S01E02".into();
+        strategy.title_context.scene_titles = vec!["Canonical Name".into()];
+        strategy.title_context.episode_title = Some("Episode title".into());
+        let request = plugin_search_request_from_strategy(strategy, SearchMode::Interactive);
+        assert_eq!(request.query, "Localized Alias S01E02");
+        let context = request.context.unwrap();
+        assert!(context.scene_titles.is_empty());
+        assert_eq!(context.episode_title.as_deref(), Some("Episode title"));
     }
 
     #[test]

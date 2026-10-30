@@ -2809,9 +2809,18 @@ pub struct RawTextSearchRequest {
     pub limit: Option<u32>,
 }
 
+/// Catalog titles carried separately from provider query syntax and numbering.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct IndexerSearchTitleContext {
+    pub scene_titles: Vec<String>,
+    pub episode_title: Option<String>,
+    pub air_date: Option<String>,
+}
+
 /// One complete effective search strategy submitted to a plan-capable indexer.
 #[derive(Clone, Debug)]
 pub struct IndexerSearchStrategyRequest {
+    pub title_context: IndexerSearchTitleContext,
     pub strategy_id: String,
     pub labels: Vec<String>,
     pub query: String,

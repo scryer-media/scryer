@@ -802,3 +802,81 @@ fn an_indexer_over_its_query_budget_reads_as_a_wait_with_its_next_slot() {
     assert_eq!(reason, "indexer is over its query budget; retry after 45s");
     assert!(reason_is_rate_limit(&reason));
 }
+
+#[test]
+fn interactive_provider_limits_are_not_failures_but_stay_incomplete_for_coverage() {
+    for reason in [
+        IndexerSearchIncompleteReason::PageCeilingReached,
+        IndexerSearchIncompleteReason::SaturatedPartition,
+    ] {
+        let outcome = IndexerSearchOutcome::Partial {
+            empty: false,
+            reason: Some(reason),
+            retry_after: None,
+        };
+        assert!(incomplete_indexer_reason(outcome).is_some());
+        assert!(interactive_indexer_failure_reason(outcome).is_none());
+    }
+    assert!(
+        interactive_indexer_failure_reason(IndexerSearchOutcome::Partial {
+            empty: true,
+            reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
+            retry_after: None
+        })
+        .is_some()
+    );
+    assert!(interactive_indexer_failure_reason(IndexerSearchOutcome::Errored).is_some());
+}
+
+#[test]
+fn indexer_title_context_selects_only_the_requested_catalog_episode() {
+    use scryer_release_parser::{ContextAlias, ContextEpisode, ContextFacetHint, ContextTitle};
+    let mut context = ReleaseParseContext {
+        facet_hint: ContextFacetHint::Series,
+        title: ContextTitle {
+            name: "Synthetic Series".into(),
+        },
+        aliases: vec![ContextAlias {
+            name: "Série synthétique".into(),
+        }],
+        known_years: vec![],
+        imdb_ids: vec![],
+        episodes: vec![
+            ContextEpisode {
+                season: Some(26),
+                episode: Some(14),
+                title: Some("Synthetic forest".into()),
+                air_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 6).unwrap()),
+                ..Default::default()
+            },
+            ContextEpisode {
+                season: Some(25),
+                episode: Some(14),
+                title: Some("Another episode".into()),
+                ..Default::default()
+            },
+        ],
+    };
+    let selected = indexer_title_context(&context, Some(26), Some(14), None);
+    assert_eq!(
+        selected.scene_titles,
+        vec!["Synthetic Series", "Série synthétique"]
+    );
+    assert_eq!(selected.episode_title.as_deref(), Some("Synthetic forest"));
+    assert_eq!(selected.air_date.as_deref(), Some("2026-09-06"));
+    assert_eq!(
+        indexer_title_context(&context, Some(26), None, None).episode_title,
+        None
+    );
+    assert_eq!(
+        indexer_title_context(&context, None, Some(14), None).episode_title,
+        None
+    );
+    context.episodes[0].absolute_number = Some(100);
+    assert_eq!(
+        indexer_title_context(&context, None, None, Some(100))
+            .episode_title
+            .as_deref(),
+        Some("Synthetic forest")
+    );
+}
