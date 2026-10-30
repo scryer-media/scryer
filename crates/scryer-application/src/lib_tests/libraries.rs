@@ -1,6 +1,65 @@
 use super::*;
 
 #[tokio::test]
+async fn issue_392_root_folders_only_expose_visible_libraries() {
+    let (app, admin) = bootstrap();
+    let visible = app
+        .create_library(
+            &admin,
+            MediaFacet::Movie,
+            "Visible movies".into(),
+            vec![LibraryRootDraft {
+                id: None,
+                path: "/synthetic/visible-movies".into(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("create visible library");
+    let mut actor = User::new_admin("restricted");
+    actor.authorization = scryer_domain::UserAuthorization::default();
+    actor.authorization.loaded = true;
+    actor.authorization.libraries.insert(
+        visible.id.clone(),
+        scryer_domain::LibraryPermissionMask::from_permissions([
+            scryer_domain::LibraryPermission::View,
+            scryer_domain::LibraryPermission::Request,
+        ]),
+    );
+    let roots = app
+        .visible_root_folders_for_facet(&actor, &MediaFacet::Movie)
+        .await
+        .expect("read roots");
+    assert_eq!(
+        roots
+            .iter()
+            .map(|root| root.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/synthetic/visible-movies"]
+    );
+    assert!(
+        app.visible_root_folders_for_facet(&actor, &MediaFacet::Series)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    actor.authorization.libraries.clear();
+    assert!(
+        app.visible_root_folders_for_facet(&actor, &MediaFacet::Movie)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let admin_roots = app
+        .visible_root_folders_for_facet(&admin, &MediaFacet::Movie)
+        .await
+        .unwrap();
+    assert_eq!(admin_roots.len(), 2);
+    assert!(admin_roots.iter().any(|root| root.path == "/data/movies"));
+}
+
+#[tokio::test]
 async fn title_slug_lookup_short_route_uses_default_library() {
     let (app, user) = bootstrap();
     let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
