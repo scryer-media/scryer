@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Kind, parse } from "graphql";
+import { readFileSync } from "node:fs";
+import { buildSchema, graphql, Kind, parse } from "graphql";
 
 import {
   buildTitlesQuery,
@@ -127,6 +128,46 @@ test("global search loads the manageable library quality-profile override", () =
   );
 
   assert.equal(manageableLibrariesSelection.includes("qualityProfileId"), true);
+});
+
+test("global search initializes library managers without reading catalog settings", async () => {
+  const schema = buildSchema(readFileSync(new URL("../../../../api/graphql/schema.graphql", import.meta.url), "utf8"));
+  const library = {
+    id: "library-a",
+    facet: "SERIES",
+    name: "Library A",
+    slug: "library-a",
+    isDefault: false,
+    qualityProfileId: "default",
+    roots: [{ id: "root-a", path: "/synthetic/a", isDefault: true }],
+    requestQualityProfileIds: [],
+    requestQualityProfileDefaultId: "default",
+  };
+  let settingsReads = 0;
+  const response = await graphql({
+    schema,
+    source: globalSearchInitQuery,
+    variableValues: { includeMediaSettings: false },
+    rootValue: {
+      qualityProfileSettings: {
+        profiles: [],
+        globalProfileId: "default",
+        globalScoringPersona: "BALANCED",
+        categorySelections: [],
+        categoryPersonaSelections: [],
+      },
+      libraries: () => [library],
+      mediaSettings: () => {
+        settingsReads += 1;
+        throw new Error("UNAUTHORIZED");
+      },
+    },
+  });
+  assert.equal(settingsReads, 0);
+  assert.equal(response.errors, undefined);
+  const manageableLibraries = response.data?.manageableLibraries;
+  assert.ok(Array.isArray(manageableLibraries));
+  assert.equal(manageableLibraries[0].id, "library-a");
 });
 
 test("reactive catalog title refresh omits episodic fields by default", () => {
