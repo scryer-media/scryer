@@ -1124,8 +1124,7 @@ async fn preview_manual_import(
         .catalog
         .shows
         .get_anime_numbering_bridge(title_id)
-        .await
-        .unwrap_or_default();
+        .await?;
     // A verified pack vouches for every standard episode in the seasons its
     // release name declares, not only the season (or episode set) the grab was
     // scoped to: a two-season pack grabbed for season 1 imports its season 2
@@ -1179,11 +1178,38 @@ async fn preview_manual_import(
     })
     .flatten();
     let expected_pack_episode_ids = match (verified_pack.as_ref(), release_evidence.scope()) {
+        (Some(pack), _) if pack.exact_episode_ids.is_some() => pack.exact_episode_ids.clone(),
         (Some(_), Some(scope)) => {
             expected_episode_ids_from_submission_scope(app, title, scope, false).await
         }
         _ => None,
     };
+    let mut leading_suggestions = HashMap::new();
+    let mut leading_counts = HashMap::<String, usize>::new();
+    if let Some(pack) = verified_pack.as_ref() {
+        for candidate in &video_files {
+            let path = &candidate.source_entry_path;
+            if let PlannedMemberDraft::Resolved(episodes) = plan_episode_pack_member(
+                title,
+                source_dir,
+                path,
+                available_episodes,
+                anime_numbering_bridge.as_ref(),
+                file_reference_date(path),
+                Some(pack),
+            ) {
+                for episode in &episodes {
+                    *leading_counts.entry(episode.id.clone()).or_default() += 1;
+                }
+                if is_leading_numbered_pack_member(path)
+                    && let [episode] = episodes.as_slice()
+                {
+                    leading_suggestions.insert(path.clone(), episode.clone());
+                }
+            }
+        }
+    }
+    leading_suggestions.retain(|_, episode| leading_counts.get(&episode.id) == Some(&1));
 
     // Built once for the whole preview: the context every file name is read
     // against. Facet, aliases, year and ids come from the title; the episode
@@ -1433,6 +1459,16 @@ async fn preview_manual_import(
                     .map(manual_import_episode_label)
             });
             suggested_episode_id = scoped_suggestion;
+        }
+        if is_leading_numbered_pack_member(path) {
+            let episode = leading_suggestions.get(path);
+            suggested_episode_id = episode.map(|episode| episode.id.clone());
+            suggested_episode_label = episode.map(manual_import_episode_label);
+            parsed_season = episode.and_then(catalog_episode_season);
+            parsed_episodes = episode
+                .and_then(catalog_episode_number)
+                .into_iter()
+                .collect();
         }
 
         use crate::library::filename_parser::SeriesMovieFilenameMatch;

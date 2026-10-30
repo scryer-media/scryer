@@ -128,7 +128,9 @@ async fn import_series_download(
         expected_episode_ids.as_ref(),
         // A pack member's numbering is corroborated by when the download
         // finished, the pack-wide stand-in for a single file's mtime.
-        completed.completed_at.map(|completed_at| completed_at.date_naive()),
+        completed
+            .completed_at
+            .map(|completed_at| completed_at.date_naive()),
     )
     .await?;
     // `video_files` came from `discover_video_files(dir, true)`: samples are already
@@ -834,8 +836,8 @@ async fn expected_episode_ids_for_completed_download(
     let release_title = release_evidence.release_title(None)?;
     expected_episode_ids_from_release_title(app, title, &release_title).await
 }
-/// The episodes a grab's submission scope names outright — the one derivation
-/// both the import's grabbed-release gate and the post-import verification use.
+/// The episodes a grab's submission scope names outright, used by the import
+/// gate and completion verification when no stronger pack proof applies.
 /// A collection (season) scope names every episode of the season: monitoring
 /// decides what Scryer searches for, never which downloaded file belongs to
 /// the grab. Verification alone passes `monitored_collection_preference` so a
@@ -1217,21 +1219,6 @@ fn parsed_title_matches_catalog_title(
     parsed: &crate::ParsedReleaseMetadata,
     title: &scryer_domain::Title,
 ) -> bool {
-    let mut expected = Vec::with_capacity(1 + title.aliases.len() + title.tagged_aliases.len());
-    expected.push(crate::app_usecase_rss::normalize_for_matching(&title.name));
-    expected.extend(
-        title
-            .aliases
-            .iter()
-            .map(|alias| crate::app_usecase_rss::normalize_for_matching(alias)),
-    );
-    expected.extend(
-        title
-            .tagged_aliases
-            .iter()
-            .map(|alias| crate::app_usecase_rss::normalize_for_matching(&alias.name)),
-    );
-
     let candidates = if parsed.normalized_title_variants.is_empty() {
         vec![parsed.normalized_title.as_str()]
     } else {
@@ -1241,10 +1228,18 @@ fn parsed_title_matches_catalog_title(
             .map(String::as_str)
             .collect()
     };
-    candidates.into_iter().any(|candidate| {
-        let normalized = crate::app_usecase_rss::normalize_for_matching(candidate);
-        !normalized.is_empty() && expected.iter().any(|value| value == &normalized)
-    })
+    candidates
+        .into_iter()
+        .any(|candidate| exact_catalog_title_name_matches(candidate, title))
+}
+
+fn exact_catalog_title_name_matches(candidate: &str, title: &scryer_domain::Title) -> bool {
+    let normalized = crate::app_usecase_rss::normalize_for_matching(candidate);
+    !normalized.is_empty()
+        && std::iter::once(title.name.as_str())
+            .chain(title.aliases.iter().map(String::as_str))
+            .chain(title.tagged_aliases.iter().map(|alias| alias.name.as_str()))
+            .any(|name| crate::app_usecase_rss::normalize_for_matching(name) == normalized)
 }
 
 /// Match only a member's episode-title text with typo tolerance. Series title

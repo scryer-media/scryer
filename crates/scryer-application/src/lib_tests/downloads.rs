@@ -8384,6 +8384,208 @@ async fn automatic_season_pack_import_identifies_each_member_by_its_own_name() {
 }
 
 #[tokio::test]
+async fn issue_393_episode_scoped_pack_imports_each_proven_member() {
+    for release_name in [
+        "Fail.Closed.Pack.S01.720p.WEB-DL",
+        "Fail.Closed.Pack.S01E01-E02.720p.WEB-DL",
+    ] {
+        let (
+            FailClosedPackFixture {
+                app,
+                user,
+                title,
+                episode,
+                library_dir,
+                ..
+            },
+            submissions,
+        ) = fail_closed_pack_fixture_with_submissions().await;
+        let second =
+            create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
+        app.set_episode_monitored(&user, &second.id, false)
+            .await
+            .unwrap();
+        record_pack_identity_submission(
+            &submissions,
+            &title.id,
+            "episode-scoped-pack",
+            release_name,
+            SubmissionScope::Episode {
+                episode_id: episode.id.clone(),
+            },
+        )
+        .await;
+        let source = tempfile::tempdir().unwrap();
+        let first_file = write_pack_video(source.path(), "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv");
+        let second_file =
+            write_pack_video(source.path(), "Fail.Closed.Pack.S01E02.720p.WEB-DL.mkv");
+        let completed = series_pack_completed_download(
+            "episode-scoped-pack",
+            &title.id,
+            release_name,
+            source.path(),
+        );
+        let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            crate::import::workflow::expected_episode_ids_from_verified_pack(
+                &app, &title, &evidence
+            )
+            .await
+            .unwrap(),
+            Some(HashSet::from([episode.id.clone()])),
+            "verification keeps the proven pack's monitoring policy",
+        );
+        let result = {
+            let _probe = probe_sequence_agrees_with_the_names([(1280, 720), (1280, 720)]);
+            crate::import::import::import_completed_download(&app, &user, &completed)
+                .await
+                .expect("import pack")
+        };
+        assert_eq!(
+            result.decision,
+            scryer_domain::ImportDecision::Imported,
+            "{release_name}: {result:?}"
+        );
+        assert_eq!(
+            media_file_episode_ids(
+                &app.services
+                    .library
+                    .media_files
+                    .list_media_files_for_title(&title.id)
+                    .await
+                    .unwrap()
+            ),
+            std::collections::BTreeSet::from([episode.id.clone(), second.id.clone()]),
+            "{release_name}: {result:?}",
+        );
+        assert_eq!(library_video_file_names(library_dir.path()).len(), 2);
+        assert!(first_file.exists() && second_file.exists());
+        let repeated = crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .unwrap();
+        assert_eq!(
+            app.services
+                .library
+                .media_files
+                .list_media_files_for_title(&title.id)
+                .await
+                .unwrap()
+                .len(),
+            2,
+            "{repeated:?}"
+        );
+        assert!(first_file.exists() && second_file.exists());
+    }
+}
+
+#[tokio::test]
+async fn issue_394_leading_numbers_use_proven_pack_season_not_initiating_episode() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            episode,
+            library_dir,
+            ..
+        },
+        submissions,
+    ) = fail_closed_pack_fixture_with_submissions().await;
+    let fourth =
+        create_pack_episode_in_season(&app, &user, &title.id, 1, 4, Some(4), "standard").await;
+    let release_name = "Fail.Closed.Pack.S01.720p.WEB-DL";
+    record_pack_identity_submission(
+        &submissions,
+        &title.id,
+        "leading-number-pack",
+        release_name,
+        SubmissionScope::Collection {
+            collection_id: episode.collection_id.clone().unwrap(),
+        },
+    )
+    .await;
+    let source = tempfile::tempdir().unwrap();
+    let first_file = write_pack_video(source.path(), "01. Fail Closed Pack.2024.WEB-DL.720p.mkv");
+    let fourth_file = write_pack_video(source.path(), "04. Fail Closed Pack.2024.WEB-DL.720p.mkv");
+    let completed = series_pack_completed_download(
+        "leading-number-pack",
+        &title.id,
+        release_name,
+        source.path(),
+    );
+    let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
+        &app, &completed, None,
+    )
+    .await
+    .unwrap();
+    let suggestions =
+        crate::import::workflow::preview_manual_import_suggested_episode_ids_for_tests(
+            &app,
+            source.path(),
+            &title,
+            &evidence,
+            &[episode.clone(), fourth.clone()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        suggestions,
+        vec![Some(episode.id.clone()), Some(fourth.id.clone())]
+    );
+    let conflicting_source = tempfile::tempdir().unwrap();
+    write_pack_video(
+        conflicting_source.path(),
+        "01. Fail Closed Pack.2024.WEB-DL.720p.mkv",
+    );
+    write_pack_video(
+        conflicting_source.path(),
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv",
+    );
+    let conflicting_suggestions =
+        crate::import::workflow::preview_manual_import_suggested_episode_ids_for_tests(
+            &app,
+            conflicting_source.path(),
+            &title,
+            &evidence,
+            &[episode.clone(), fourth.clone()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        conflicting_suggestions,
+        vec![None, Some(episode.id.clone())]
+    );
+    let result = {
+        let _probe = probe_sequence_agrees_with_the_names([(1280, 720), (1280, 720)]);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{result:?}"
+    );
+    assert_eq!(
+        media_file_episode_ids(
+            &app.services
+                .library
+                .media_files
+                .list_media_files_for_title(&title.id)
+                .await
+                .unwrap()
+        ),
+        std::collections::BTreeSet::from([episode.id, fourth.id]),
+    );
+    assert_eq!(library_video_file_names(library_dir.path()).len(), 2);
+    assert!(first_file.exists() && fourth_file.exists());
+}
+
+#[tokio::test]
 async fn automatic_multi_season_pack_imports_explicit_members_from_each_declared_season() {
     let (
         FailClosedPackFixture {
