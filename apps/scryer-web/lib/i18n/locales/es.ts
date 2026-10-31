@@ -607,6 +607,10 @@ const es: LocaleDictionary = {
   "jobs.column.status": "Estado",
   "jobs.action.run": "Ejecutar",
   "jobs.action.runNow": "Ejecutar ahora",
+  "jobs.cancelSearchRequested":
+    "Cancelación solicitada. El paso de búsqueda actual terminará antes de detener los restantes.",
+  "jobs.cancelSearchNotRunning": "Esta búsqueda ya no está en curso.",
+  "jobs.cancelSearchFailed": "No se pudo cancelar la búsqueda.",
   "jobs.status.idle": "Inactivo",
   "jobs.status.queued": "En cola",
   "jobs.status.discovering": "Descubriendo",
@@ -864,6 +868,10 @@ const es: LocaleDictionary = {
   "settings.renameTokenMalId": "ID de MAL",
   "settings.renameTokenAnilistId": "ID de AniList",
   "settings.renameTokenSource": "Fuente (ej. BluRay, WEB-DL)",
+  "settings.renameTokenDynamicRange":
+    "Rango dinámico (p. ej. HDR10, DV, HDR10+)",
+  "settings.renameTokenRevision": "Revisión del lanzamiento (Proper/REPACK)",
+  "settings.renameTokenIs3d": "Indicador 3D",
   "settings.renameTokenVideoCodec": "Códec de video (ej. x265)",
   "settings.renameTokenAudioCodec": "Códec de audio (ej. DTS)",
   "settings.renameTokenAudioChannels": "Canales de audio (ej. 5.1)",

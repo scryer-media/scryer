@@ -3945,6 +3945,9 @@ struct RenameCommonTokens {
     year: String,
     quality: String,
     source: String,
+    dynamic_range: String,
+    revision: String,
+    is_3d: String,
     video_codec: String,
     audio_codec: String,
     audio_channels: String,
@@ -4339,6 +4342,9 @@ fn insert_common_rename_tokens(tokens: &mut BTreeMap<String, String>, common: Re
     tokens.insert("year".to_string(), common.year);
     tokens.insert("quality".to_string(), common.quality);
     tokens.insert("source".to_string(), common.source);
+    tokens.insert("dynamic_range".to_string(), common.dynamic_range);
+    tokens.insert("revision".to_string(), common.revision);
+    tokens.insert("is_3d".to_string(), common.is_3d);
     tokens.insert("video_codec".to_string(), common.video_codec);
     tokens.insert("audio_codec".to_string(), common.audio_codec);
     tokens.insert("audio_channels".to_string(), common.audio_channels);
@@ -4368,6 +4374,9 @@ fn is_supported_rename_template_token(token: &str) -> bool {
             | "quality"
             | "edition"
             | "source"
+            | "dynamic_range"
+            | "revision"
+            | "is_3d"
             | "video_codec"
             | "audio_codec"
             | "audio_channels"
@@ -4392,6 +4401,9 @@ fn is_supported_rename_template_token_for_facet(token: &str, facet: &MediaFacet)
             | "year"
             | "quality"
             | "source"
+            | "dynamic_range"
+            | "revision"
+            | "is_3d"
             | "video_codec"
             | "audio_codec"
             | "audio_channels"
@@ -4476,6 +4488,8 @@ pub(crate) struct RenameMediaEvidence {
     analyzed: crate::media::release_labels::ResolvedAnalysisReleaseLabels,
     quality_label: Option<String>,
     source_type: Option<String>,
+    video_hdr_format: Option<String>,
+    dovi_profile: Option<u8>,
     video_codec_parsed: Option<crate::release_parser::VideoCodec>,
     audio_codec_parsed: Option<String>,
     audio_channels_parsed: Option<String>,
@@ -4498,6 +4512,8 @@ impl RenameMediaEvidence {
             ),
             quality_label: non_empty_owned(media_file.quality_label.clone()),
             source_type: non_empty_owned(media_file.source_type.clone()),
+            video_hdr_format: non_empty_owned(media_file.video_hdr_format.clone()),
+            dovi_profile: media_file.dovi_profile,
             video_codec_parsed: media_file.video_codec_parsed,
             audio_codec_parsed: non_empty_owned(media_file.audio_codec_parsed.clone()),
             audio_channels_parsed: non_empty_owned(media_file.audio_channels_parsed.clone()),
@@ -4520,6 +4536,8 @@ impl RenameMediaEvidence {
                 &analysis.audio_streams,
                 &analysis.details,
             ),
+            video_hdr_format: non_empty_owned(analysis.video_hdr_format.clone()),
+            dovi_profile: analysis.dovi_profile,
             ..Self::default()
         }
     }
@@ -4556,6 +4574,8 @@ fn resolve_rename_common_metadata_from_evidence(
         analyzed,
         quality_label,
         source_type,
+        video_hdr_format,
+        dovi_profile,
         video_codec_parsed,
         audio_codec_parsed,
         audio_channels_parsed,
@@ -4571,6 +4591,18 @@ fn resolve_rename_common_metadata_from_evidence(
     let source = source_type
         .or_else(|| parsed_current.source.as_ref().map(ToString::to_string))
         .unwrap_or_default();
+    let dynamic_range =
+        dynamic_range_label(video_hdr_format.as_deref(), dovi_profile, parsed_current);
+    let revision = if parsed_current.revision <= 0 {
+        String::new()
+    } else if parsed_current.is_repack {
+        "REPACK".to_string()
+    } else {
+        "Proper".to_string()
+    };
+    let is_3d = parsed_current
+        .stereoscopy
+        .is_some_and(|stereoscopy| stereoscopy.has_3d());
     let video_codec = analyzed
         .video_codec
         .or_else(|| video_codec_parsed.map(|codec| codec.to_string()))
@@ -4605,6 +4637,9 @@ fn resolve_rename_common_metadata_from_evidence(
             year: year_token.unwrap_or_default().to_string(),
             quality,
             source,
+            dynamic_range,
+            revision,
+            is_3d: if is_3d { "3D" } else { "" }.to_string(),
             video_codec,
             audio_codec,
             audio_channels,
@@ -4613,6 +4648,60 @@ fn resolve_rename_common_metadata_from_evidence(
         },
         edition,
     }
+}
+
+fn dynamic_range_label(
+    video_hdr_format: Option<&str>,
+    dovi_profile: Option<u8>,
+    parsed: &ParsedReleaseMetadata,
+) -> String {
+    if let Some(format) = video_hdr_format {
+        let compact = format
+            .chars()
+            .filter(|character| !character.is_whitespace() && !matches!(character, '-' | '_'))
+            .collect::<String>()
+            .to_ascii_uppercase();
+        if compact == "SDR" {
+            return String::new();
+        }
+        if compact == "DV" || compact.contains("DOLBYVISION") || compact.contains("DOVI") {
+            return "DV".to_string();
+        }
+        if compact.contains("HDR10+") || compact.contains("HDR10PLUS") || compact.contains("HDR10P")
+        {
+            return "HDR10+".to_string();
+        }
+        if compact.contains("HDR10") {
+            return "HDR10".to_string();
+        }
+        if compact.contains("HLG") {
+            return "HLG".to_string();
+        }
+        if compact == "HDR" {
+            return "HDR".to_string();
+        }
+        return format.trim().to_string();
+    }
+    if dovi_profile.is_some() {
+        return "DV".to_string();
+    }
+
+    let mut labels = Vec::new();
+    if parsed.is_dolby_vision {
+        labels.push("DV");
+    }
+    if parsed.is_hdr10plus {
+        labels.push("HDR10+");
+    } else if parsed.has_hdr_fallback {
+        labels.push("HDR10");
+    }
+    if parsed.is_hlg {
+        labels.push("HLG");
+    }
+    if labels.is_empty() && parsed.detected_hdr {
+        labels.push("HDR");
+    }
+    labels.join(" ")
 }
 
 /// The tokens every rename template can use for `title`'s file: title, year,

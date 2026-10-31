@@ -431,6 +431,7 @@ async fn explicit_retry_resolves_previously_unmatched_swedish_release() {
     title.tagged_aliases = vec![scryer_domain::TaggedAlias {
         name: "Över Atlanten".into(),
         language: "swe".into(),
+        country: None,
     }];
     let mut record = test_import_record(
         "swedish-retry",

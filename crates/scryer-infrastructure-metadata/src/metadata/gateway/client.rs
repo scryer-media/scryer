@@ -2459,6 +2459,7 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
             .map(|ta| scryer_domain::TaggedAlias {
                 name: ta.name,
                 language: ta.language,
+                country: ta.country,
             })
             .collect(),
         seasons: s
@@ -2593,10 +2594,10 @@ mod tests {
         MetadataSearchQuery, MovieItem, MovieTitleRef, MtlsState, OP_DISCOVER_PUBLIC_FEED,
         OP_GET_MOVIE, OP_METADATA_BULK, OP_SEARCH_TVDB, OP_SEARCH_TVDB_BATCH, OP_SEARCH_TVDB_MULTI,
         OP_SEARCH_TVDB_RICH, SearchTvdbBatchResult, SearchTvdbResponse, SeriesItem, SeriesTitleRef,
-        SmgEnrollmentConfig, apply_instance_auth_headers_with_nonce, apq_cache_key, apq_hash,
-        build_bulk_artwork_url_query, build_search_tvdb_batch_query, canonical_request_host,
-        canonical_request_path_and_query, compatibility_poll_phase, enrollment_retry_delay,
-        external_ids_from_gateway, is_version_incompatible_response,
+        SmgEnrollmentConfig, TaggedAliasItem, apply_instance_auth_headers_with_nonce,
+        apq_cache_key, apq_hash, build_bulk_artwork_url_query, build_search_tvdb_batch_query,
+        canonical_request_host, canonical_request_path_and_query, compatibility_poll_phase,
+        enrollment_retry_delay, external_ids_from_gateway, is_version_incompatible_response,
         map_metadata_gateway_outbound_error, movie_metadata_from_item,
         next_version_compatibility_poll_delay_at, normalize_artwork_url,
         normalize_optional_artwork_url, parse_version_compatibility_incompatible,
@@ -3262,12 +3263,33 @@ mod tests {
         assert!(graphql_docs::METADATA_BULK_QUERY.contains("metadataBulk"));
         assert!(graphql_docs::METADATA_BULK_QUERY.contains("external_ratings"));
         assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases"));
+        assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases { name language country }"));
+        assert!(graphql_docs::METADATA_BULK_QUERY.contains("tagged_aliases"));
+        assert!(graphql_docs::METADATA_BULK_QUERY.contains("    country\n  }"));
         assert!(
             queries
                 .iter()
                 .all(|query| query.contains("original_language"))
         );
         assert!(queries.iter().all(|query| !query.contains("target_key")));
+    }
+
+    #[test]
+    fn tagged_alias_country_is_optional_in_gateway_payloads() {
+        let with_country: TaggedAliasItem = serde_json::from_value(serde_json::json!({
+            "name": "Nombre alternativo",
+            "language": "es",
+            "country": "ES"
+        }))
+        .expect("gateway alias country should deserialize");
+        assert_eq!(with_country.country.as_deref(), Some("ES"));
+
+        let legacy: TaggedAliasItem = serde_json::from_value(serde_json::json!({
+            "name": "Nombre alternativo",
+            "language": "es"
+        }))
+        .expect("older gateway aliases without country should deserialize");
+        assert_eq!(legacy.country, None);
     }
 
     /// The request rule surface reads these groups (plan §3.2). If a selection is dropped from a
@@ -6625,6 +6647,8 @@ struct ArtworkItem {
 struct TaggedAliasItem {
     name: String,
     language: String,
+    #[serde(default)]
+    country: Option<String>,
 }
 
 fn pick_artwork_url(artworks: &[ArtworkItem], kind: &str) -> Option<String> {

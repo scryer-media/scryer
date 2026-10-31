@@ -323,5 +323,6 @@ pub(crate) fn tagged_alias_to_sdk(alias: scryer_domain::TaggedAlias) -> TaggedAl
     TaggedAlias {
         name: alias.name,
         language: alias.language,
+        country: alias.country,
     }
 }

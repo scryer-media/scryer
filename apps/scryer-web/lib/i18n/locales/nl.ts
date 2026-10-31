@@ -645,6 +645,11 @@ const nl: LocaleDictionary = {
   "jobs.column.status": "Status",
   "jobs.action.run": "Uitvoeren",
   "jobs.action.runNow": "Nu uitvoeren",
+  "jobs.cancelSearchRequested":
+    "Annulering aangevraagd. De huidige zoekstap wordt afgerond voordat de overige stappen stoppen.",
+  "jobs.cancelSearchNotRunning":
+    "Deze zoekopdracht wordt niet meer uitgevoerd.",
+  "jobs.cancelSearchFailed": "De zoekopdracht annuleren is mislukt.",
   "jobs.status.idle": "Inactief",
   "jobs.status.queued": "In wachtrij",
   "jobs.status.discovering": "Ontdekken",
@@ -1113,6 +1118,10 @@ const nl: LocaleDictionary = {
   "settings.renameTokenMalId": "MAL ID",
   "settings.renameTokenAnilistId": "AniList ID",
   "settings.renameTokenSource": "Bron (bijv. BluRay, WEB-DL)",
+  "settings.renameTokenDynamicRange":
+    "Dynamisch bereik (bijv. HDR10, DV, HDR10+)",
+  "settings.renameTokenRevision": "Release-revisie (Proper/REPACK)",
+  "settings.renameTokenIs3d": "3D-aanduiding",
   "settings.renameTokenVideoCodec": "Video-codec (bijv. x265)",
   "settings.renameTokenAudioCodec": "Audio-codec (bijv. DTS)",
   "settings.renameTokenAudioChannels": "Audiokanalen (bijv. 5.1)",

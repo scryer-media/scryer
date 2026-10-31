@@ -117,6 +117,7 @@ fn multilingual_title(
         .map(|(name, language)| TaggedAlias {
             name: (*name).to_string(),
             language: (*language).to_string(),
+            country: None,
         })
         .collect();
     title

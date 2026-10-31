@@ -929,6 +929,7 @@ async fn search_indexers_for_title_uses_tagged_aliases_for_auto_evaluation() {
                 tagged_aliases: vec![scryer_domain::TaggedAlias {
                     name: "Nightfall Heavy Chorus Dark Lantern".to_string(),
                     language: "eng".to_string(),
+                    country: None,
                 }],
                 ..Default::default()
             },

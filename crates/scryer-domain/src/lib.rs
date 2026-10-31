@@ -1022,6 +1022,8 @@ pub struct CanonicalMediaTag {
 pub struct TaggedAlias {
     pub name: String,
     pub language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
 }
 
 /// One admin-defined user tag.
@@ -1309,6 +1311,7 @@ impl AnimeNumberingBridge {
             aliases.push(TaggedAlias {
                 name: name.clone(),
                 language: language.to_string(),
+                country: None,
             });
         }
         aliases
@@ -8589,6 +8592,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn tagged_alias_country_is_optional_for_existing_json() {
+        let legacy: TaggedAlias =
+            serde_json::from_str(r#"{"name":"Name in Japanese","language":"ja"}"#)
+                .expect("existing tagged aliases should deserialize without country");
+        assert_eq!(legacy.country, None);
+
+        let with_country: TaggedAlias =
+            serde_json::from_str(r#"{"name":"Name in Japanese","language":"ja","country":"JP"}"#)
+                .expect("new tagged aliases should deserialize country");
+        assert_eq!(with_country.country.as_deref(), Some("JP"));
+    }
 
     #[test]
     fn import_completed_event_data_without_upgrade_field_reads_as_not_upgrade() {

@@ -4716,6 +4716,7 @@ mod tests {
         title.tagged_aliases = vec![scryer_domain::TaggedAlias {
             name: "Över Atlanten".into(),
             language: "swe".into(),
+            country: None,
         }];
         let raw = "Over.Atlanten.S11E02.SWEDiSH.1080p.WEB.h264-INGRID";
         let attributes = IndexerResponseAttributes::default();
@@ -5374,12 +5375,14 @@ mod tests {
             scryer_domain::TaggedAlias {
                 name: "Hagane no Renkinjutsushi Fullmetal Alchemist Final Chorus".into(),
                 language: "x-jat".into(),
+                country: None,
             },
             scryer_domain::TaggedAlias {
                 name:
                     "Hagane no Renkinjutsushi Saigo no Gassho o Utau Toki no Hikari to Kage no Uta"
                         .into(),
                 language: "x-jat".into(),
+                country: None,
             },
         ];
         let titles = vec![title];

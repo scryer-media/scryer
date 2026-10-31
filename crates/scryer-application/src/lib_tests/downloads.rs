@@ -6066,6 +6066,7 @@ async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accept
                 tagged_aliases: vec![TaggedAlias {
                     name: "Över Atlanten".into(),
                     language: "swe".into(),
+                    country: None,
                 }],
                 ..Default::default()
             },

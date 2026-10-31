@@ -807,6 +807,10 @@ const ru: LocaleDictionary = {
   "jobs.column.trigger": "Запуск",
   "jobs.action.run": "Запустить",
   "jobs.action.runNow": "Запустить сейчас",
+  "jobs.cancelSearchRequested":
+    "Запрошена отмена. Текущий шаг поиска завершится, после чего остальные шаги остановятся.",
+  "jobs.cancelSearchNotRunning": "Этот поиск уже не выполняется.",
+  "jobs.cancelSearchFailed": "Не удалось отменить поиск.",
   "jobs.action.running": "Выполняется…",
   "jobs.status.idle": "Ожидание",
   "jobs.status.queued": "В очереди",
@@ -1215,6 +1219,10 @@ const ru: LocaleDictionary = {
   "settings.renameTokenMalId": "Идентификатор MAL",
   "settings.renameTokenAnilistId": "Идентификатор AniList",
   "settings.renameTokenSource": "Источник (например, BluRay, WEB-DL)",
+  "settings.renameTokenDynamicRange":
+    "Динамический диапазон (например, HDR10, DV, HDR10+)",
+  "settings.renameTokenRevision": "Ревизия релиза (Proper/REPACK)",
+  "settings.renameTokenIs3d": "Обозначение 3D",
   "settings.renameTokenVideoCodec": "Видеокодек (например, x265)",
   "settings.renameTokenAudioCodec": "Аудиокодек (например, DTS)",
   "settings.renameTokenAudioChannels": "Аудиоканалы (например, 5.1)",

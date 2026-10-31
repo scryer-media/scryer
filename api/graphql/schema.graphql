@@ -30393,6 +30393,24 @@ type TitleAcquisitionDiagnosticsPayload {
 }
 
 """
+Alternate title metadata associated with a catalog title.
+"""
+type TitleAliasPayload {
+	"""
+	Alternate title text.
+	"""
+	name: String!
+	"""
+	Language code for this title, or an empty string when unknown.
+	"""
+	language: String!
+	"""
+	Country code associated with this title, or null when unknown.
+	"""
+	country: String
+}
+
+"""
 Broad content lifecycle states used by title catalog filters.
 """
 enum TitleCatalogContentStatusValue {
@@ -31602,6 +31620,10 @@ type TitlePayload {
 	Alternate title strings from catalog metadata.
 	"""
 	aliases: [String!]!
+	"""
+	Alternate titles with their source language and country, when known.
+	"""
+	taggedAliases: [TitleAliasPayload!]!
 	"""
 	Language used for the latest metadata fetch, or null when not recorded.
 	"""

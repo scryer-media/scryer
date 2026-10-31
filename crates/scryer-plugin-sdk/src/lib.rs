@@ -3927,6 +3927,8 @@ impl DownloadHttpCapabilities {
 pub struct TaggedAlias {
     pub name: String,
     pub language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

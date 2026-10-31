@@ -599,6 +599,10 @@ const ja: LocaleDictionary = {
   "jobs.column.status": "状態",
   "jobs.action.run": "実行",
   "jobs.action.runNow": "今すぐ実行",
+  "jobs.cancelSearchRequested":
+    "キャンセルを要求しました。現在の検索ステップが終了すると、残りのステップは停止します。",
+  "jobs.cancelSearchNotRunning": "この検索はすでに実行されていません。",
+  "jobs.cancelSearchFailed": "検索をキャンセルできませんでした。",
   "jobs.status.idle": "待機中",
   "jobs.status.queued": "キュー済み",
   "jobs.status.discovering": "検出中",
@@ -843,6 +847,10 @@ const ja: LocaleDictionary = {
   "settings.renameTokenMalId": "MAL ID",
   "settings.renameTokenAnilistId": "AniList ID",
   "settings.renameTokenSource": "ソース（例: BluRay, WEB-DL）",
+  "settings.renameTokenDynamicRange":
+    "ダイナミックレンジ（例: HDR10、DV、HDR10+）",
+  "settings.renameTokenRevision": "リリースリビジョン（Proper/REPACK）",
+  "settings.renameTokenIs3d": "3D 表示",
   "settings.renameTokenVideoCodec": "映像コーデック（例: x265）",
   "settings.renameTokenAudioCodec": "音声コーデック（例: DTS）",
   "settings.renameTokenAudioChannels": "音声チャンネル（例: 5.1）",

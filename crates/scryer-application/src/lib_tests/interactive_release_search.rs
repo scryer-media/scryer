@@ -2843,10 +2843,12 @@ async fn localized_search_languages_inherit_override_and_ignore_metadata_languag
                     TaggedAlias {
                         name: "Störst av allt".into(),
                         language: "swe".into(),
+                        country: None,
                     },
                     TaggedAlias {
                         name: "Other Translation".into(),
                         language: "deu".into(),
+                        country: None,
                     },
                 ],
                 ..Default::default()

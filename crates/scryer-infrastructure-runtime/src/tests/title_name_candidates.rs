@@ -167,6 +167,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
     romaji.tagged_aliases = vec![TaggedAlias {
         name: "Hagane no Renkinjutsushi".to_string(),
         language: "x-jat".to_string(),
+        country: None,
     }];
 
     // Romanized aliases whose topic particle is written one way in the catalog
@@ -184,10 +185,12 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         TaggedAlias {
             name: "Hoshizora no Kanata dewa Nemurenai".to_string(),
             language: "x-jat".to_string(),
+            country: None,
         },
         TaggedAlias {
             name: "Kumori no Oka to wa Iwanai".to_string(),
             language: "x-jat".to_string(),
+            country: None,
         },
     ];
 

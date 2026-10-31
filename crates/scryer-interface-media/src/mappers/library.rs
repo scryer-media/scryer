@@ -183,6 +183,15 @@ pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
         studio: title.studio,
         country: title.country,
         aliases: title.aliases,
+        tagged_aliases: title
+            .tagged_aliases
+            .into_iter()
+            .map(|alias| TitleAliasPayload {
+                name: alias.name,
+                language: alias.language,
+                country: alias.country,
+            })
+            .collect(),
         metadata_language: title.metadata_language,
         metadata_fetched_at: title.metadata_fetched_at,
         min_availability: title.min_availability,

@@ -414,6 +414,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(sdl.contains("scalar Date"));
     assert!(sdl.contains("scalar DateTime"));
     assert!(sdl.contains("scalar Long"));
+    assert!(sdl.contains("type TitleAliasPayload"));
+    assert!(sdl.contains("taggedAliases: [TitleAliasPayload!]!"));
 
     let body = gql(
         &ctx,
@@ -1262,12 +1264,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Tagged alias metadata adds TitleAliasPayload: public types 990->991,
+    // OBJECT 534->535.
+    assert!(public_type_names.contains(&"TitleAliasPayload"));
     assert_eq!(
         public_types.len(),
-        990,
+        991,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 534);
+    assert_eq!(kind_count("OBJECT"), 535);
     assert_eq!(kind_count("INPUT_OBJECT"), 243);
     assert_eq!(kind_count("ENUM"), 201);
     assert_eq!(kind_count("SCALAR"), 10);
