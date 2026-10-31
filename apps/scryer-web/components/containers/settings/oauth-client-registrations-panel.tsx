@@ -264,7 +264,7 @@ export function OAuthClientRegistrationsPanel() {
     } catch {
       toast.error(t("oauth.ui.Unable_to_copy_the_OAuth_client_ID"));
     }
-  }, []);
+  }, [t]);
 
   const copyJellyfinCallback = React.useCallback(
     async (callbackUrl: string) => {
@@ -279,7 +279,7 @@ export function OAuthClientRegistrationsPanel() {
         toast.error(t("oauth.ui.Unable_to_copy_the_Jellyfin_callback_URL"));
       }
     },
-    [],
+    [t],
   );
 
   const createJellyfinPluginClient = React.useCallback(async () => {
