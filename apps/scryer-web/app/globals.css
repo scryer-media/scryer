@@ -1137,6 +1137,21 @@ h6 {
   contain-intrinsic-size: auto 260px; /* minimum 150px wide poster card at 2:3 */
 }
 
+/* The fixed mobile header owns the top of the viewport, so shell notices start
+   below it and take over the space its spacer would otherwise reserve. */
+@media (max-width: 980px) {
+  [data-slot="root-shell-notice"]:not(
+      [data-slot="root-shell-notice"] ~ [data-slot="root-shell-notice"]
+    ) {
+    margin-top: var(--root-header-height, 0px);
+  }
+  [data-slot="root-shell-notice"]
+    ~ [data-slot="root-shell-frame"]
+    [data-slot="root-header-spacer"] {
+    display: none;
+  }
+}
+
 /* PWA safe area utilities for standalone mode on notched devices */
 @supports (padding: env(safe-area-inset-top)) {
   .pt-safe {
