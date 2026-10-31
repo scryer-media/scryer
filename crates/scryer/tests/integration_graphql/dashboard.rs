@@ -68,9 +68,22 @@ fn dashboard_library_root_id(library: &Value) -> String {
 /// Actor that can view exactly the named libraries and holds no app
 /// permissions, so neither query can fall back to the catalog-wide override.
 fn dashboard_view_actor(library_ids: &[&str]) -> User {
+    dashboard_actor(library_ids, &[LibraryPermission::View])
+}
+
+/// Dashboard activity and storage roots are privileged: an actor that manages
+/// titles in the given libraries, and nothing else.
+fn dashboard_manager_actor(library_ids: &[&str]) -> User {
+    dashboard_actor(
+        library_ids,
+        &[LibraryPermission::View, LibraryPermission::ManageTitles],
+    )
+}
+
+fn dashboard_actor(library_ids: &[&str], permissions: &[LibraryPermission]) -> User {
     User {
         id: Id::new().0,
-        username: "dashboard-viewer".to_string(),
+        username: "dashboard-actor".to_string(),
         password_hash: None,
         password_change_required: false,
         account_kind: Default::default(),
@@ -81,7 +94,7 @@ fn dashboard_view_actor(library_ids: &[&str]) -> User {
                 .map(|library_id| {
                     (
                         (*library_id).to_string(),
-                        LibraryPermissionMask::from_permissions([LibraryPermission::View]),
+                        LibraryPermissionMask::from_permissions(permissions.iter().copied()),
                     )
                 })
                 .collect::<HashMap<_, _>>(),
@@ -359,7 +372,7 @@ async fn graphql_dashboard_activity_stats_counts_current_and_previous_windows() 
 }
 
 #[tokio::test]
-async fn graphql_dashboard_activity_stats_counts_only_viewable_libraries() {
+async fn graphql_dashboard_activity_stats_counts_only_managed_libraries() {
     let ctx = TestContext::new().await;
     let allowed_library = create_dashboard_library(
         &ctx,
@@ -420,13 +433,27 @@ async fn graphql_dashboard_activity_stats_counts_only_viewable_libraries() {
     let body = schema_exec(
         &ctx,
         DEFAULT_DASHBOARD_ACTIVITY_STATS_QUERY,
-        Some(dashboard_view_actor(&[&allowed_library_id])),
+        Some(dashboard_manager_actor(&[&allowed_library_id])),
     )
     .await;
     assert_no_errors(&body);
     let stats = &body["data"]["dashboardActivityStats"];
     assert_eq!(stats["current"]["grabbed"], 1, "scoped counts: {stats}");
     assert_eq!(stats["current"]["imported"], 0, "scoped counts: {stats}");
+
+    // A view-only caller gets empty stats, not an error.
+    let viewer_body = schema_exec(
+        &ctx,
+        DEFAULT_DASHBOARD_ACTIVITY_STATS_QUERY,
+        Some(dashboard_view_actor(&[&allowed_library_id])),
+    )
+    .await;
+    assert_no_errors(&viewer_body);
+    let viewer_stats = &viewer_body["data"]["dashboardActivityStats"];
+    assert_eq!(
+        viewer_stats["current"]["grabbed"], 0,
+        "viewer counts: {viewer_stats}"
+    );
 
     // The unscoped admin caller still sees both libraries.
     let admin_stats = dashboard_activity_stats(&ctx, 24).await;
@@ -582,7 +609,7 @@ async fn graphql_storage_roots_returns_one_row_per_library_root() {
 }
 
 #[tokio::test]
-async fn graphql_storage_roots_omits_libraries_the_caller_cannot_view() {
+async fn graphql_storage_roots_omits_libraries_the_caller_cannot_manage() {
     let ctx = TestContext::new().await;
     let allowed_root = tempfile::tempdir().expect("allowed storage root tempdir");
     let denied_root = tempfile::tempdir().expect("denied storage root tempdir");
@@ -593,10 +620,21 @@ async fn graphql_storage_roots_omits_libraries_the_caller_cannot_view() {
     create_dashboard_library(&ctx, "MOVIE", "Dashboard Hidden Library", &denied_path).await;
     let allowed_library_id = dashboard_library_id(&allowed_library);
 
-    let body = schema_exec(
+    let viewer_body = schema_exec(
         &ctx,
         STORAGE_ROOTS_QUERY,
         Some(dashboard_view_actor(&[&allowed_library_id])),
+    )
+    .await;
+    assert_eq!(
+        viewer_body["errors"][0]["extensions"]["reason"], "AUTHORIZATION_LIBRARY_ACCESS_DENIED",
+        "a view-only caller is refused storage roots: {viewer_body}"
+    );
+
+    let body = schema_exec(
+        &ctx,
+        STORAGE_ROOTS_QUERY,
+        Some(dashboard_manager_actor(&[&allowed_library_id])),
     )
     .await;
     assert_no_errors(&body);
@@ -607,7 +645,7 @@ async fn graphql_storage_roots_omits_libraries_the_caller_cannot_view() {
     assert!(
         rows.iter()
             .all(|row| row["libraryId"].as_str() == Some(allowed_library_id.as_str())),
-        "only viewable libraries may appear: {body}"
+        "only managed libraries may appear: {body}"
     );
     assert_eq!(storage_root_rows_for_path(&body, &allowed_path).len(), 1);
     assert!(

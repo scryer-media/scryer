@@ -24069,7 +24069,7 @@ type QueryRoot {
 		rootFolderIds: [ID!]
 	): TitleCatalogFilterOptionsPayload!
 	"""
-	List libraries visible to the caller that grant at least the requested permission.
+	List libraries visible to the caller that grant at least the requested permission; root folders are empty unless the caller has management access to the library.
 	"""
 	libraries(
 		"""
@@ -24082,7 +24082,7 @@ type QueryRoot {
 		permission: LibraryPermissionValue
 	): [LibraryPayload!]!
 	"""
-	List root folders of libraries the caller can view, with the disk usage of each backing filesystem.
+	List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem; refuses callers with no such library.
 	"""
 	storageRoots: [StorageRootUsagePayload!]!
 	"""
@@ -31736,9 +31736,9 @@ type TitlePayload {
 		limit: Int! = 12
 	): [DiscoveryItemPayload!]!
 	"""
-	Absolute root-folder path for this title; requires view permission on its library.
+	Absolute root-folder path for this title, or null when the caller lacks management access to its library.
 	"""
-	rootFolderPath: String!
+	rootFolderPath: String
 	"""
 	Whether renaming is turned on for this title's media type. Rename preview
 	and rename requests for the title are refused while this is false.

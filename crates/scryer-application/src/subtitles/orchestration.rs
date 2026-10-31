@@ -923,6 +923,11 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::View,
         )
         .await?;
+        // The listing stays on View so Manage Subtitles holders can act on
+        // it, but where the sidecar lives on disk is privileged.
+        let privileged = self
+            .has_privileged_library_access(actor, &title.library_id)
+            .await?;
         let score_kind = subtitle_score_kind(subtitle_media_kind(&title));
         let downloads = self
             .services
@@ -932,11 +937,17 @@ impl AppUseCase {
             .await?;
         Ok(downloads
             .into_iter()
-            .map(|download| ExternalSubtitleListing {
-                score_percent: download
-                    .score
-                    .map(|score| normalized_score_percent(score_kind, score)),
-                download,
+            .map(|mut download| {
+                if !privileged {
+                    download.file_path =
+                        crate::types::file_name_only(&download.file_path).to_string();
+                }
+                ExternalSubtitleListing {
+                    score_percent: download
+                        .score
+                        .map(|score| normalized_score_percent(score_kind, score)),
+                    download,
+                }
             })
             .collect())
     }

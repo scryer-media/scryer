@@ -11,12 +11,8 @@ impl AppUseCase {
             .get_by_id(title_id)
             .await?
             .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
-        self.require_library_permission(
-            actor,
-            &title.library_id,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await?;
+        self.require_privileged_library_access(actor, &title.library_id)
+            .await?;
 
         let recent_decisions = self
             .services

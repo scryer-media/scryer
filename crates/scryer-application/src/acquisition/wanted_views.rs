@@ -149,16 +149,10 @@ impl AppUseCase {
         limit: i64,
         offset: i64,
     ) -> AppResult<(Vec<WantedScopeView>, i64)> {
-        let authorized = self
-            .list_libraries_for_permission(
-                actor,
-                facet.clone(),
-                scryer_domain::LibraryPermission::View,
-            )
-            .await?;
-        let mut authorized_ids: HashSet<String> = authorized
-            .iter()
-            .map(|library| library.id.clone())
+        let mut authorized_ids: HashSet<String> = self
+            .require_privileged_library_ids(actor, facet.clone())
+            .await?
+            .into_iter()
             .collect();
         let requested: HashSet<String> = library_ids
             .iter()

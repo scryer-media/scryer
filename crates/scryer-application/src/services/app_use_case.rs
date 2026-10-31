@@ -667,7 +667,7 @@ impl AppUseCase {
         limit: usize,
     ) -> AppResult<Vec<ImportRecord>> {
         let allowed_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
+            .require_privileged_library_ids(actor, None)
             .await?
             .into_iter()
             .collect::<std::collections::HashSet<_>>();
@@ -712,11 +712,10 @@ impl AppUseCase {
         Ok(visible)
     }
 
-    async fn require_library_permission_for_title(
+    async fn require_privileged_access_for_title(
         &self,
         actor: &User,
         title_id: &str,
-        permission: scryer_domain::LibraryPermission,
     ) -> AppResult<()> {
         let title = self
             .services
@@ -730,7 +729,7 @@ impl AppUseCase {
                     format!("title {title_id}"),
                 )
             })?;
-        self.require_library_permission(actor, &title.library_id, permission)
+        self.require_privileged_library_access(actor, &title.library_id)
             .await
     }
 
@@ -803,6 +802,32 @@ impl AppUseCase {
             .collect())
     }
 
+    /// [`Self::filter_wanted_items_for_permission`] for privileged library
+    /// access: wanted state, release decisions and grab history are reserved
+    /// for actors who can manage the owning library's titles.
+    pub(crate) async fn filter_wanted_items_for_privileged_access(
+        &self,
+        actor: &User,
+        items: Vec<AcquisitionScopeState>,
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let allowed_library_ids = self
+            .privileged_library_ids(actor, None)
+            .await?
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        if allowed_library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(items
+            .into_iter()
+            .filter(|item| {
+                item.library_id
+                    .as_deref()
+                    .is_some_and(|library_id| allowed_library_ids.contains(library_id))
+            })
+            .collect())
+    }
+
     pub async fn find_download_submission_by_client_item_id(
         &self,
         actor: &User,
@@ -821,12 +846,8 @@ impl AppUseCase {
             ))
             .await?;
         if let Some(submission) = submission.as_ref() {
-            self.require_library_permission_for_title(
-                actor,
-                &submission.title_id,
-                scryer_domain::LibraryPermission::View,
-            )
-            .await?;
+            self.require_privileged_access_for_title(actor, &submission.title_id)
+                .await?;
         }
         Ok(submission)
     }
@@ -1038,10 +1059,13 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::View,
         )
         .await?;
-        self.services
+        let files = self
+            .services
             .library
             .media_files
             .list_media_files_for_title(title_id)
+            .await?;
+        self.redact_media_files_for_library(actor, &title.library_id, files)
             .await
     }
 
@@ -1069,6 +1093,9 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::View,
         )
         .await?;
+        let privileged = self
+            .has_privileged_library_access(actor, &title.library_id)
+            .await?;
 
         let episode_ids = vec![episode_id.to_string()];
         let scoped_files = self
@@ -1100,7 +1127,11 @@ impl AppUseCase {
                 } else {
                     crate::MediaFileRole::Additional
                 };
-                Some(media_file)
+                Some(if privileged {
+                    media_file
+                } else {
+                    media_file.redacted_for_viewer()
+                })
             })
             .collect())
     }
@@ -1127,6 +1158,9 @@ impl AppUseCase {
         if !allowed_library_ids.contains(&title.library_id) {
             return Ok(std::collections::HashMap::new());
         }
+        let privileged = self
+            .has_privileged_library_access(actor, &title.library_id)
+            .await?;
         let scoped_files = self
             .services
             .library
@@ -1156,7 +1190,11 @@ impl AppUseCase {
                     files_by_episode
                         .entry(episode_id.clone())
                         .or_default()
-                        .push(media_file);
+                        .push(if privileged {
+                            media_file
+                        } else {
+                            media_file.redacted_for_viewer()
+                        });
                 }
             }
         }
@@ -1181,12 +1219,8 @@ impl AppUseCase {
                     format!("title {title_id}"),
                 )
             })?;
-        self.require_library_permission(
-            actor,
-            &title.library_id,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await?;
+        self.require_privileged_library_access(actor, &title.library_id)
+            .await?;
         self.services
             .workflow
             .acquisition_scope_states
@@ -1195,17 +1229,27 @@ impl AppUseCase {
     }
 
     /// Batch variant of [`Self::get_title_wanted_item`]: returns every acquisition
-    /// scope state for the `View`-visible subset of `title_ids`. Callers key the
+    /// scope state for the subset of `title_ids` in libraries the actor holds
+    /// privileged access to. Other titles are silently dropped. Callers key the
     /// flat result by `(title_id, episode_id)`.
     pub async fn get_title_wanted_items_for_titles(
         &self,
         actor: &User,
         title_ids: &[String],
     ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let privileged_library_ids = self
+            .privileged_library_ids(actor, None)
+            .await?
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        if privileged_library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let visible_title_ids = self
             .get_titles_by_ids(actor, title_ids)
             .await?
             .into_iter()
+            .filter(|title| privileged_library_ids.contains(&title.library_id))
             .map(|title| title.id)
             .collect::<Vec<_>>();
         if visible_title_ids.is_empty() {

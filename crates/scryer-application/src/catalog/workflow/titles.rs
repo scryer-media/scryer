@@ -451,17 +451,11 @@ impl AppUseCase {
         facet: Option<MediaFacet>,
         requested_library_ids: Option<Vec<String>>,
     ) -> AppResult<Vec<CutoffUnmetItem>> {
-        let authorized_libraries = self
-            .list_libraries_for_permission(
-                actor,
-                facet.clone(),
-                scryer_domain::LibraryPermission::View,
-            )
+        // Upgrade targets are acquisition state, reserved for actors with
+        // privileged library access.
+        let mut library_ids = self
+            .require_privileged_library_ids(actor, facet.clone())
             .await?;
-        let mut library_ids = authorized_libraries
-            .iter()
-            .map(|library| library.id.clone())
-            .collect::<Vec<_>>();
         let requested_library_ids = requested_library_ids
             .as_ref()
             .map(|requested| {

@@ -17131,14 +17131,19 @@ async fn download_history_applies_permission_filtering_to_durable_rows() {
     ));
     publish_test_download_queue_snapshot(&app, Vec::new()).await;
 
-    let movie_viewer = library_permission_user(
-        "movie-viewer",
+    // Download history is privileged: the restricted actor manages titles in
+    // the movie library only, and must not see the series row.
+    let movie_manager = library_permission_user(
+        "movie-manager",
         &scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
-        &[scryer_domain::LibraryPermission::View],
+        &[
+            scryer_domain::LibraryPermission::View,
+            scryer_domain::LibraryPermission::ManageTitles,
+        ],
     );
     let page = app
         .list_download_history_page(
-            &movie_viewer,
+            &movie_manager,
             50,
             0,
             Some(vec![DownloadHistoryFilter::All]),
@@ -17147,7 +17152,7 @@ async fn download_history_applies_permission_filtering_to_durable_rows() {
             None,
         )
         .await
-        .expect("history page should load for the restricted viewer");
+        .expect("history page should load for the restricted manager");
 
     assert_eq!(
         page.items

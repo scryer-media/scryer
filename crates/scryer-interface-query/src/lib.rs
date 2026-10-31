@@ -1411,7 +1411,7 @@ impl CatalogQueries {
         })
     }
 
-    /// List libraries visible to the caller that grant at least the requested permission.
+    /// List libraries visible to the caller that grant at least the requested permission; root folders are empty unless the caller has management access to the library.
     async fn libraries(
         &self,
         ctx: &Context<'_>,
@@ -1432,10 +1432,26 @@ impl CatalogQueries {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(libraries.into_iter().map(from_library).collect())
+        // Root paths say where media lives on disk; only callers with
+        // privileged access to a library see its roots.
+        let privileged: std::collections::HashSet<String> = app
+            .privileged_library_ids(&actor, None)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .collect();
+        Ok(libraries
+            .into_iter()
+            .map(|mut library| {
+                if !privileged.contains(&library.id) {
+                    library.roots.clear();
+                }
+                from_library(library)
+            })
+            .collect())
     }
 
-    /// List root folders of libraries the caller can view, with the disk usage of each backing filesystem.
+    /// List root folders of libraries the caller has management access to, with the disk usage of each backing filesystem; refuses callers with no such library.
     async fn storage_roots(&self, ctx: &Context<'_>) -> GqlResult<Vec<StorageRootUsagePayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;

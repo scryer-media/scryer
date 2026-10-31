@@ -428,6 +428,7 @@ function MainContent({
   handleImportRouteEmpty,
   canViewCatalog,
   canAccessActivity,
+  canViewLibraryInternals,
   canResolveImports,
   canManageTitle,
   canRequestMedia,
@@ -469,6 +470,7 @@ function MainContent({
   handleImportRouteEmpty: () => void;
   canViewCatalog: boolean;
   canAccessActivity: boolean;
+  canViewLibraryInternals: boolean;
   canResolveImports: boolean;
   canManageTitle: boolean;
   canRequestMedia: boolean;
@@ -505,6 +507,11 @@ function MainContent({
   if (view === "activity") {
     if (!canAccessActivity) {
       return <ViewLoadingFallback />;
+    }
+    // Download activity and history are privileged; a caller who can only
+    // resolve imports lands on the import queue instead.
+    if (!canViewLibraryInternals) {
+      return <ActivityContainer key="activity-import" activitySection="import" />;
     }
     if (activitySection === "history") {
       return (
@@ -551,6 +558,9 @@ function MainContent({
     return <RequestsContainer key="requests" facet={null} />;
   }
   if (view === "wanted") {
+    if (!canViewLibraryInternals) {
+      return <ViewLoadingFallback />;
+    }
     return (
       <WantedContainer
         key={`wanted-${wantedSection}-${discoveryAuthorizationSignature}`}
@@ -1375,6 +1385,7 @@ function AuthenticatedHomePage({
     canRequestMedia,
     canResolveImports,
     canAccessActivity,
+    canViewLibraryInternals,
     canManageSystemSettings,
     canManageCatalogSettings,
     canManageUserAccounts,
@@ -1639,13 +1650,19 @@ function AuthenticatedHomePage({
     if (
       !routeIsCanonical ||
       (view !== "calendar" && view !== "wanted") ||
-      canViewCatalog
+      (view === "wanted" ? canViewLibraryInternals : canViewCatalog)
     ) {
       return;
     }
 
     navigateToAccessibleDefault();
-  }, [canViewCatalog, navigateToAccessibleDefault, routeIsCanonical, view]);
+  }, [
+    canViewCatalog,
+    canViewLibraryInternals,
+    navigateToAccessibleDefault,
+    routeIsCanonical,
+    view,
+  ]);
 
   useEffect(() => {
     if (!routeIsCanonical || (view !== "system" && view !== "logs")) {
@@ -2040,6 +2057,9 @@ function AuthenticatedHomePage({
                                     handleImportRouteEmpty={handleBackToList}
                                     canViewCatalog={canViewCatalog}
                                     canAccessActivity={canAccessActivity}
+                                    canViewLibraryInternals={
+                                      canViewLibraryInternals
+                                    }
                                     canResolveImports={canResolveImports}
                                     canManageTitle={canManageTitle}
                                     canRequestMedia={canRequestMedia}

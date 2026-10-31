@@ -27,6 +27,7 @@ mod downloads;
 pub(crate) use downloads::RecordingDownloadRegistry;
 mod episode_file_delete;
 mod episode_metadata_refresh;
+mod file_privacy;
 mod folder_match;
 mod full_hash_backfill;
 mod golden_resolution_corpus;
