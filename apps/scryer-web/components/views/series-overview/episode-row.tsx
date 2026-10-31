@@ -1,5 +1,15 @@
 import * as React from "react";
-import { CalendarDays, Clock3, Eye, EyeOff, Search, Zap } from "lucide-react";
+import {
+  CalendarDays,
+  CircleCheck,
+  CircleX,
+  Clock3,
+  Eye,
+  EyeOff,
+  Search,
+  TriangleAlert,
+  Zap,
+} from "lucide-react";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,7 +33,10 @@ import {
   seriesOverviewEpisodeRowId,
   seriesOverviewEpisodeSelectId,
 } from "@/lib/utils/dom-ids";
-import { episodeAvailabilityPill } from "@/lib/utils/episode-media-availability";
+import {
+  episodeAvailabilityPill,
+  episodeCardAvailabilityPill,
+} from "@/lib/utils/episode-media-availability";
 import type {
   CollectionEpisode,
   EpisodeMediaFile,
@@ -94,13 +107,34 @@ function renderEpisodeQualityBadge(episode: CollectionEpisode, t: TranslateFn) {
   ) : null;
 }
 
-function renderEpisodeQualityCell(
+const CARD_AVAILABILITY_ICONS = {
+  positive: CircleCheck,
+  warning: TriangleAlert,
+  negative: CircleX,
+};
+
+function renderEpisodeCardQualityBadge(
   episode: CollectionEpisode,
-  queueItem: DownloadQueueItem | undefined,
   t: TranslateFn,
 ) {
-  const qualityBadge = renderEpisodeQualityBadge(episode, t);
+  const pill = episodeCardAvailabilityPill(episode.mediaAvailability, t);
+  const Icon = CARD_AVAILABILITY_ICONS[pill.tone];
+  return (
+    <Badge
+      id={selectorId("series-overview-episode-availability", episode.id)}
+      tone={pill.tone}
+      className="px-2.5 py-1 text-sm font-semibold [&>svg]:size-4"
+    >
+      <Icon aria-hidden="true" />
+      {pill.label}
+    </Badge>
+  );
+}
 
+function renderEpisodeQualityCell(
+  qualityBadge: React.ReactNode,
+  queueItem: DownloadQueueItem | undefined,
+) {
   if (!qualityBadge && !queueItem) {
     return null;
   }
@@ -357,7 +391,16 @@ export const EpisodeRow = React.memo(function EpisodeRow({
   ) : null;
 
   const episodeTypeBadges = renderEpisodeTypeBadges(episode, t);
-  const qualityCell = renderEpisodeQualityCell(episode, queueItem, t);
+  const qualityCell = renderEpisodeQualityCell(
+    isMobile
+      ? renderEpisodeCardQualityBadge(episode, t)
+      : renderEpisodeQualityBadge(episode, t),
+    queueItem,
+  );
+  // Dims the card's parts rather than the card, so the availability pill stays
+  // readable on an unmonitored episode.
+  const cardDimClass =
+    !episode.monitored && "opacity-[var(--scry-unmonitored-opacity,0.6)]";
 
   const episodeSelectLabel = t("seriesOverview.selectEpisodeForDelete", {
     name: episodeDisplayTitle(episode, t),
@@ -384,14 +427,13 @@ export const EpisodeRow = React.memo(function EpisodeRow({
           episode.absoluteNumber,
         )}
         data-episode-id={episode.id}
-        className={cn(
-          "@container rounded-lg border border-border bg-card/50 p-3",
-          !episode.monitored && "opacity-[var(--scry-unmonitored-opacity,0.6)]",
-        )}
+        className="@container rounded-lg border border-border bg-card/50 p-3"
       >
         <div className="flex items-start gap-3">
           {selectionCheckbox ? (
-            <div className="mt-1 shrink-0">{selectionCheckbox}</div>
+            <div className={cn("mt-1 shrink-0", cardDimClass)}>
+              {selectionCheckbox}
+            </div>
           ) : null}
           <button
             id={selectorId("series-overview-episode-monitor", episode.id)}
@@ -400,6 +442,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
             aria-label={t("title.episodeMonitored")}
             className={cn(
               "mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded transition-colors",
+              cardDimClass,
               episodeToggling && "opacity-50",
               episode.monitored
                 ? "text-[var(--scry-success-text-soft)]"
@@ -421,7 +464,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                   episode.id,
                 )}
                 type="button"
-                className="min-w-0 flex-1 text-left"
+                className={cn("min-w-0 flex-1 text-left", cardDimClass)}
                 onClick={handleToggleEpisodeDetails}
               >
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -440,8 +483,15 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                 {qualityCell}
               </div>
             </div>
-            <div className="mt-2 flex flex-wrap gap-2">{episodeTypeBadges}</div>
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <div className={cn("mt-2 flex flex-wrap gap-2", cardDimClass)}>
+              {episodeTypeBadges}
+            </div>
+            <div
+              className={cn(
+                "mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground",
+                cardDimClass,
+              )}
+            >
               <span className="inline-flex items-center gap-1">
                 <CalendarDays className="h-3.5 w-3.5" />
                 {formattedAirDate}
@@ -454,7 +504,12 @@ export const EpisodeRow = React.memo(function EpisodeRow({
               ) : null}
               {episodeSizeLabel ? <span>{episodeSizeLabel}</span> : null}
             </div>
-            <div className="mt-3 flex flex-col gap-2 @md:flex-row">
+            <div
+              className={cn(
+                "mt-3 flex flex-col gap-2 @md:flex-row",
+                cardDimClass,
+              )}
+            >
               {onAutoSearchEpisode ? (
                 <TextActionButton
                   id={seriesOverviewEpisodeAutoSearchId(
@@ -502,7 +557,9 @@ export const EpisodeRow = React.memo(function EpisodeRow({
           </div>
         </div>
         {isPanelOpen ? (
-          <div className="mt-3 border-t border-border pt-3">{panelContent}</div>
+          <div className={cn("mt-3 border-t border-border pt-3", cardDimClass)}>
+            {panelContent}
+          </div>
         ) : null}
         {searchDialog}
       </div>

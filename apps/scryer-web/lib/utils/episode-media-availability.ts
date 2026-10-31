@@ -37,3 +37,20 @@ export function episodeAvailabilityPill(
       return null;
   }
 }
+
+/**
+ * The card layout has no column of its own for availability, so an episode with
+ * no file says so even when it is unmonitored. UNMONITORED is only ever reported
+ * for an episode with no file.
+ */
+export function episodeCardAvailabilityPill(
+  availability: EpisodeMediaAvailability,
+  translate: (key: string) => string,
+): EpisodeAvailabilityPill {
+  return (
+    episodeAvailabilityPill(availability, translate) ?? {
+      tone: "warning",
+      label: translate("episode.missing"),
+    }
+  );
+}
