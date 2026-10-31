@@ -215,8 +215,12 @@ test("reactive side panel refresh for a viewer omits privileged fields", () => {
   assert.equal(result.query.includes("titleReleaseBlocklist("), false);
   assert.equal(result.query.includes("title(id:"), true);
   assert.equal(result.query.includes("externalSubtitles("), true);
+  const plan = result.actionPlans[0];
+  assert.equal(plan?.kind, "titleSidePanelOverview");
   assert.equal(
-    result.actionPlans[0]?.titleReleaseBlocklistAlias ?? null,
+    plan?.kind === "titleSidePanelOverview"
+      ? (plan.titleReleaseBlocklistAlias ?? null)
+      : null,
     null,
   );
 });
@@ -233,7 +237,9 @@ test("side panel overviews gate privileged fields on includePrivileged", () => {
   ]) {
     assert.match(
       movieSidePanelOverviewQuery,
-      new RegExp(`${field}\\([^)]*\\)\\s*@include\\(if: \\$includePrivileged\\)`),
+      new RegExp(
+        `${field}\\([^)]*\\)\\s*@include\\(if: \\$includePrivileged\\)`,
+      ),
     );
   }
   assert.match(
