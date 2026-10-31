@@ -18,7 +18,7 @@ e2e-harness = []
 jemalloc-prof = []
 
 [dependencies]
-application-updater = { git = "https://github.com/scryer-media/application-updater.git", rev = "e55801ce7f66c744667d4fe27dd12432a4697f33" }
+application-updater = { git = "https://github.com/scryer-media/application-updater.git", rev = "88af81b8c24c987e93d36d45979034cb50db3d01" }
 scryer-application = { path = "../scryer-application", features = ["runtime"] }
 scryer-domain = { path = "../scryer-domain" }
 scryer-interface = { path = "../scryer-interface" }
