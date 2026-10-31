@@ -456,57 +456,59 @@ export const EpisodeRow = React.memo(function EpisodeRow({
               <EyeOff className="size-5" />
             )}
           </button>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-start justify-between gap-3">
-              <button
-                id={selectorId(
-                  "series-overview-episode-details-toggle",
-                  episode.id,
-                )}
-                type="button"
-                className={cn("min-w-0 flex-1 text-left", cardDimClass)}
-                onClick={handleToggleEpisodeDetails}
-              >
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span className="rounded bg-accent px-2 py-0.5 font-[var(--font-code)] text-card-foreground">
-                    {episode.episodeNumber ?? episode.episodeLabel ?? "—"}
-                  </span>
-                  {episode.absoluteNumber && facet === "anime" ? (
-                    <span>#{episode.absoluteNumber}</span>
-                  ) : null}
+          <div className="min-w-0 flex-1 @lg:flex @lg:items-center @lg:gap-4">
+            <div className="min-w-0 @lg:flex-1">
+              <div className="flex items-start justify-between gap-3">
+                <button
+                  id={selectorId(
+                    "series-overview-episode-details-toggle",
+                    episode.id,
+                  )}
+                  type="button"
+                  className={cn("min-w-0 flex-1 text-left", cardDimClass)}
+                  onClick={handleToggleEpisodeDetails}
+                >
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span className="rounded bg-accent px-2 py-0.5 font-[var(--font-code)] text-card-foreground">
+                      {episode.episodeNumber ?? episode.episodeLabel ?? "—"}
+                    </span>
+                    {episode.absoluteNumber && facet === "anime" ? (
+                      <span>#{episode.absoluteNumber}</span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-sm font-medium text-card-foreground">
+                    {episodeDisplayTitle(episode, t)}
+                  </p>
+                </button>
+                <div className="flex shrink-0 items-center gap-1">
+                  {qualityCell}
                 </div>
-                <p className="mt-1 text-sm font-medium text-card-foreground">
-                  {episodeDisplayTitle(episode, t)}
-                </p>
-              </button>
-              <div className="flex shrink-0 items-center gap-1">
-                {qualityCell}
+              </div>
+              <div className={cn("mt-2 flex flex-wrap gap-2", cardDimClass)}>
+                {episodeTypeBadges}
+              </div>
+              <div
+                className={cn(
+                  "mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground",
+                  cardDimClass,
+                )}
+              >
+                <span className="inline-flex items-center gap-1">
+                  <CalendarDays className="h-3.5 w-3.5" />
+                  {formattedAirDate}
+                </span>
+                {episodeRuntime ? (
+                  <span className="inline-flex items-center gap-1">
+                    <Clock3 className="h-3 w-3" />
+                    {episodeRuntime}
+                  </span>
+                ) : null}
+                {episodeSizeLabel ? <span>{episodeSizeLabel}</span> : null}
               </div>
             </div>
-            <div className={cn("mt-2 flex flex-wrap gap-2", cardDimClass)}>
-              {episodeTypeBadges}
-            </div>
             <div
               className={cn(
-                "mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground",
-                cardDimClass,
-              )}
-            >
-              <span className="inline-flex items-center gap-1">
-                <CalendarDays className="h-3.5 w-3.5" />
-                {formattedAirDate}
-              </span>
-              {episodeRuntime ? (
-                <span className="inline-flex items-center gap-1">
-                  <Clock3 className="h-3 w-3" />
-                  {episodeRuntime}
-                </span>
-              ) : null}
-              {episodeSizeLabel ? <span>{episodeSizeLabel}</span> : null}
-            </div>
-            <div
-              className={cn(
-                "mt-3 flex flex-col gap-2 @md:flex-row",
+                "mt-3 flex flex-col gap-2 empty:hidden @md:flex-row @lg:mt-0 @lg:w-48 @lg:shrink-0 @lg:flex-col",
                 cardDimClass,
               )}
             >
@@ -521,7 +523,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                   type="button"
                   size="sm"
                   tone="auto"
-                  className="w-full @md:w-auto @md:min-w-0 @md:flex-1"
+                  className="w-full @md:w-auto @md:min-w-0 @md:flex-1 @lg:w-full @lg:flex-none"
                   onClick={handleAutoSearchClick}
                   disabled={autoSearching}
                   leadingIcon={
@@ -546,7 +548,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                   type="button"
                   size="sm"
                   tone="search"
-                  className="w-full @md:w-auto @md:min-w-0 @md:flex-1"
+                  className="w-full @md:w-auto @md:min-w-0 @md:flex-1 @lg:w-full @lg:flex-none"
                   onClick={handleOpenEpisodeSearch}
                   leadingIcon={<Search className="h-4 w-4" />}
                 >
